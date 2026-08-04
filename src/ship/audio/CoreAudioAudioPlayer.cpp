@@ -18,16 +18,33 @@ CoreAudioAudioPlayer::~CoreAudioAudioPlayer() {
 }
 
 void CoreAudioAudioPlayer::DoClose() {
-    if (mInitialized) {
+#if TARGET_OS_IPHONE
+    // Must come first: it fences against an interruption handler that is mid-flight and
+    // about to touch mAudioUnit. See the lifetime contract in CoreAudioSession.h.
+    StopIOSAudioInterruptionObserver();
+#endif
+
+    const bool wasOpen = mAudioUnit != nullptr;
+
+    CloseOutputUnit();
+
+#if TARGET_OS_IPHONE
+    if (wasOpen) {
+        // Hand the audio route back once the unit is gone, so other apps can take over.
+        DeactivateIOSAudioSession();
+    }
+#endif
+}
+
+void CoreAudioAudioPlayer::CloseOutputUnit() {
+    if (mAudioUnit != nullptr) {
         AudioOutputUnitStop(mAudioUnit);
         AudioUnitUninitialize(mAudioUnit);
         AudioComponentInstanceDispose(mAudioUnit);
-        mInitialized = false;
-#if TARGET_OS_IPHONE
-        // Hand the audio route back once the unit is gone, so other apps can take over.
-        DeactivateIOSAudioSession();
-#endif
+        mAudioUnit = nullptr;
     }
+
+    mInitialized = false;
 
     if (mRingBuffer) {
         delete[] mRingBuffer;
@@ -36,9 +53,65 @@ void CoreAudioAudioPlayer::DoClose() {
 }
 
 bool CoreAudioAudioPlayer::DoInit() {
+#if TARGET_OS_IPHONE
+    // Nothing plays on iOS until the process has an active audio session.
+    if (!ConfigureIOSAudioSession(this->GetSampleRate())) {
+        return false;
+    }
+#endif
+
+    const int32_t requestedChannels = this->GetNumOutputChannels();
+
+    if (!OpenOutputUnit(requestedChannels)) {
+        if (requestedChannels == 2) {
+            return false;
+        }
+
+        // Surround was refused. Every iOS output route is stereo, as are plenty of macOS
+        // devices, so retry rather than leaving the game silent. DowngradeAudioChannels()
+        // keeps Play() from matrix decoding into a unit that is now only two channels wide.
+        SPDLOG_WARN("CoreAudio: {} channel output unavailable, retrying in stereo", requestedChannels);
+        this->DowngradeAudioChannels(AudioChannelsSetting::audioStereo);
+
+        if (!OpenOutputUnit(2)) {
+            return false;
+        }
+    }
+
+#if TARGET_OS_IPHONE
+    // A phone call or Siri stops the unit and iOS never restarts it for us.
+    StartIOSAudioInterruptionObserver(
+        [this]() {
+            if (mAudioUnit != nullptr) {
+                AudioOutputUnitStop(mAudioUnit);
+            }
+        },
+        [this](bool shouldResume) {
+            if (!shouldResume) {
+                // iOS withholds ShouldResume when it expects the user to hit play, but a
+                // game has no such control and would then stay silent for good. Try anyway:
+                // if another app really does hold the route, reactivation just fails.
+                SPDLOG_INFO("CoreAudio: resuming without a ShouldResume hint");
+            }
+
+            if (!ActivateIOSAudioSession() || mAudioUnit == nullptr) {
+                return;
+            }
+
+            const OSStatus status = AudioOutputUnitStart(mAudioUnit);
+            if (status != noErr) {
+                SPDLOG_ERROR("CoreAudio: Failed to restart audio unit after interruption: {}", status);
+            }
+        });
+#endif
+
+    return true;
+}
+
+bool CoreAudioAudioPlayer::OpenOutputUnit(int32_t numChannels) {
     OSStatus status;
 
-    mNumChannels = this->GetAudioChannels() == AudioChannelsSetting::audioStereo ? 2 : 6;
+    mNumChannels = numChannels;
 
     const size_t bytesPerSample = sizeof(int16_t);
     const size_t bytesPerFrame = bytesPerSample * mNumChannels;
@@ -47,13 +120,6 @@ bool CoreAudioAudioPlayer::DoInit() {
     mRingBuffer = new uint8_t[mRingBufferSize];
     mRingBufferReadPos = 0;
     mRingBufferWritePos = 0;
-
-#if TARGET_OS_IPHONE
-    // Nothing plays on iOS until the process has an active audio session.
-    if (!ConfigureIOSAudioSession(this->GetSampleRate())) {
-        return false;
-    }
-#endif
 
     AudioComponentDescription desc;
     desc.componentType = kAudioUnitType_Output;
@@ -70,12 +136,14 @@ bool CoreAudioAudioPlayer::DoInit() {
     AudioComponent component = AudioComponentFindNext(NULL, &desc);
     if (component == NULL) {
         SPDLOG_ERROR("CoreAudio: Failed to find audio component");
+        CloseOutputUnit();
         return false;
     }
 
     status = AudioComponentInstanceNew(component, &mAudioUnit);
     if (status != noErr) {
         SPDLOG_ERROR("CoreAudio: Failed to create audio component instance: {}", status);
+        CloseOutputUnit();
         return false;
     }
 
@@ -84,6 +152,7 @@ bool CoreAudioAudioPlayer::DoInit() {
                                   sizeof(flag));
     if (status != noErr) {
         SPDLOG_ERROR("CoreAudio: Failed to enable output: {}", status);
+        CloseOutputUnit();
         return false;
     }
 
@@ -101,6 +170,7 @@ bool CoreAudioAudioPlayer::DoInit() {
                                   sizeof(format));
     if (status != noErr) {
         SPDLOG_ERROR("CoreAudio: Failed to set stream format: {}", status);
+        CloseOutputUnit();
         return false;
     }
 
@@ -112,18 +182,21 @@ bool CoreAudioAudioPlayer::DoInit() {
                                   &callbackStruct, sizeof(callbackStruct));
     if (status != noErr) {
         SPDLOG_ERROR("CoreAudio: Failed to set render callback: {}", status);
+        CloseOutputUnit();
         return false;
     }
 
     status = AudioUnitInitialize(mAudioUnit);
     if (status != noErr) {
         SPDLOG_ERROR("CoreAudio: Failed to initialize audio unit: {}", status);
+        CloseOutputUnit();
         return false;
     }
 
     status = AudioOutputUnitStart(mAudioUnit);
     if (status != noErr) {
         SPDLOG_ERROR("CoreAudio: Failed to start audio unit: {}", status);
+        CloseOutputUnit();
         return false;
     }
 

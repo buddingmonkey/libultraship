@@ -72,13 +72,31 @@ class CoreAudioAudioPlayer : public AudioPlayer {
                                             const AudioTimeStamp* inTimeStamp, UInt32 inBusNumber,
                                             UInt32 inNumberFrames, AudioBufferList* ioData);
 
-    AudioUnit mAudioUnit;
-    int32_t mNumChannels;
-    uint8_t* mRingBuffer;       ///< Lock-protected circular buffer for audio samples.
-    size_t mRingBufferSize;     ///< Total size of the ring buffer in bytes.
-    size_t mRingBufferReadPos;  ///< Current read position in the ring buffer.
-    size_t mRingBufferWritePos; ///< Current write position in the ring buffer.
-    pthread_mutex_t mMutex;     ///< Guards concurrent access to the ring buffer.
+    /**
+     * @brief Allocates the ring buffer and starts an output unit for @p numChannels.
+     *
+     * Cleans up after itself on failure, so it can be called again with a different
+     * channel count.
+     *
+     * @param numChannels Interleaved output channel count to request from the device.
+     * @return true if the unit was configured and started.
+     */
+    bool OpenOutputUnit(int32_t numChannels);
+
+    /**
+     * @brief Stops and disposes the output unit and releases the ring buffer.
+     *
+     * Safe to call when nothing is open.
+     */
+    void CloseOutputUnit();
+
+    AudioUnit mAudioUnit = nullptr;
+    int32_t mNumChannels = 0;
+    uint8_t* mRingBuffer = nullptr; ///< Lock-protected circular buffer for audio samples.
+    size_t mRingBufferSize = 0;     ///< Total size of the ring buffer in bytes.
+    size_t mRingBufferReadPos = 0;  ///< Current read position in the ring buffer.
+    size_t mRingBufferWritePos = 0; ///< Current write position in the ring buffer.
+    pthread_mutex_t mMutex;         ///< Guards concurrent access to the ring buffer.
     bool mInitialized;
 };
 } // namespace Ship

@@ -145,6 +145,23 @@ class AudioPlayer {
      */
     virtual void DoPlay(const uint8_t* buf, size_t len) = 0;
 
+    /**
+     * @brief Lowers the effective channel mode without reopening the device.
+     *
+     * For backends that only discover inside DoInit() that the device cannot supply the
+     * requested channel count -- iOS output routes are stereo, as are many macOS devices.
+     * Calling this keeps GetAudioChannels(), GetNumOutputChannels() and Play()'s matrix
+     * decoding in agreement with the format the device actually accepted; without it the
+     * player would keep pushing 6-channel audio into a stereo unit.
+     *
+     * Unlike SetAudioChannels() this does not call DoClose()/DoInit(), so it is safe to
+     * call from within DoInit(). The saved channel preference is left untouched, so the
+     * original setting is retried the next time the device is opened.
+     *
+     * @param channels The channel mode the device actually provides.
+     */
+    void DowngradeAudioChannels(AudioChannelsSetting channels);
+
   private:
     std::unique_ptr<SoundMatrixDecoder>
         mSoundMatrixDecoder; ///< Stereo-to-surround decoder (active in matrix-5.1 mode).
