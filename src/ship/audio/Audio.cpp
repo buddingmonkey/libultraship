@@ -1,6 +1,12 @@
 #include "ship/audio/Audio.h"
 
 #ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
+// CoreAudioAudioPlayer drives a kAudioUnitSubType_HALOutput AudioUnit, which exists only on
+// macOS, so src/ship/CMakeLists.txt compiles it for Darwin alone. iOS uses the SDL player.
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
 #include "ship/audio/CoreAudioAudioPlayer.h"
 #endif
 
@@ -21,7 +27,7 @@ void Audio::InitAudioPlayer() {
             mAudioPlayer = std::make_shared<WasapiAudioPlayer>(this->mAudioSettings);
             break;
 #endif
-#ifdef __APPLE__
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
         case AudioBackend::COREAUDIO:
             mAudioPlayer = std::make_shared<CoreAudioAudioPlayer>(this->mAudioSettings);
             break;
@@ -48,7 +54,7 @@ void Audio::Init() {
 #ifdef _WIN32
     mAvailableAudioBackends->push_back(AudioBackend::WASAPI);
 #endif
-#ifdef __APPLE__
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
     mAvailableAudioBackends->push_back(AudioBackend::COREAUDIO);
 #endif
     mAvailableAudioBackends->push_back(AudioBackend::SDL);
@@ -79,9 +85,11 @@ AudioBackend Audio::GetSavedAudioBackend() {
         return AudioBackend::SDL;
     }
 
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
     if (backendName == "coreaudio") {
         return AudioBackend::COREAUDIO;
     }
+#endif
 
     if (backendName == "sdl") {
         return AudioBackend::SDL;
@@ -97,7 +105,7 @@ AudioBackend Audio::GetSavedAudioBackend() {
     return AudioBackend::WASAPI;
 #endif
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
     return AudioBackend::COREAUDIO;
 #endif
 

@@ -59,6 +59,13 @@ if (NOT ${libzip_FOUND})
     set(BUILD_DOC OFF)
     set(BUILD_OSSFUZZ OFF)
     set(BUILD_SHARED_LIBS OFF)
+    # libzip enables these codecs by default and goes looking for them on the host. There is
+    # no iOS system zstd, so it finds the Homebrew x86_64 build under /usr/local and the app
+    # fails to link with undefined _ZSTD_* for arm64. LZMA is off for the same reason (it
+    # just happens not to be installed here). bzip2 is left alone -- it resolves to
+    # libbz2.tbd in the iOS SDK, which is the right architecture.
+    set(ENABLE_ZSTD OFF)
+    set(ENABLE_LZMA OFF)
     FetchContent_Declare(
         libzip
         GIT_REPOSITORY https://github.com/nih-at/libzip.git
@@ -84,6 +91,11 @@ if (NOT ${libzip_FOUND})
     # ones test for a declaration in a header and so are already correct when try_compile
     # only compiles. Every function here has a portable #ifndef fallback in libzip's
     # compat.h, so a probe that fails for an unrelated reason is merely conservative.
+    #
+    # The probes write to private variables and the HAVE_* entries are then overwritten
+    # unconditionally. check_function_exists() skips the probe entirely when its result
+    # variable is already cached, so probing straight into HAVE_* would leave a build
+    # directory that was configured before this fix stuck with its poisoned values.
     include(CheckFunctionExists)
     include(CheckIncludeFiles)
     set(_lus_libzip_probes
@@ -98,13 +110,15 @@ if (NOT ${libzip_FOUND})
     list(APPEND CMAKE_REQUIRED_DEFINITIONS -D__STDC_WANT_LIB_EXT1__=1)
     foreach(_lus_fn IN LISTS _lus_libzip_probes)
         string(TOUPPER "${_lus_fn}" _lus_fn_upper)
-        check_function_exists(${_lus_fn} HAVE_${_lus_fn_upper})
+        check_function_exists(${_lus_fn} LUS_LIBZIP_HAS_${_lus_fn_upper})
+        set(HAVE_${_lus_fn_upper} "${LUS_LIBZIP_HAS_${_lus_fn_upper}}" CACHE INTERNAL "")
     endforeach()
     # fts_open is only probed by libzip when fts.h is present; check_include_files is
     # compile-based, so this agrees with libzip's own result either way.
     check_include_files("sys/types.h;sys/stat.h;fts.h" HAVE_FTS_H)
     if (HAVE_FTS_H)
-        check_function_exists(fts_open HAVE_FTS_OPEN)
+        check_function_exists(fts_open LUS_LIBZIP_HAS_FTS_OPEN)
+        set(HAVE_FTS_OPEN "${LUS_LIBZIP_HAS_FTS_OPEN}" CACHE INTERNAL "")
     endif()
     list(REMOVE_ITEM CMAKE_REQUIRED_DEFINITIONS -D__STDC_WANT_LIB_EXT1__=1)
     set(CMAKE_TRY_COMPILE_TARGET_TYPE ${_lus_try_compile_type})
