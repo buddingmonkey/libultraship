@@ -196,10 +196,13 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
             )
         endif()
 
-        set_target_properties(zip PROPERTIES
-            XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY ""
-            XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
-        )
+        # Only present when libzip came from FetchContent rather than find_package.
+        if(TARGET zip)
+            set_target_properties(zip PROPERTIES
+                XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY ""
+                XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
+            )
+        endif()
     endif()
 else()
     target_compile_definitions(libultraship PRIVATE

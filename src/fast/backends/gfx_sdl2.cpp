@@ -219,6 +219,16 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
         return;
     }
 
+#ifdef __IOS__
+    // iOS windows are always full screen: there is no display mode to set, and the
+    // windowed-restore path below would resize the window to the persisted desktop size.
+    mFullScreen = on;
+    if (mOnFullscreenChanged != nullptr && call_callback) {
+        mOnFullscreenChanged(on);
+    }
+    return;
+#endif
+
     int display_in_use = SDL_GetWindowDisplayIndex(mWnd);
     if (display_in_use < 0) {
         SPDLOG_WARN("Can't detect on which monitor we are. Probably out of display area?");
@@ -374,7 +384,8 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
     int len = snprintf(title, sizeof(title), "%s (%s)", gameName, gfxApiName);
 
 #ifdef __IOS__
-    Uint32 flags = SDL_WINDOW_BORDERLESS | SDL_WINDOW_SHOWN;
+    // ALLOW_HIGHDPI makes the drawable the screen's native pixel size rather than points.
+    Uint32 flags = SDL_WINDOW_BORDERLESS | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI;
 #else
     Uint32 flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
 #endif
@@ -674,7 +685,7 @@ void GfxWindowBackendSDL2::HandleEvents() {
     }
 
     // resync fullscreen state
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(__IOS__)
     auto nextFullscreenState = isNativeMacOSFullscreenActive(mWnd);
     if (mFullScreen != nextFullscreenState) {
         mFullScreen = nextFullscreenState;
