@@ -73,14 +73,42 @@ if (NOT ${libzip_FOUND})
     # undeclared memcpy_s in zip_winzip_aes.c (HAVE_STRERROR_S, HAVE_STRNCPY_S, HAVE__CLOSE
     # and friends are wrong the same way).
     #
-    # Restore linking try_compile for libzip's checks only, so SDL2's already-correct
-    # detection above is left alone. Every one of these functions has a portable #ifndef
-    # fallback in compat.h, so if a link-based check ever fails for an unrelated reason the
-    # answer is merely conservative rather than broken.
+    # Simply flipping CMAKE_TRY_COMPILE_TARGET_TYPE around FetchContent_MakeAvailable does
+    # not work: libzip's own project() call re-reads CMAKE_TOOLCHAIN_FILE into libzip's
+    # scope, and ios.toolchain.cmake has no include guard, so it sets STATIC_LIBRARY right
+    # back before the first check runs. Run the link-based probes here instead, where the
+    # override holds -- check_function_exists() is a no-op when its result variable is
+    # already in the cache, so libzip picks these up rather than recomputing them.
+    #
+    # Only the check_function_exists() probes need this. libzip's check_symbol_exists()
+    # ones test for a declaration in a header and so are already correct when try_compile
+    # only compiles. Every function here has a portable #ifndef fallback in libzip's
+    # compat.h, so a probe that fails for an unrelated reason is merely conservative.
+    include(CheckFunctionExists)
+    include(CheckIncludeFiles)
+    set(_lus_libzip_probes
+        _close _dup _fdopen _fileno _fseeki64 _fstat64 _setmode _stat64 _strdup
+        _strtoi64 _strtoui64 _unlink arc4random clonefile explicit_bzero explicit_memset
+        fchmod fileno fseeko ftello getprogname GetSecurityInfo memcpy_s random setmode
+        strdup strerror_s strerrorlen_s stricmp strncpy_s strtoll strtoull
+    )
     set(_lus_try_compile_type ${CMAKE_TRY_COMPILE_TARGET_TYPE})
     set(CMAKE_TRY_COMPILE_TARGET_TYPE EXECUTABLE)
-    FetchContent_MakeAvailable(libzip)
+    # Matches libzip: it requests the ISO C Annex K functions before probing for them.
+    list(APPEND CMAKE_REQUIRED_DEFINITIONS -D__STDC_WANT_LIB_EXT1__=1)
+    foreach(_lus_fn IN LISTS _lus_libzip_probes)
+        string(TOUPPER "${_lus_fn}" _lus_fn_upper)
+        check_function_exists(${_lus_fn} HAVE_${_lus_fn_upper})
+    endforeach()
+    # fts_open is only probed by libzip when fts.h is present; check_include_files is
+    # compile-based, so this agrees with libzip's own result either way.
+    check_include_files("sys/types.h;sys/stat.h;fts.h" HAVE_FTS_H)
+    if (HAVE_FTS_H)
+        check_function_exists(fts_open HAVE_FTS_OPEN)
+    endif()
+    list(REMOVE_ITEM CMAKE_REQUIRED_DEFINITIONS -D__STDC_WANT_LIB_EXT1__=1)
     set(CMAKE_TRY_COMPILE_TARGET_TYPE ${_lus_try_compile_type})
+    FetchContent_MakeAvailable(libzip)
     list(APPEND ADDITIONAL_LIB_INCLUDES ${libzip_SOURCE_DIR}/lib ${libzip_BINARY_DIR})
 endif()
 
