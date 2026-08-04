@@ -1,5 +1,7 @@
 #ifdef __APPLE__
 #include "ship/audio/CoreAudioAudioPlayer.h"
+#include "CoreAudioSession.h"
+#include <TargetConditionals.h>
 #include <spdlog/spdlog.h>
 #include <cstring>
 
@@ -21,6 +23,10 @@ void CoreAudioAudioPlayer::DoClose() {
         AudioUnitUninitialize(mAudioUnit);
         AudioComponentInstanceDispose(mAudioUnit);
         mInitialized = false;
+#if TARGET_OS_IPHONE
+        // Hand the audio route back once the unit is gone, so other apps can take over.
+        DeactivateIOSAudioSession();
+#endif
     }
 
     if (mRingBuffer) {
@@ -42,9 +48,21 @@ bool CoreAudioAudioPlayer::DoInit() {
     mRingBufferReadPos = 0;
     mRingBufferWritePos = 0;
 
+#if TARGET_OS_IPHONE
+    // Nothing plays on iOS until the process has an active audio session.
+    if (!ConfigureIOSAudioSession(this->GetSampleRate())) {
+        return false;
+    }
+#endif
+
     AudioComponentDescription desc;
     desc.componentType = kAudioUnitType_Output;
+#if TARGET_OS_IPHONE
+    // iOS has no HAL. RemoteIO is the hardware I/O unit; element 0 is the output bus.
+    desc.componentSubType = kAudioUnitSubType_RemoteIO;
+#else
     desc.componentSubType = kAudioUnitSubType_HALOutput;
+#endif
     desc.componentManufacturer = kAudioUnitManufacturer_Apple;
     desc.componentFlags = 0;
     desc.componentFlagsMask = 0;

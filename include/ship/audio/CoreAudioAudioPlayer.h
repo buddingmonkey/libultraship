@@ -10,10 +10,13 @@ namespace Ship {
 /**
  * @brief AudioPlayer implementation backed by Apple's Core Audio framework.
  *
- * CoreAudioAudioPlayer uses an AudioUnit (kAudioUnitSubType_DefaultOutput) with a
- * render callback to pull interleaved PCM samples from an internal ring buffer.
- * DoPlay() pushes data into the ring buffer, and the Core Audio render callback
- * reads from it on the audio thread.
+ * CoreAudioAudioPlayer uses an output AudioUnit with a render callback to pull
+ * interleaved PCM samples from an internal ring buffer. DoPlay() pushes data into
+ * the ring buffer, and the Core Audio render callback reads from it on the audio
+ * thread.
+ *
+ * The unit is kAudioUnitSubType_HALOutput on macOS and kAudioUnitSubType_RemoteIO on
+ * iOS, which additionally requires an active AVAudioSession (see CoreAudioSession.h).
  *
  * This backend is only available on Apple platforms (macOS / iOS).
  */

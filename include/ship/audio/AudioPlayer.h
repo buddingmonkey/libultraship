@@ -159,11 +159,6 @@ class AudioPlayer {
 #endif
 
 #ifdef __APPLE__
-#include <TargetConditionals.h>
-#endif
-
-// macOS only -- see the note in src/ship/audio/Audio.cpp.
-#if defined(__APPLE__) && !TARGET_OS_IPHONE
 #include "CoreAudioAudioPlayer.h"
 #endif
 
