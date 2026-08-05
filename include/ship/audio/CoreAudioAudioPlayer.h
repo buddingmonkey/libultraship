@@ -4,6 +4,7 @@
 
 #include "AudioPlayer.h"
 #include <AudioToolbox/AudioToolbox.h>
+#include <TargetConditionals.h>
 #include <pthread.h>
 
 namespace Ship {
@@ -89,6 +90,19 @@ class CoreAudioAudioPlayer : public AudioPlayer {
      * Safe to call when nothing is open.
      */
     void CloseOutputUnit();
+
+#if TARGET_OS_IPHONE
+    /**
+     * @brief Reactivates the audio session and starts the existing unit again.
+     *
+     * For the cases where the unit survives and was merely paused -- an interruption ending,
+     * an output route disappearing. A media services reset is not one of these: the unit is
+     * dead and must be rebuilt.
+     *
+     * @param reason Short description used in the failure log.
+     */
+    void RestartOutputUnit(const char* reason);
+#endif
 
     AudioUnit mAudioUnit = nullptr;
     int32_t mNumChannels = 0;

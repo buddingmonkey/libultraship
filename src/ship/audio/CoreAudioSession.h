@@ -43,34 +43,60 @@ bool ActivateIOSAudioSession();
 void DeactivateIOSAudioSession();
 
 /**
- * @brief Observes AVAudioSessionInterruptionNotification and reports it to the player.
+ * @brief Callbacks for the AVAudioSession events that require the player to act.
  *
- * iOS silently stops the audio unit when something else takes the audio route -- a phone
- * call, Siri, an alarm. The unit is not restarted automatically, so without this the game
- * stays permanently silent after the first interruption.
- *
- * Lifetime contract: the handlers run while an internal lock is held, and
- * StopIOSAudioInterruptionObserver() takes that same lock and clears them. It therefore
- * blocks until any in-flight handler returns and guarantees none starts afterwards, which
- * is what makes it safe for a handler to capture a raw `this`. Call Stop before tearing
- * down anything the handlers touch.
- *
- * Calling Start twice replaces the handlers rather than stacking observers.
- *
- * @param onInterruptionBegan Invoked when the audio route has been taken away.
- * @param onInterruptionEnded Invoked when the interruption is over. The argument is the
- *                            system's ShouldResume hint; it is false when the user is
- *                            expected to restart playback themselves.
+ * Any member may be left empty; it is simply not called.
  */
-void StartIOSAudioInterruptionObserver(std::function<void()> onInterruptionBegan,
-                                       std::function<void(bool shouldResume)> onInterruptionEnded);
+struct IOSAudioSessionHandlers {
+    /**
+     * The audio route has been taken away -- a phone call, Siri, an alarm. iOS has already
+     * stopped the unit; nothing restarts it automatically.
+     */
+    std::function<void()> OnInterruptionBegan;
+
+    /**
+     * The interruption is over. The argument is the system's ShouldResume hint, false when
+     * iOS expects the user to restart playback themselves.
+     */
+    std::function<void(bool shouldResume)> OnInterruptionEnded;
+
+    /**
+     * The previous output route disappeared -- headphones unplugged, Bluetooth dropped. iOS
+     * pauses the unit in this case, deliberately, so that yanking headphones does not blast
+     * audio out of the speaker. Restarting it is the player's decision.
+     */
+    std::function<void()> OnOutputRouteLost;
+
+    /**
+     * The media server died and restarted. Every Core Audio object the process holds is now
+     * invalid -- the unit cannot be restarted, it has to be disposed and rebuilt, and the
+     * session reconfigured from scratch. Rare, but it strands the game in silence when it
+     * happens.
+     */
+    std::function<void()> OnMediaServicesReset;
+};
 
 /**
- * @brief Removes the interruption observer and clears the handlers.
+ * @brief Observes the AVAudioSession notifications described by IOSAudioSessionHandlers.
  *
- * Safe to call when no observer is registered.
+ * Lifetime contract: the handlers run while an internal lock is held, and
+ * StopIOSAudioSessionObservers() takes that same lock and clears them. It therefore blocks
+ * until any in-flight handler returns and guarantees none starts afterwards, which is what
+ * makes it safe for a handler to capture a raw `this`. Call Stop before tearing down
+ * anything the handlers touch.
+ *
+ * A handler must not call Start or Stop itself -- the lock is not recursive.
+ *
+ * Calling Start twice replaces the handlers rather than stacking observers.
  */
-void StopIOSAudioInterruptionObserver();
+void StartIOSAudioSessionObservers(IOSAudioSessionHandlers handlers);
+
+/**
+ * @brief Removes the observers and clears the handlers.
+ *
+ * Safe to call when nothing is registered.
+ */
+void StopIOSAudioSessionObservers();
 
 } // namespace Ship
 

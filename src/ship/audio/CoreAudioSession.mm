@@ -11,13 +11,12 @@ namespace Ship {
 namespace {
 /**
  * Guards the handlers below. Deliberately held while a handler runs so that
- * StopIOSAudioInterruptionObserver() cannot return until the handler has finished -- see
- * the lifetime contract in CoreAudioSession.h.
+ * StopIOSAudioSessionObservers() cannot return until the handler has finished -- see the
+ * lifetime contract in CoreAudioSession.h.
  */
 std::mutex gHandlerMutex;
-std::function<void()> gOnInterruptionBegan;
-std::function<void(bool)> gOnInterruptionEnded;
-id gInterruptionObserver = nil;
+IOSAudioSessionHandlers gHandlers;
+NSMutableArray* gObserverTokens = nil;
 
 /**
  * @brief Returns a loggable string for an NSError, tolerating a nil error.
@@ -45,8 +44,8 @@ void HandleInterruptionNotification(NSNotification* notification) {
 
     if (type == AVAudioSessionInterruptionTypeBegan) {
         SPDLOG_INFO("CoreAudio: audio session interrupted");
-        if (gOnInterruptionBegan) {
-            gOnInterruptionBegan();
+        if (gHandlers.OnInterruptionBegan) {
+            gHandlers.OnInterruptionBegan();
         }
     } else if (type == AVAudioSessionInterruptionTypeEnded) {
         NSNumber* rawOptions = notification.userInfo[AVAudioSessionInterruptionOptionKey];
@@ -55,9 +54,49 @@ void HandleInterruptionNotification(NSNotification* notification) {
             (rawOptions.unsignedIntegerValue & AVAudioSessionInterruptionOptionShouldResume) != 0;
 
         SPDLOG_INFO("CoreAudio: audio session interruption ended (resume: {})", shouldResume);
-        if (gOnInterruptionEnded) {
-            gOnInterruptionEnded(shouldResume);
+        if (gHandlers.OnInterruptionEnded) {
+            gHandlers.OnInterruptionEnded(shouldResume);
         }
+    }
+}
+
+/**
+ * Dispatches an AVAudioSessionRouteChangeNotification.
+ *
+ * Only OldDeviceUnavailable needs the player to do anything: iOS pauses the unit so that
+ * unplugging headphones does not suddenly blast audio out of the speaker. The other reasons
+ * (a new device appearing, a category change, the route configuring itself at startup) carry
+ * on playing without help.
+ */
+void HandleRouteChangeNotification(NSNotification* notification) {
+    NSNumber* rawReason = notification.userInfo[AVAudioSessionRouteChangeReasonKey];
+    if (rawReason == nil) {
+        return;
+    }
+    const auto reason = static_cast<AVAudioSessionRouteChangeReason>(rawReason.unsignedIntegerValue);
+    if (reason != AVAudioSessionRouteChangeReasonOldDeviceUnavailable) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> guard(gHandlerMutex);
+
+    SPDLOG_INFO("CoreAudio: output route went away");
+    if (gHandlers.OnOutputRouteLost) {
+        gHandlers.OnOutputRouteLost();
+    }
+}
+
+/**
+ * Dispatches AVAudioSessionMediaServicesWereResetNotification.
+ */
+void HandleMediaServicesResetNotification(NSNotification* notification) {
+    (void)notification;
+
+    std::lock_guard<std::mutex> guard(gHandlerMutex);
+
+    SPDLOG_WARN("CoreAudio: media services were reset, rebuilding audio");
+    if (gHandlers.OnMediaServicesReset) {
+        gHandlers.OnMediaServicesReset();
     }
 }
 } // namespace
@@ -102,37 +141,55 @@ void DeactivateIOSAudioSession() {
     }
 }
 
-void StartIOSAudioInterruptionObserver(std::function<void()> onInterruptionBegan,
-                                       std::function<void(bool shouldResume)> onInterruptionEnded) {
+void StartIOSAudioSessionObservers(IOSAudioSessionHandlers handlers) {
     std::lock_guard<std::mutex> guard(gHandlerMutex);
 
-    gOnInterruptionBegan = std::move(onInterruptionBegan);
-    gOnInterruptionEnded = std::move(onInterruptionEnded);
+    gHandlers = std::move(handlers);
 
-    if (gInterruptionObserver != nil) {
+    if (gObserverTokens != nil) {
         return;
     }
 
-    gInterruptionObserver = [[NSNotificationCenter defaultCenter]
-        addObserverForName:AVAudioSessionInterruptionNotification
-                    object:[AVAudioSession sharedInstance]
-                     queue:nil
-                usingBlock:^(NSNotification* notification) {
-                    HandleInterruptionNotification(notification);
-                }];
+    NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
+    AVAudioSession* session = [AVAudioSession sharedInstance];
+    gObserverTokens = [NSMutableArray array];
+
+    [gObserverTokens addObject:[center addObserverForName:AVAudioSessionInterruptionNotification
+                                                   object:session
+                                                    queue:nil
+                                               usingBlock:^(NSNotification* notification) {
+                                                   HandleInterruptionNotification(notification);
+                                               }]];
+
+    [gObserverTokens addObject:[center addObserverForName:AVAudioSessionRouteChangeNotification
+                                                   object:session
+                                                    queue:nil
+                                               usingBlock:^(NSNotification* notification) {
+                                                   HandleRouteChangeNotification(notification);
+                                               }]];
+
+    // Posted with no object, unlike the other two.
+    [gObserverTokens addObject:[center addObserverForName:AVAudioSessionMediaServicesWereResetNotification
+                                                   object:nil
+                                                    queue:nil
+                                               usingBlock:^(NSNotification* notification) {
+                                                   HandleMediaServicesResetNotification(notification);
+                                               }]];
 }
 
-void StopIOSAudioInterruptionObserver() {
+void StopIOSAudioSessionObservers() {
     std::lock_guard<std::mutex> guard(gHandlerMutex);
 
     // Clearing the handlers is the load-bearing part: a notification block that was already
     // in flight when the observer was removed still runs, and finds nothing to call.
-    gOnInterruptionBegan = nullptr;
-    gOnInterruptionEnded = nullptr;
+    gHandlers = IOSAudioSessionHandlers{};
 
-    if (gInterruptionObserver != nil) {
-        [[NSNotificationCenter defaultCenter] removeObserver:gInterruptionObserver];
-        gInterruptionObserver = nil;
+    if (gObserverTokens != nil) {
+        NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
+        for (id token in gObserverTokens) {
+            [center removeObserver:token];
+        }
+        gObserverTokens = nil;
     }
 }
 
