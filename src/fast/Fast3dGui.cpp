@@ -224,9 +224,24 @@ void Fast3dGui::ImGuiBackendNewFrame() {
 void Fast3dGui::ImGuiWMNewFrame() {
     switch (mImpl.Backend) {
         case WindowBackend::FAST3D_SDL_OPENGL:
-        case WindowBackend::FAST3D_SDL_METAL:
             ImGui_ImplSDL2_NewFrame();
             break;
+        case WindowBackend::FAST3D_SDL_METAL: {
+            ImGui_ImplSDL2_NewFrame();
+
+#ifdef __IOS__
+            // SDL_GL_GetDrawableSize() reports points for UIKit Metal views, so ImGui's scale comes out 1.0.
+            SDL_Window* metalWindow = static_cast<SDL_Window*>(mImpl.Metal.Window);
+            int pixelWidth = 0, pixelHeight = 0, pointWidth = 0, pointHeight = 0;
+            SDL_Metal_GetDrawableSize(metalWindow, &pixelWidth, &pixelHeight);
+            SDL_GetWindowSize(metalWindow, &pointWidth, &pointHeight);
+            if (pixelWidth > 0 && pixelHeight > 0 && pointWidth > 0 && pointHeight > 0) {
+                ImGui::GetIO().DisplayFramebufferScale =
+                    ImVec2(static_cast<float>(pixelWidth) / pointWidth, static_cast<float>(pixelHeight) / pointHeight);
+            }
+#endif
+            break;
+        }
 #ifdef ENABLE_DX11
         case WindowBackend::FAST3D_DXGI_DX11:
             ImGui_ImplWin32_NewFrame();

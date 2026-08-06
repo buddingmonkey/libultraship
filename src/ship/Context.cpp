@@ -481,15 +481,11 @@ std::string Context::GetAppBundlePath() {
     }
 #endif
 
-#ifdef __IOS__
-    const char* home = getenv("HOME");
-    return std::string(home) + "/Documents";
-#endif
-
 #ifdef NON_PORTABLE
     return CMAKE_INSTALL_PREFIX;
 #else
 #ifdef __APPLE__
+    // On iOS this is the read-only bundle; GetAppDirectoryPath stays in Documents for user data.
     FolderManager folderManager;
     return folderManager.getMainBundlePath();
 #endif

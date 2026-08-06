@@ -59,12 +59,41 @@ if (NOT ${libzip_FOUND})
     set(BUILD_DOC OFF)
     set(BUILD_OSSFUZZ OFF)
     set(BUILD_SHARED_LIBS OFF)
+    # Off so libzip does not link the host's x86_64 Homebrew zstd/lzma into an arm64 build.
+    set(ENABLE_ZSTD OFF)
+    set(ENABLE_LZMA OFF)
     FetchContent_Declare(
         libzip
         GIT_REPOSITORY https://github.com/nih-at/libzip.git
         GIT_TAG v1.11.4
         OVERRIDE_FIND_PACKAGE
     )
+    # Toolchain's non-linking try_compile makes libzip's check_function_exists() probes all pass; run them here.
+    include(CheckFunctionExists)
+    include(CheckIncludeFiles)
+    set(_lus_libzip_probes
+        _close _dup _fdopen _fileno _fseeki64 _fstat64 _setmode _stat64 _strdup
+        _strtoi64 _strtoui64 _unlink arc4random clonefile explicit_bzero explicit_memset
+        fchmod fileno fseeko ftello getprogname GetSecurityInfo memcpy_s random setmode
+        strdup strerror_s strerrorlen_s stricmp strncpy_s strtoll strtoull
+    )
+    set(_lus_try_compile_type ${CMAKE_TRY_COMPILE_TARGET_TYPE})
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE EXECUTABLE)
+    # Matches libzip: it requests the ISO C Annex K functions before probing for them.
+    list(APPEND CMAKE_REQUIRED_DEFINITIONS -D__STDC_WANT_LIB_EXT1__=1)
+    foreach(_lus_fn IN LISTS _lus_libzip_probes)
+        string(TOUPPER "${_lus_fn}" _lus_fn_upper)
+        check_function_exists(${_lus_fn} LUS_LIBZIP_HAS_${_lus_fn_upper})
+        set(HAVE_${_lus_fn_upper} "${LUS_LIBZIP_HAS_${_lus_fn_upper}}" CACHE INTERNAL "")
+    endforeach()
+    # libzip only probes fts_open when fts.h is present; check_include_files agrees either way.
+    check_include_files("sys/types.h;sys/stat.h;fts.h" HAVE_FTS_H)
+    if (HAVE_FTS_H)
+        check_function_exists(fts_open LUS_LIBZIP_HAS_FTS_OPEN)
+        set(HAVE_FTS_OPEN "${LUS_LIBZIP_HAS_FTS_OPEN}" CACHE INTERNAL "")
+    endif()
+    list(REMOVE_ITEM CMAKE_REQUIRED_DEFINITIONS -D__STDC_WANT_LIB_EXT1__=1)
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE ${_lus_try_compile_type})
     FetchContent_MakeAvailable(libzip)
     list(APPEND ADDITIONAL_LIB_INCLUDES ${libzip_SOURCE_DIR}/lib ${libzip_BINARY_DIR})
 endif()
