@@ -71,6 +71,14 @@ class AudioPlayer {
     /** @brief Returns true if Init() has been called and succeeded. */
     bool IsInitialized();
 
+    /** @brief Gives up the output device while the app is not in the foreground, without tearing down. */
+    virtual void Suspend() {
+    }
+
+    /** @brief Reclaims the output device released by Suspend(). */
+    virtual void Resume() {
+    }
+
     /** @brief Returns the configured output sample rate in Hz. */
     int32_t GetSampleRate() const;
 
@@ -144,6 +152,12 @@ class AudioPlayer {
      * @param len Length of @p buf in bytes.
      */
     virtual void DoPlay(const uint8_t* buf, size_t len) = 0;
+
+    /**
+     * @brief Lowers the effective channel mode in place; safe to call from within DoInit().
+     * @param channels The channel mode the device actually provides.
+     */
+    void DowngradeAudioChannels(AudioChannelsSetting channels);
 
   private:
     std::unique_ptr<SoundMatrixDecoder>

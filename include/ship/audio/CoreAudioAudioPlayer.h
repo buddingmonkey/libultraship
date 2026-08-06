@@ -4,19 +4,12 @@
 
 #include "AudioPlayer.h"
 #include <AudioToolbox/AudioToolbox.h>
+#include <TargetConditionals.h>
+#include <mutex>
 #include <pthread.h>
 
 namespace Ship {
-/**
- * @brief AudioPlayer implementation backed by Apple's Core Audio framework.
- *
- * CoreAudioAudioPlayer uses an AudioUnit (kAudioUnitSubType_DefaultOutput) with a
- * render callback to pull interleaved PCM samples from an internal ring buffer.
- * DoPlay() pushes data into the ring buffer, and the Core Audio render callback
- * reads from it on the audio thread.
- *
- * This backend is only available on Apple platforms (macOS / iOS).
- */
+/** @brief AudioPlayer backed by Core Audio: a HALOutput (macOS) or RemoteIO (iOS) unit fed by a ring buffer. */
 class CoreAudioAudioPlayer : public AudioPlayer {
   public:
     /**
@@ -30,6 +23,14 @@ class CoreAudioAudioPlayer : public AudioPlayer {
      * @brief Returns the number of audio frames currently queued in the ring buffer.
      */
     int Buffered() override;
+
+#if TARGET_OS_IPHONE
+    /** @brief Stops the unit and hands the session back, so another app can take the route. */
+    void Suspend() override;
+
+    /** @brief Reactivates the session and restarts the unit; iOS no longer signals this itself. */
+    void Resume() override;
+#endif
 
   protected:
     /**
@@ -69,13 +70,38 @@ class CoreAudioAudioPlayer : public AudioPlayer {
                                             const AudioTimeStamp* inTimeStamp, UInt32 inBusNumber,
                                             UInt32 inNumberFrames, AudioBufferList* ioData);
 
-    AudioUnit mAudioUnit;
-    int32_t mNumChannels;
-    uint8_t* mRingBuffer;       ///< Lock-protected circular buffer for audio samples.
-    size_t mRingBufferSize;     ///< Total size of the ring buffer in bytes.
-    size_t mRingBufferReadPos;  ///< Current read position in the ring buffer.
-    size_t mRingBufferWritePos; ///< Current write position in the ring buffer.
-    pthread_mutex_t mMutex;     ///< Guards concurrent access to the ring buffer.
+    /**
+     * @brief Allocates the ring buffer and starts an output unit; cleans up after itself on failure.
+     * @param numChannels Interleaved output channel count to request from the device.
+     * @return true if the unit was configured and started.
+     */
+    bool OpenOutputUnit(int32_t numChannels);
+
+    /** @brief Stops and disposes the output unit and releases the ring buffer; safe when nothing is open. */
+    void CloseOutputUnit();
+
+#if TARGET_OS_IPHONE
+    /**
+     * @brief Reactivates the session and restarts the existing unit, for cases where it was merely paused.
+     * @param reason Short description used in the failure log.
+     */
+    void RestartOutputUnit(const char* reason);
+
+    /**
+     * @brief Serialises the not-thread-safe calls that start and stop the unit, reachable from the
+     * main thread and a session notification at once. Not taken in DoClose(), which a handler waits
+     * behind through the session lock -- the reverse order deadlocks. Distinct from mMutex.
+     */
+    std::mutex mUnitMutex;
+#endif
+
+    AudioUnit mAudioUnit = nullptr;
+    int32_t mNumChannels = 0;
+    uint8_t* mRingBuffer = nullptr; ///< Lock-protected circular buffer for audio samples.
+    size_t mRingBufferSize = 0;     ///< Total size of the ring buffer in bytes.
+    size_t mRingBufferReadPos = 0;  ///< Current read position in the ring buffer.
+    size_t mRingBufferWritePos = 0; ///< Current write position in the ring buffer.
+    pthread_mutex_t mMutex;         ///< Guards concurrent access to the ring buffer.
     bool mInitialized;
 };
 } // namespace Ship
