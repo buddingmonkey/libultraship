@@ -240,8 +240,8 @@ void Fast3dGui::ImGuiWMNewFrame() {
             SDL_Metal_GetDrawableSize(metalWindow, &pixelWidth, &pixelHeight);
             SDL_GetWindowSize(metalWindow, &pointWidth, &pointHeight);
             if (pixelWidth > 0 && pixelHeight > 0 && pointWidth > 0 && pointHeight > 0) {
-                ImGui::GetIO().DisplayFramebufferScale = ImVec2(static_cast<float>(pixelWidth) / pointWidth,
-                                                               static_cast<float>(pixelHeight) / pointHeight);
+                ImGui::GetIO().DisplayFramebufferScale =
+                    ImVec2(static_cast<float>(pixelWidth) / pointWidth, static_cast<float>(pixelHeight) / pointHeight);
             }
             break;
         }

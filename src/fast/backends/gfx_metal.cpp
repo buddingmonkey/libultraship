@@ -128,9 +128,8 @@ void GfxRenderingAPIMetal::RenderDrawData(ImDrawData* drawData) {
             sMismatchReported = true;
             SPDLOG_WARN("Metal: skipping ImGui draw, screen texture {}x{} != draw data {}x{} "
                         "(DisplaySize {}x{} * FramebufferScale {}x{})",
-                        screen_texture->width(), screen_texture->height(), fb_width, fb_height,
-                        drawData->DisplaySize.x, drawData->DisplaySize.y, drawData->FramebufferScale.x,
-                        drawData->FramebufferScale.y);
+                        screen_texture->width(), screen_texture->height(), fb_width, fb_height, drawData->DisplaySize.x,
+                        drawData->DisplaySize.y, drawData->FramebufferScale.x, drawData->FramebufferScale.y);
         }
         return;
     }
