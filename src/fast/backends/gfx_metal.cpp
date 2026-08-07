@@ -11,6 +11,7 @@
 
 #include <vector>
 #include <algorithm>
+#include <chrono>
 #include <unordered_map>
 #include <queue>
 #include <time.h>
@@ -631,7 +632,11 @@ void GfxRenderingAPIMetal::EndFrame() {
         mScreenReadbackRequested = false;
     }
 
-    screen_framebuffer.mCommandBuffer->presentDrawable(mCurrentDrawable);
+    // Presenting nothing schedules a present that never retires, which is one
+    // more way for the pool never to refill.
+    if (mCurrentDrawable != nullptr) {
+        screen_framebuffer.mCommandBuffer->presentDrawable(mCurrentDrawable);
+    }
     mCurrentVertexBufferPoolIndex = (mCurrentVertexBufferPoolIndex + 1) % kMaxVertexBufferPoolSize;
     screen_framebuffer.mCommandBuffer->commit();
 
@@ -701,7 +706,26 @@ int GfxRenderingAPIMetal::CreateFramebuffer() {
 
 void GfxRenderingAPIMetal::SetupScreenFramebuffer(uint32_t width, uint32_t height) {
     mCurrentDrawable = nullptr;
+    const auto drawableT0 = std::chrono::steady_clock::now();
     mCurrentDrawable = mLayer->nextDrawable();
+
+    // The layer gives nothing back once its pool is empty, which is what an
+    // off-screen frame leaves behind. Every metal-cpp call below is objc_msgSend
+    // on that pointer, so a nil drawable silently produces a nil colour
+    // attachment and a frame's worth of work with nowhere to land. Keep the
+    // previous texture so the pass stays valid, and say so once: a nextDrawable
+    // that never succeeds is a one-second stall per frame and needs to be
+    // recognisable in a log.
+    if (mCurrentDrawable == nullptr) {
+        static bool sNoDrawableReported = false;
+        if (!sNoDrawableReported) {
+            sNoDrawableReported = true;
+            SPDLOG_WARN(
+                "Metal: nextDrawable returned nothing after {}ms; the layer's drawable pool is exhausted",
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - drawableT0)
+                    .count());
+        }
+    }
 
     bool msaa_enabled = Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gMSAAValue", 1) > 1;
 
@@ -710,7 +734,9 @@ void GfxRenderingAPIMetal::SetupScreenFramebuffer(uint32_t width, uint32_t heigh
 
     NS::AutoreleasePool* autorelease_pool = NS::AutoreleasePool::alloc()->init();
 
-    tex.texture = mCurrentDrawable->texture();
+    if (mCurrentDrawable != nullptr) {
+        tex.texture = mCurrentDrawable->texture();
+    }
 
     MTL::RenderPassDescriptor* render_pass_descriptor = MTL::RenderPassDescriptor::renderPassDescriptor();
     render_pass_descriptor->colorAttachments()->object(0)->setTexture(tex.texture);
