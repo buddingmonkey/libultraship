@@ -5,6 +5,7 @@
 #include "AudioPlayer.h"
 #include <AudioToolbox/AudioToolbox.h>
 #include <TargetConditionals.h>
+#include <mutex>
 #include <pthread.h>
 
 namespace Ship {
@@ -34,6 +35,24 @@ class CoreAudioAudioPlayer : public AudioPlayer {
      * @brief Returns the number of audio frames currently queued in the ring buffer.
      */
     int Buffered() override;
+
+#if TARGET_OS_IPHONE
+    /**
+     * @brief Stops the output unit and hands the audio session back to the system.
+     *
+     * iOS deactivates a suspended app's session anyway, but doing it here is what lets
+     * whatever the game interrupted resume while the game is off screen.
+     */
+    void Suspend() override;
+
+    /**
+     * @brief Reactivates the audio session and starts the output unit again.
+     *
+     * Nothing does this for us: the notification that once reported an app being
+     * suspended with an active session was deprecated in iOS 14.5 and is no longer sent.
+     */
+    void Resume() override;
+#endif
 
   protected:
     /**
@@ -102,6 +121,18 @@ class CoreAudioAudioPlayer : public AudioPlayer {
      * @param reason Short description used in the failure log.
      */
     void RestartOutputUnit(const char* reason);
+
+    /**
+     * @brief Serialises the calls that start and stop the unit.
+     *
+     * Suspend(), Resume() and RestartOutputUnit() can be reached from the app's main
+     * thread and from a session notification at the same time, and the AudioUnit calls
+     * they make are not thread safe. Deliberately not taken in DoClose(): a handler holds
+     * the session lock while it waits for this one, so taking them in the other order
+     * anywhere would deadlock. Distinct from mMutex, which the render callback holds --
+     * AudioOutputUnitStop() waits for that callback to return.
+     */
+    std::mutex mUnitMutex;
 #endif
 
     AudioUnit mAudioUnit = nullptr;

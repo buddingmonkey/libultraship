@@ -135,7 +135,24 @@ bool CoreAudioAudioPlayer::DoInit() {
 }
 
 #if TARGET_OS_IPHONE
+void CoreAudioAudioPlayer::Suspend() {
+    std::lock_guard<std::mutex> guard(mUnitMutex);
+
+    if (mAudioUnit != nullptr) {
+        AudioOutputUnitStop(mAudioUnit);
+    }
+
+    DeactivateIOSAudioSession();
+}
+
+void CoreAudioAudioPlayer::Resume() {
+    // Takes mUnitMutex itself, which is not recursive.
+    RestartOutputUnit("foreground");
+}
+
 void CoreAudioAudioPlayer::RestartOutputUnit(const char* reason) {
+    std::lock_guard<std::mutex> guard(mUnitMutex);
+
     if (!ActivateIOSAudioSession() || mAudioUnit == nullptr) {
         return;
     }

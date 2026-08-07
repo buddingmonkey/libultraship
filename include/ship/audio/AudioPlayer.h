@@ -71,6 +71,20 @@ class AudioPlayer {
     /** @brief Returns true if Init() has been called and succeeded. */
     bool IsInitialized();
 
+    /**
+     * @brief Releases the output device without tearing the player down.
+     *
+     * For platforms that take the audio route away while the application is not in the
+     * foreground. The player stays constructed and initialised; only the device is given
+     * up, and Resume() reclaims it. Backends that need neither leave both empty.
+     */
+    virtual void Suspend() {
+    }
+
+    /** @brief Reclaims the output device released by Suspend(). */
+    virtual void Resume() {
+    }
+
     /** @brief Returns the configured output sample rate in Hz. */
     int32_t GetSampleRate() const;
 

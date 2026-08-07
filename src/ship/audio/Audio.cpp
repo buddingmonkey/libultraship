@@ -132,6 +132,18 @@ std::shared_ptr<std::vector<AudioBackend>> Audio::GetAvailableAudioBackends() {
     return mAvailableAudioBackends;
 }
 
+void Audio::SuspendPlayback() {
+    if (mAudioPlayer) {
+        mAudioPlayer->Suspend();
+    }
+}
+
+void Audio::ResumePlayback() {
+    if (mAudioPlayer) {
+        mAudioPlayer->Resume();
+    }
+}
+
 void Audio::SetAudioChannels(AudioChannelsSetting channels) {
     if (mAudioSettings.ChannelSetting != channels) {
         mAudioSettings.ChannelSetting = channels;

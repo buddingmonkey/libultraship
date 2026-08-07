@@ -29,6 +29,12 @@ class SDLAudioPlayer final : public AudioPlayer {
      */
     int Buffered() override;
 
+    /** @brief Pauses the device and drops what is still queued on it. */
+    void Suspend() override;
+
+    /** @brief Unpauses the device. */
+    void Resume() override;
+
   protected:
     /**
      * @brief Opens the SDL audio device with the configured settings.

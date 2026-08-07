@@ -49,6 +49,20 @@ bool SDLAudioPlayer::DoInit() {
     return true;
 }
 
+void SDLAudioPlayer::Suspend() {
+    if (mDevice != 0) {
+        SDL_PauseAudioDevice(mDevice, 1);
+        // Otherwise the frames queued when we went away play out on the way back.
+        SDL_ClearQueuedAudio(mDevice);
+    }
+}
+
+void SDLAudioPlayer::Resume() {
+    if (mDevice != 0) {
+        SDL_PauseAudioDevice(mDevice, 0);
+    }
+}
+
 int SDLAudioPlayer::Buffered() {
     return SDL_GetQueuedAudioSize(mDevice) / (sizeof(int16_t) * mNumChannels);
 }
