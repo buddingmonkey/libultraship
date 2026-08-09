@@ -3,6 +3,10 @@ include(FetchContent)
 #=================== SDL2 ===================
 find_package(SDL2 QUIET)
 if (NOT ${SDL2_FOUND})
+    # SDL's iOS HIDAPI backend links CoreBluetooth, which makes App Store Connect demand an
+    # NSBluetoothAlwaysUsageDescription. It only drives the BLE Steam Controller; every other
+    # pad comes in through MFi/GameController, so drop the backend and the permission with it.
+    set(SDL_HIDAPI OFF)
     FetchContent_Declare(
         SDL2
         GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
