@@ -16,6 +16,10 @@
 #include "ship/window/gui/resource/GuiTextureFactory.h"
 #include "ship/window/gui/resource/GuiTexture.h"
 
+#if defined(__ANDROID__) || defined(__IOS__)
+#include <imgui_internal.h>
+#endif
+
 namespace Ship {
 #define TOGGLE_BTN ImGuiKey_F1
 #define TOGGLE_PAD_BTN ImGuiKey_GamepadBack
@@ -284,11 +288,74 @@ void Gui::HandleMouseCapture() {
     }
 }
 
+#if defined(__ANDROID__) || defined(__IOS__)
+namespace {
+// ImGui scrolls from the scrollbar or the wheel, and a touchscreen has neither, so a list can
+// only be worked by the bar itself. Drag its contents instead.
+ImGuiID sDragScrollWindow = 0;
+bool sDragScrollActive = false;
+float sDragScrollStartY = 0.0f;
+
+ImGuiWindow* ScrollableAncestor(ImGuiWindow* window) {
+    for (ImGuiWindow* w = window; w != nullptr; w = w->ParentWindow) {
+        if (w->ScrollMax.y > 0.0f) {
+            return w;
+        }
+    }
+    return nullptr;
+}
+
+void DragScroll() {
+    ImGuiIO& io = ImGui::GetIO();
+    ImGuiContext& g = *ImGui::GetCurrentContext();
+
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        sDragScrollWindow = 0;
+        sDragScrollActive = false;
+        return;
+    }
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        // A mouse has a wheel and the aim for a scrollbar, so it is left alone.
+        ImGuiWindow* under =
+            io.MouseSource == ImGuiMouseSource_TouchScreen ? ScrollableAncestor(g.HoveredWindow) : nullptr;
+        sDragScrollWindow = under != nullptr ? under->ID : 0;
+        sDragScrollActive = false;
+        sDragScrollStartY = io.MousePos.y;
+    }
+    if (sDragScrollWindow == 0) {
+        return;
+    }
+
+    ImGuiWindow* window = ImGui::FindWindowByID(sDragScrollWindow);
+    // Moving a window and working its scrollbar are drags of their own, and both of them read
+    // the other way round from this one. Neither has claimed the press yet on the frame it
+    // lands, which is why this waits for the gesture to travel before it takes anything over.
+    if (window == nullptr || g.MovingWindow != nullptr ||
+        (g.ActiveId != 0 && g.ActiveId == ImGui::GetWindowScrollbarID(window, ImGuiAxis_Y))) {
+        sDragScrollWindow = 0;
+        return;
+    }
+    if (!sDragScrollActive) {
+        if (ImFabs(io.MousePos.y - sDragScrollStartY) < io.MouseDragThreshold) {
+            return;
+        }
+        sDragScrollActive = true;
+        // The finger may have come down on a widget before it turned out to be a scroll.
+        ImGui::ClearActiveID();
+    }
+    ImGui::SetScrollY(window, window->Scroll.y - io.MouseDelta.y);
+}
+} // namespace
+#endif
+
 void Gui::StartFrame() {
     HandleMouseCapture();
     ImGuiBackendNewFrame();
     ImGuiWMNewFrame();
     ImGui::NewFrame();
+#if defined(__ANDROID__) || defined(__IOS__)
+    DragScroll();
+#endif
 }
 
 void Gui::EndFrame() {
