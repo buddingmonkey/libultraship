@@ -1029,7 +1029,7 @@ GfxRenderingAPIOGL::GetPixelDepth(int fb_id, const std::set<std::pair<float, flo
     // When looking up one value and the framebuffer is single-sampled, we can read pixels directly
     // Otherwise we need to blit first to a new buffer then read it
     if (coordinates.size() == 1 && fb.msaa_level <= 1) {
-        uint32_t depth_stencil_value;
+        uint32_t depth_stencil_value = 0;
         glBindFramebuffer(GL_FRAMEBUFFER, fb.fbo);
         int x = coordinates.begin()->first;
         int y = coordinates.begin()->second;
