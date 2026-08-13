@@ -45,6 +45,10 @@
 #include <SDL_syswm.h>
 #endif
 
+#ifdef __ANDROID__
+#include "fast/backends/gfx_debug_capture.h"
+#endif
+
 #define GFX_BACKEND_NAME "SDL"
 #define _100NANOSECONDS_IN_SECOND 10000000
 
@@ -754,6 +758,16 @@ void GfxWindowBackendSDL2::SyncFramerateWithTime() const {
 }
 
 void GfxWindowBackendSDL2::SwapBuffersBegin() {
+#ifdef __ANDROID__
+    if (DebugCapture::Pending()) {
+        int width = 0;
+        int height = 0;
+        SDL_GL_GetDrawableSize(mWnd, &width, &height);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        DebugCapture::WriteBoundFramebuffer("panel", width, height);
+        DebugCapture::Finish();
+    }
+#endif
     bool nextVsyncEnabled = Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(CVAR_VSYNC_ENABLED, 1);
 
     if (mVsyncEnabled != nextVsyncEnabled) {
