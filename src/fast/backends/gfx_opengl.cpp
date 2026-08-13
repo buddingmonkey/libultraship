@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <cstring>
 
 #include <map>
 #include <unordered_map>
@@ -65,19 +66,17 @@ void GfxRenderingAPIOGL::SetPerDrawUniforms() {
     glUniform1f(mCurrentShaderProgram->prim_depth_location, mCurrentPrimDepth);
 
     if (mCurrentShaderProgram->usedTextures[0] || mCurrentShaderProgram->usedTextures[1]) {
-        for (int i = 0; i < 2; i++) {
-            const TextureInfo& tex = textures[mCurrentTextureIds[i]];
-            // A shader that samples one texture links these arrays at size one; GLES rejects a two-element upload.
-            if (mCurrentShaderProgram->texture_filtering_location[i] >= 0) {
-                glUniform1i(mCurrentShaderProgram->texture_filtering_location[i], tex.filtering);
-            }
-            if (mCurrentShaderProgram->texture_width_location[i] >= 0) {
-                glUniform1i(mCurrentShaderProgram->texture_width_location[i], tex.width);
-            }
-            if (mCurrentShaderProgram->texture_height_location[i] >= 0) {
-                glUniform1i(mCurrentShaderProgram->texture_height_location[i], tex.height);
-            }
-        }
+        // A shader that samples one texture links these arrays at size one; GLES rejects the overrun.
+        const GLsizei count = mCurrentShaderProgram->usedTextures[1] ? 2 : 1;
+
+        GLint filtering[2] = { textures[mCurrentTextureIds[0]].filtering, textures[mCurrentTextureIds[1]].filtering };
+        glUniform1iv(mCurrentShaderProgram->texture_filtering_location, count, filtering);
+
+        GLint width[2] = { textures[mCurrentTextureIds[0]].width, textures[mCurrentTextureIds[1]].width };
+        glUniform1iv(mCurrentShaderProgram->texture_width_location, count, width);
+
+        GLint height[2] = { textures[mCurrentTextureIds[0]].height, textures[mCurrentTextureIds[1]].height };
+        glUniform1iv(mCurrentShaderProgram->texture_height_location, count, height);
     }
 }
 
@@ -510,15 +509,9 @@ ShaderProgram* GfxRenderingAPIOGL::CreateAndLoadNewShader(uint64_t shader_id0, u
     prg->frameCountLocation = glGetUniformLocation(shader_program, "frame_count");
     prg->noiseScaleLocation = glGetUniformLocation(shader_program, "noise_scale");
     prg->prim_depth_location = glGetUniformLocation(shader_program, "prim_depth");
-    for (int i = 0; i < 2; i++) {
-        char name[32];
-        snprintf(name, sizeof(name), "texture_width[%d]", i);
-        prg->texture_width_location[i] = glGetUniformLocation(shader_program, name);
-        snprintf(name, sizeof(name), "texture_height[%d]", i);
-        prg->texture_height_location[i] = glGetUniformLocation(shader_program, name);
-        snprintf(name, sizeof(name), "texture_filtering[%d]", i);
-        prg->texture_filtering_location[i] = glGetUniformLocation(shader_program, name);
-    }
+    prg->texture_width_location = glGetUniformLocation(shader_program, "texture_width");
+    prg->texture_height_location = glGetUniformLocation(shader_program, "texture_height");
+    prg->texture_filtering_location = glGetUniformLocation(shader_program, "texture_filtering");
 
     LoadShader(prg);
 
