@@ -44,6 +44,7 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     XrSpace mSpace = XR_NULL_HANDLE;
     XrSwapchain mSwapchain = XR_NULL_HANDLE;
     XrSessionState mState = XR_SESSION_STATE_UNKNOWN;
+    XrEnvironmentBlendMode mBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
 
     std::vector<XrSwapchainImageOpenGLESKHR> mImages;
     std::vector<uint32_t> mImageFbos;

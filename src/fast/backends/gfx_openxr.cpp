@@ -5,6 +5,7 @@
 #include <cstring>
 #include <string>
 
+#include <android/log.h>
 #include <GLES3/gl3.h>
 #include <SDL2/SDL.h>
 #include <spdlog/spdlog.h>
@@ -171,6 +172,28 @@ bool GfxWindowBackendOpenXR::StartSession() {
         return false;
     }
 
+    // Alpha blend puts the room behind the quad. Opaque fills everything the quad does not cover
+    // with black, which reads as a screen in a void.
+    uint32_t blendModeCount = 0;
+    if (!Failed(mInstance,
+                xrEnumerateEnvironmentBlendModes(mInstance, mSystemId, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0,
+                                                 &blendModeCount, nullptr),
+                "xrEnumerateEnvironmentBlendModes")) {
+        std::vector<XrEnvironmentBlendMode> blendModes(blendModeCount);
+        if (!Failed(mInstance,
+                    xrEnumerateEnvironmentBlendModes(mInstance, mSystemId, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
+                                                     blendModeCount, &blendModeCount, blendModes.data()),
+                    "xrEnumerateEnvironmentBlendModes")) {
+            mBlendMode = blendModes.empty() ? XR_ENVIRONMENT_BLEND_MODE_OPAQUE : blendModes[0];
+            for (XrEnvironmentBlendMode mode : blendModes) {
+                if (mode == XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND) {
+                    mBlendMode = mode;
+                    break;
+                }
+            }
+        }
+    }
+
     uint32_t formatCount = 0;
     if (Failed(mInstance, xrEnumerateSwapchainFormats(mSession, 0, &formatCount, nullptr),
                "xrEnumerateSwapchainFormats")) {
@@ -181,9 +204,11 @@ bool GfxWindowBackendOpenXR::StartSession() {
                "xrEnumerateSwapchainFormats")) {
         return false;
     }
+    // The game draws display-referred colour into the default framebuffer. An sRGB swapchain makes
+    // the blit encode it a second time, which washes the picture out and turns red pink.
     int64_t format = formats.empty() ? 0 : formats[0];
     for (int64_t candidate : formats) {
-        if (candidate == GL_SRGB8_ALPHA8) {
+        if (candidate == GL_RGBA8 || candidate == GL_RGB8) {
             format = candidate;
             break;
         }
@@ -231,7 +256,8 @@ bool GfxWindowBackendOpenXR::StartSession() {
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    SPDLOG_INFO("OpenXR: session up, {} swapchain images at {}x{}", imageCount, mSwapchainWidth, mSwapchainHeight);
+    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "session up: %u images %ux%u, format 0x%04x, blend mode %d",
+                        imageCount, mSwapchainWidth, mSwapchainHeight, (unsigned)format, (int)mBlendMode);
     return true;
 }
 
@@ -286,6 +312,8 @@ void GfxWindowBackendOpenXR::PresentQuad() {
                           GL_COLOR_BUFFER_BIT, GL_LINEAR);
 
         if (DebugCapture::Pending()) {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            DebugCapture::WriteBoundFramebuffer("source", mSwapchainWidth, mSwapchainHeight);
             glBindFramebuffer(GL_FRAMEBUFFER, mImageFbos[index]);
             DebugCapture::WriteBoundFramebuffer("quad", mSwapchainWidth, mSwapchainHeight);
             DebugCapture::Finish();
@@ -326,7 +354,9 @@ void GfxWindowBackendOpenXR::SwapBuffersBegin() {
     if (frameState.shouldRender == XR_TRUE) {
         PresentQuad();
 
-        quad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        // No source-alpha bit: the game does not keep a meaningful alpha channel, and honouring it
+        // under alpha blend makes parts of the picture see-through.
+        quad.layerFlags = 0;
         quad.space = mSpace;
         quad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
         quad.subImage.swapchain = mSwapchain;
@@ -341,7 +371,7 @@ void GfxWindowBackendOpenXR::SwapBuffersBegin() {
 
     XrFrameEndInfo endInfo{ XR_TYPE_FRAME_END_INFO };
     endInfo.displayTime = frameState.predictedDisplayTime;
-    endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    endInfo.environmentBlendMode = mBlendMode;
     endInfo.layerCount = layerCount;
     endInfo.layers = layers;
     Failed(mInstance, xrEndFrame(mSession, &endInfo), "xrEndFrame");
