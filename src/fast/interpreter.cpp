@@ -5336,6 +5336,11 @@ void gfx_push_current_dir(char* path) {
 int32_t gfx_check_image_signature(const char* imgData) {
     uintptr_t i = (uintptr_t)(imgData);
 
+#if defined(__ANDROID__) && defined(__aarch64__)
+    // Bionic tags heap pointers in the top byte (ARM TBI); strip it or every Android pointer fails the range check.
+    i &= 0x00FFFFFFFFFFFFFFull;
+#endif
+
     if ((i & 1) == 1) {
         return 0;
     }
