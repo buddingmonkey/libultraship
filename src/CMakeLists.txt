@@ -132,6 +132,11 @@ if (USE_OPENGLES)
     endif()
 endif()
 
+if (ENABLE_OPENXR)
+    target_compile_definitions(libultraship PUBLIC ENABLE_OPENXR)
+    target_link_libraries(libultraship PRIVATE openxr_loader EGL)
+endif()
+
 target_link_libraries(libultraship PUBLIC prism monocypher)
 
 if(ENABLE_SCRIPTING)

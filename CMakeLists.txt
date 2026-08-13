@@ -8,6 +8,7 @@ if(POLICY CMP0141)
 endif()
 
 option(NON_PORTABLE "Build a non-portable version" OFF)
+option(ENABLE_OPENXR "Build the OpenXR window backend (Android XR)" OFF)
 option(DISABLE_DLL_LOADER "Disable dynamic library loading support" OFF)
 option(ENABLE_SCRIPTING "Enable TCC-based C mod compilation and scripting system" OFF)
 
