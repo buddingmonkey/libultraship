@@ -598,6 +598,8 @@ void GfxRenderingAPIOGL::UploadTexture(const uint8_t* rgba32_buf, uint32_t width
 #define GL_MIRROR_CLAMP_TO_EDGE 0x8743
 #endif
 
+static bool sHasMirrorClampToEdge = true;
+
 static uint32_t gfx_cm_to_opengl(uint32_t val) {
     switch (val) {
         case G_TX_NOMIRROR | G_TX_CLAMP:
@@ -605,7 +607,8 @@ static uint32_t gfx_cm_to_opengl(uint32_t val) {
         case G_TX_MIRROR | G_TX_WRAP:
             return GL_MIRRORED_REPEAT;
         case G_TX_MIRROR | G_TX_CLAMP:
-            return GL_MIRROR_CLAMP_TO_EDGE;
+            // Without GL_EXT_texture_mirror_clamp_to_edge the enum is invalid and the previous wrap mode stays.
+            return sHasMirrorClampToEdge ? GL_MIRROR_CLAMP_TO_EDGE : GL_MIRRORED_REPEAT;
         case G_TX_NOMIRROR | G_TX_WRAP:
             return GL_REPEAT;
     }
@@ -752,6 +755,21 @@ void GfxRenderingAPIOGL::Init() {
     mPixelDepthRbSize = 1;
 
     glGetIntegerv(GL_MAX_SAMPLES, &mMaxMsaaLevel);
+
+#ifdef USE_OPENGLES
+    {
+        GLint numExtensions = 0;
+        glGetIntegerv(GL_NUM_EXTENSIONS, &numExtensions);
+        sHasMirrorClampToEdge = false;
+        for (GLint i = 0; i < numExtensions; i++) {
+            const char* extension = (const char*)glGetStringi(GL_EXTENSIONS, i);
+            if (extension != nullptr && strstr(extension, "texture_mirror_clamp_to_edge") != nullptr) {
+                sHasMirrorClampToEdge = true;
+                break;
+            }
+        }
+    }
+#endif
 }
 
 void GfxRenderingAPIOGL::OnResize() {
