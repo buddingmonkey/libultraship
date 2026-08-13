@@ -65,14 +65,17 @@ void GfxRenderingAPIOGL::SetPerDrawUniforms() {
     glUniform1f(mCurrentShaderProgram->prim_depth_location, mCurrentPrimDepth);
 
     if (mCurrentShaderProgram->usedTextures[0] || mCurrentShaderProgram->usedTextures[1]) {
+        // A shader that samples one texture links these arrays at size one; GLES rejects the overrun.
+        const GLsizei count = mCurrentShaderProgram->usedTextures[1] ? 2 : 1;
+
         GLint filtering[2] = { textures[mCurrentTextureIds[0]].filtering, textures[mCurrentTextureIds[1]].filtering };
-        glUniform1iv(mCurrentShaderProgram->texture_filtering_location, 2, filtering);
+        glUniform1iv(mCurrentShaderProgram->texture_filtering_location, count, filtering);
 
         GLint width[2] = { textures[mCurrentTextureIds[0]].width, textures[mCurrentTextureIds[1]].width };
-        glUniform1iv(mCurrentShaderProgram->texture_width_location, 2, width);
+        glUniform1iv(mCurrentShaderProgram->texture_width_location, count, width);
 
         GLint height[2] = { textures[mCurrentTextureIds[0]].height, textures[mCurrentTextureIds[1]].height };
-        glUniform1iv(mCurrentShaderProgram->texture_height_location, 2, height);
+        glUniform1iv(mCurrentShaderProgram->texture_height_location, count, height);
     }
 }
 
