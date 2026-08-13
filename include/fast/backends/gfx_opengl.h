@@ -36,9 +36,9 @@ struct ShaderProgram {
     GLint frameCountLocation;
     GLint noiseScaleLocation;
     GLint prim_depth_location;
-    GLint texture_width_location;
-    GLint texture_height_location;
-    GLint texture_filtering_location;
+    GLint texture_width_location[2];
+    GLint texture_height_location[2];
+    GLint texture_filtering_location[2];
 };
 
 struct FramebufferOGL {
