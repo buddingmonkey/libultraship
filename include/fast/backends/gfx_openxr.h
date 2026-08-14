@@ -78,6 +78,7 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
 
     float mWindowWidth = 0.0f;
     float mWindowHeight = 0.0f;
+    float mWindowDistance = 0.0f;
     bool mWindowSized = false;
 
     bool mSrgbWriteControl = false;

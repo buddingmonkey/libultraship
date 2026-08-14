@@ -4215,6 +4215,13 @@ bool gfx_set_fb_handler_custom(F3DGfx** cmd0) {
     return false;
 }
 
+bool gfx_xr_flat_projection_handler_custom(F3DGfx** cmd0) {
+#ifdef ENABLE_OPENXR
+    SetXrFlatProjection((*cmd0)->words.w1 != 0);
+#endif
+    return false;
+}
+
 bool gfx_reset_fb_handler_custom(F3DGfx** cmd0) {
     Interpreter* gfx = mInstance.lock().get();
     gfx->Flush();
@@ -4767,10 +4774,11 @@ static constexpr UcodeHandler rdpHandlers = {
 
 static constexpr UcodeHandler otrHandlers = {
     { OTR_G_SETTIMG_OTR_HASH,
-      { "G_SETTIMG_OTR_HASH", gfx_set_timg_otr_hash_handler_custom } },       // G_SETTIMG_OTR_HASH (0x20)
-    { OTR_G_SETFB, { "G_SETFB", gfx_set_fb_handler_custom } },                // G_SETFB (0x21)
-    { OTR_G_RESETFB, { "G_RESETFB", gfx_reset_fb_handler_custom } },          // G_RESETFB (0x22)
-    { OTR_G_SETTIMG_FB, { "G_SETTIMG_FB", gfx_set_timg_fb_handler_custom } }, // G_SETTIMG_FB (0x23)
+      { "G_SETTIMG_OTR_HASH", gfx_set_timg_otr_hash_handler_custom } },                // G_SETTIMG_OTR_HASH (0x20)
+    { OTR_G_SETFB, { "G_SETFB", gfx_set_fb_handler_custom } },                         // G_SETFB (0x21)
+    { RDP_G_XR_FLATPROJ, { "G_XR_FLATPROJ", gfx_xr_flat_projection_handler_custom } }, // G_XR_FLATPROJ (0x4b)
+    { OTR_G_RESETFB, { "G_RESETFB", gfx_reset_fb_handler_custom } },                   // G_RESETFB (0x22)
+    { OTR_G_SETTIMG_FB, { "G_SETTIMG_FB", gfx_set_timg_fb_handler_custom } },          // G_SETTIMG_FB (0x23)
     { OTR_G_VTX_OTR_FILEPATH,
       { "G_VTX_OTR_FILEPATH", gfx_vtx_otr_filepath_handler_custom } }, // G_VTX_OTR_FILEPATH (0x24)
     { OTR_G_SETTIMG_OTR_FILEPATH,

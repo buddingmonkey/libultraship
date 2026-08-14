@@ -20,16 +20,19 @@
 
 namespace Fast {
 
-// The window hangs this far in front of where the user faced at start. It is as wide as the game's
-// own field of view needs it to be, so the framing does not change; the size below only holds
-// until the first frame says otherwise. Part 2.3 turns all of this into settings.
-static constexpr float WINDOW_DISTANCE_METRES = 2.0f;
+// The window hangs in front of where the user faced at start, as wide as the game's field of view
+// needs it to be there. The width below only holds until the first frame says otherwise.
+static constexpr float WINDOW_DISTANCE_DEFAULT = 1.25f;
+static constexpr float WINDOW_DISTANCE_MIN = 0.7f;
+static constexpr float WINDOW_DISTANCE_MAX = 4.0f;
 static constexpr float WINDOW_WIDTH_METRES = 1.6f;
 
 // Game units from the viewpoint to the glass. Everything nearer than this stands in front of the
-// window, everything further recedes behind it, and the number therefore sets how large the world
-// is: Banjo sits about this far from the camera.
+// window, everything further recedes behind it. Banjo sits about this far from the camera, so the
+// scene stays behind the glass where a quad layer can hold it.
 static constexpr float WINDOW_DEPTH_UNITS = 700.0f;
+
+static float sWindowDistance = WINDOW_DISTANCE_DEFAULT;
 
 static bool Failed(XrInstance instance, XrResult result, const char* what) {
     if (XR_SUCCEEDED(result)) {
@@ -286,6 +289,8 @@ bool GfxWindowBackendOpenXR::StartSession() {
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
+    // Until the first frame says what the game's field of view needs, the window keeps a plain size.
+    mWindowDistance = sWindowDistance;
     mWindowWidth = WINDOW_WIDTH_METRES;
     mWindowHeight = WINDOW_WIDTH_METRES * (float)mSwapchainHeight / (float)mSwapchainWidth;
 
@@ -474,9 +479,11 @@ static XrViewGeometry sViewGeometry = {};
 static float sViewTanHalfWidth = 0.0f;
 static float sViewTanHalfHeight = 0.0f;
 static float sWindowAngularWidth = 0.0f;
+static bool sFlatProjection = false;
+static bool sStereo = true;
 
 bool GetXrViewGeometry(XrViewGeometry* geometry) {
-    if (!sViewGeometryValid) {
+    if (!sViewGeometryValid || sFlatProjection) {
         return false;
     }
     *geometry = sViewGeometry;
@@ -486,6 +493,24 @@ bool GetXrViewGeometry(XrViewGeometry* geometry) {
 void SetXrViewTangents(float tanHalfWidth, float tanHalfHeight) {
     sViewTanHalfWidth = tanHalfWidth;
     sViewTanHalfHeight = tanHalfHeight;
+}
+
+void SetXrStereo(bool enabled) {
+    sStereo = enabled;
+}
+
+void SetXrFlatProjection(bool flat) {
+    sFlatProjection = flat;
+}
+
+void SetXrWindowDistance(float metres) {
+    if (metres < WINDOW_DISTANCE_MIN) {
+        metres = WINDOW_DISTANCE_MIN;
+    }
+    if (metres > WINDOW_DISTANCE_MAX) {
+        metres = WINDOW_DISTANCE_MAX;
+    }
+    sWindowDistance = metres;
 }
 
 float GetXrWindowAngularWidth() {
@@ -523,7 +548,7 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         if (forward.z >= -1e-4f) {
             continue;
         }
-        const float t = (-WINDOW_DISTANCE_METRES - origin.z) / forward.z;
+        const float t = (-mWindowDistance - origin.z) / forward.z;
         if (t <= 0.0f) {
             continue;
         }
@@ -656,16 +681,21 @@ void GfxWindowBackendOpenXR::LocateViews() {
 }
 
 void GfxWindowBackendOpenXR::SizeWindow() {
-    if (mWindowSized || sViewTanHalfWidth <= 0.0f || sViewTanHalfHeight <= 0.0f) {
+    if (sViewTanHalfWidth <= 0.0f || sViewTanHalfHeight <= 0.0f) {
         return;
     }
-    mWindowWidth = 2.0f * WINDOW_DISTANCE_METRES * sViewTanHalfWidth;
-    mWindowHeight = 2.0f * WINDOW_DISTANCE_METRES * sViewTanHalfHeight;
+    if (mWindowSized && sWindowDistance == mWindowDistance) {
+        return;
+    }
     mWindowSized = true;
-    sWindowAngularWidth = 2.0f * atanf(0.5f * mWindowWidth / WINDOW_DISTANCE_METRES);
-    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "window %.2f x %.2f m at %.1f m, %.1f degrees wide",
-                        mWindowWidth, mWindowHeight, WINDOW_DISTANCE_METRES,
-                        sWindowAngularWidth * 180.0f / (float)M_PI);
+    mWindowDistance = sWindowDistance;
+    mWindowWidth = 2.0f * mWindowDistance * sViewTanHalfWidth;
+    mWindowHeight = 2.0f * mWindowDistance * sViewTanHalfHeight;
+    sWindowAngularWidth = 2.0f * atanf(0.5f * mWindowWidth / mWindowDistance);
+    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR",
+                        "window %.2f x %.2f m at %.2f m, %.1f degrees wide, %.0f units per metre", mWindowWidth,
+                        mWindowHeight, mWindowDistance, sWindowAngularWidth * 180.0f / (float)M_PI,
+                        WINDOW_DEPTH_UNITS / mWindowDistance);
 }
 
 bool GfxWindowBackendOpenXR::OpenFrame() {
@@ -701,7 +731,7 @@ bool GfxWindowBackendOpenXR::OpenFrame() {
 
     // Without a head pose there is no off-axis frustum to build, so the frame falls back to one
     // image that both eyes read, which is what 2.1 presented.
-    mViewCount = mViewsValid ? VIEW_COUNT : 1;
+    mViewCount = (mViewsValid && sStereo) ? VIEW_COUNT : 1;
     mCurrentView = 0;
     return true;
 }
@@ -720,11 +750,15 @@ void GfxWindowBackendOpenXR::BeginRenderView(uint32_t view) {
     // The window plane is a copy of the game's own screen, so the head offset converts with the
     // one scale that puts the glass WINDOW_DEPTH_UNITS from the viewpoint. LOCAL space starts at
     // the head, and the window hangs straight ahead of it, so the eye pose is already the offset.
-    const float unitsPerMetre = WINDOW_DEPTH_UNITS / WINDOW_DISTANCE_METRES;
-    const XrVector3f& position = mViews[view].pose.position;
-    sViewGeometry.eyeOffset[0] = position.x * unitsPerMetre;
-    sViewGeometry.eyeOffset[1] = position.y * unitsPerMetre;
-    sViewGeometry.eyeOffset[2] = position.z * unitsPerMetre;
+    const float unitsPerMetre = WINDOW_DEPTH_UNITS / mWindowDistance;
+    const XrVector3f& left = mViews[0].pose.position;
+    const XrVector3f& right = mViews[1].pose.position;
+    // One image for both eyes is drawn from between them, not from either one.
+    const bool mono = mViewCount != VIEW_COUNT;
+    const XrVector3f& eye = mViews[view].pose.position;
+    sViewGeometry.eyeOffset[0] = (mono ? 0.5f * (left.x + right.x) : eye.x) * unitsPerMetre;
+    sViewGeometry.eyeOffset[1] = (mono ? 0.5f * (left.y + right.y) : eye.y) * unitsPerMetre;
+    sViewGeometry.eyeOffset[2] = (mono ? 0.5f * (left.z + right.z) : eye.z) * unitsPerMetre;
     sViewGeometry.windowDistance = WINDOW_DEPTH_UNITS;
     sViewGeometryValid = true;
 }
@@ -749,6 +783,15 @@ void GfxWindowBackendOpenXR::PresentView(uint32_t view) {
         glBlitFramebuffer(0, 0, mSwapchainWidth, mSwapchainHeight, 0, 0, mSwapchainWidth, mSwapchainHeight,
                           GL_COLOR_BUFFER_BIT, GL_LINEAR);
 
+        // The runtime reads the layer's alpha to decide where the room shows through, and it only
+        // reads it when the layer asks it to. The game keeps no meaningful alpha, so make the whole
+        // image opaque; the room then shows everywhere the window is not, and nowhere inside it.
+        glDisable(GL_SCISSOR_TEST);
+        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
         if (DebugCapture::Pending()) {
             glBindFramebuffer(GL_FRAMEBUFFER, mImageFbos[view][index]);
             DebugCapture::WriteBoundFramebuffer(view == 0 ? "left" : "right", mSwapchainWidth, mSwapchainHeight);
@@ -772,16 +815,14 @@ void GfxWindowBackendOpenXR::EndRenderFrame() {
         static constexpr XrEyeVisibility VISIBILITY[VIEW_COUNT] = { XR_EYE_VISIBILITY_LEFT, XR_EYE_VISIBILITY_RIGHT };
         for (uint32_t view = 0; view < mViewCount; view++) {
             quads[view] = { XR_TYPE_COMPOSITION_LAYER_QUAD };
-            // No source-alpha bit: the game does not keep a meaningful alpha channel, and honouring
-            // it under alpha blend makes parts of the picture see-through.
-            quads[view].layerFlags = 0;
+            quads[view].layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
             quads[view].space = mSpace;
             quads[view].eyeVisibility = mViewCount == VIEW_COUNT ? VISIBILITY[view] : XR_EYE_VISIBILITY_BOTH;
             quads[view].subImage.swapchain = mSwapchain[view];
             quads[view].subImage.imageRect = { { 0, 0 }, { (int32_t)mSwapchainWidth, (int32_t)mSwapchainHeight } };
             quads[view].subImage.imageArrayIndex = 0;
             quads[view].pose.orientation.w = 1.0f;
-            quads[view].pose.position.z = -WINDOW_DISTANCE_METRES;
+            quads[view].pose.position.z = -mWindowDistance;
             quads[view].size.width = mWindowWidth;
             quads[view].size.height = mWindowHeight;
             layers[layerCount++] = (const XrCompositionLayerBaseHeader*)&quads[view];

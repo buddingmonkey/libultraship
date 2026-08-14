@@ -19,6 +19,23 @@ bool GetXrViewGeometry(XrViewGeometry* geometry);
 // game's own projection.
 void SetXrViewTangents(float tanHalfWidth, float tanHalfHeight);
 
+// How far the window hangs from the viewer, in metres. The window keeps the angular size the
+// game's field of view gives it, so this does not change the framing: it scales the whole diorama
+// towards the viewer, and a smaller world at a shorter range has more depth in it. Parallax on the
+// glass never exceeds one eye separation whatever the distance, so no setting here can make the
+// eyes diverge.
+void SetXrWindowDistance(float metres);
+
+// Draws one image for both eyes instead of one per eye. There is no parallax then, but the frame
+// costs half as much and only one layer reaches the compositor.
+void SetXrStereo(bool enabled);
+
+// Holds the next draws on the glass. A HUD element is placed in front of the camera by the game
+// and is not part of the world behind the window, so it must not take the off-axis frustum: with
+// this set the game's own projection stands, both eyes draw the same picture, and the element
+// lands on the window plane with no parallax.
+void SetXrFlatProjection(bool flat);
+
 // Radians the window covers, for a caller that scales a menu drawn on it. Zero without a session.
 float GetXrWindowAngularWidth();
 

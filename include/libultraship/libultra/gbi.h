@@ -197,6 +197,7 @@
 #define G_SETTILESIZE_INTERP 0x45
 #define G_SETTARGETINTERPINDEX 0x46
 #define G_SETTILESIZE_LERP 0x4a
+#define G_XR_FLATPROJ 0x4b
 
 /*
  * The following commands are the "generated" RDP commands; the user
@@ -2760,6 +2761,17 @@ typedef union Gfx {
 
 #define gsSPInvalidateTexCache() \
     { _SHIFTL(G_INVALTEXCACHE, 24, 8), 0 }
+
+// Holds the draws that follow on the headset's window plane, so a HUD element the game places in
+// front of the camera does not take the off-axis frustum and float in the room. Does nothing
+// without a headset.
+#define gSPXrFlatProjection(pkt, on)                    \
+    _DW({                                               \
+        Gfx* _g = (Gfx*)(pkt);                          \
+                                                        \
+        _g->words.w0 = _SHIFTL(G_XR_FLATPROJ, 24, 8);   \
+        _g->words.w1 = (unsigned int)(on);              \
+    })
 
 #define gSPRegisterBlendedTex(pkt, timg, mask, replc)    \
     {                                                    \
