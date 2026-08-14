@@ -249,6 +249,14 @@ void Fast3dWindow::BeginRenderView(uint32_t view) {
     mRenderingApi->HoldFrameNoise(view > 0);
 }
 
+std::vector<float> Fast3dWindow::GetSupportedRefreshRates() {
+    return mWindowManagerApi->GetSupportedRefreshRates();
+}
+
+bool Fast3dWindow::SetRefreshRate(float rate) {
+    return mWindowManagerApi->SetRefreshRate(rate);
+}
+
 void Fast3dWindow::HandleEvents() {
     mWindowManagerApi->HandleEvents();
 }

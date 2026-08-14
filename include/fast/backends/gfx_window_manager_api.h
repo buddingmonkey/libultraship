@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <vector>
 #include "ship/window/Window.h"
 namespace Fast {
 class GfxWindowBackend {
@@ -16,6 +17,15 @@ class GfxWindowBackend {
     virtual void SetFullscreenChangedCallback(void (*mOnFullscreenChanged)(bool is_now_fullscreen)) = 0;
     virtual void SetFullscreen(bool fullscreen) = 0;
     virtual void GetActiveWindowRefreshRate(uint32_t* refreshRate) = 0;
+    // Rates the display can be driven at, and a request for one of them. Only a headset answers;
+    // a desktop window takes the rate the monitor is already set to. The caller picks, because
+    // only it knows what its own logic rate divides into.
+    virtual std::vector<float> GetSupportedRefreshRates() {
+        return {};
+    }
+    virtual bool SetRefreshRate(float rate) {
+        return false;
+    }
     virtual void SetCursorVisibility(bool visability) = 0;
     virtual void SetMousePos(int32_t posX, int32_t posY) = 0;
     virtual void GetMousePos(int32_t* x, int32_t* y) = 0;

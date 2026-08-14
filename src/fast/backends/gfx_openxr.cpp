@@ -116,11 +116,15 @@ bool GfxWindowBackendOpenXR::StartSession() {
     }
 
     const bool handInteraction = HasExtension(extensions, "XR_EXT_hand_interaction");
+    const bool refreshRate = HasExtension(extensions, XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
 
     std::vector<const char*> enabled = { XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME,
                                          XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME };
     if (handInteraction) {
         enabled.push_back("XR_EXT_hand_interaction");
+    }
+    if (refreshRate) {
+        enabled.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
     }
 
     XrInstanceCreateInfoAndroidKHR androidInfo{ XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR };
@@ -289,6 +293,10 @@ bool GfxWindowBackendOpenXR::StartSession() {
         view = { XR_TYPE_VIEW };
     }
 
+    if (refreshRate) {
+        StartRefreshRates();
+    }
+
     if (!StartActions(handInteraction)) {
         __android_log_print(ANDROID_LOG_ERROR, "LighthouseXR", "pointer actions failed; pinch will not reach the game");
     }
@@ -297,6 +305,65 @@ bool GfxWindowBackendOpenXR::StartSession() {
                         "session up: %u images %ux%u per eye, format 0x%04x, blend %d, srgb ctl %d", imageCount,
                         mSwapchainWidth, mSwapchainHeight, (unsigned)format, (int)mBlendMode, (int)mSrgbWriteControl);
     return true;
+}
+
+void GfxWindowBackendOpenXR::StartRefreshRates() {
+    PFN_xrEnumerateDisplayRefreshRatesFB enumerate = nullptr;
+    PFN_xrGetDisplayRefreshRateFB get = nullptr;
+    if (XR_FAILED(
+            xrGetInstanceProcAddr(mInstance, "xrEnumerateDisplayRefreshRatesFB", (PFN_xrVoidFunction*)&enumerate)) ||
+        XR_FAILED(xrGetInstanceProcAddr(mInstance, "xrGetDisplayRefreshRateFB", (PFN_xrVoidFunction*)&get)) ||
+        XR_FAILED(xrGetInstanceProcAddr(mInstance, "xrRequestDisplayRefreshRateFB",
+                                        (PFN_xrVoidFunction*)&mRequestRefreshRate))) {
+        mRequestRefreshRate = nullptr;
+        return;
+    }
+
+    uint32_t count = 0;
+    if (Failed(mInstance, enumerate(mSession, 0, &count, nullptr), "xrEnumerateDisplayRefreshRatesFB")) {
+        return;
+    }
+    mRefreshRates.resize(count);
+    if (Failed(mInstance, enumerate(mSession, count, &count, mRefreshRates.data()),
+               "xrEnumerateDisplayRefreshRatesFB")) {
+        mRefreshRates.clear();
+        return;
+    }
+    Failed(mInstance, get(mSession, &mRefreshRate), "xrGetDisplayRefreshRateFB");
+
+    char list[128] = "";
+    for (float rate : mRefreshRates) {
+        char one[16];
+        snprintf(one, sizeof(one), "%s%.0f", list[0] == '\0' ? "" : " ", rate);
+        strncat(list, one, sizeof(list) - strlen(list) - 1);
+    }
+    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "display runs at %.0f Hz, offers %s", mRefreshRate, list);
+}
+
+std::vector<float> GfxWindowBackendOpenXR::GetSupportedRefreshRates() {
+    return mRefreshRates;
+}
+
+bool GfxWindowBackendOpenXR::SetRefreshRate(float rate) {
+    if (mRequestRefreshRate == nullptr || mSession == XR_NULL_HANDLE) {
+        return false;
+    }
+    if (Failed(mInstance, mRequestRefreshRate(mSession, rate), "xrRequestDisplayRefreshRateFB")) {
+        return false;
+    }
+    mRefreshRate = rate;
+    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "asked the display for %.0f Hz", rate);
+    return true;
+}
+
+void GfxWindowBackendOpenXR::GetActiveWindowRefreshRate(uint32_t* refreshRate) {
+    // SDL reports the panel mode the 2D window was made in, which is not what the compositor runs
+    // the headset at once the app asks for a rate.
+    if (mActive && mRefreshRate > 0.0f) {
+        *refreshRate = (uint32_t)lroundf(mRefreshRate);
+        return;
+    }
+    GfxWindowBackendSDL2::GetActiveWindowRefreshRate(refreshRate);
 }
 
 bool GfxWindowBackendOpenXR::StartActions(bool handInteraction) {
@@ -545,6 +612,11 @@ void GfxWindowBackendOpenXR::PollEvents() {
             HandleStateChange(*(const XrEventDataSessionStateChanged*)&event);
         } else if (event.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) {
             mActive = false;
+        } else if (event.type == XR_TYPE_EVENT_DATA_DISPLAY_REFRESH_RATE_CHANGED_FB) {
+            // The runtime can refuse or later drop the rate the game asked for, and the sub-frame
+            // count follows whatever it reports here.
+            mRefreshRate = ((const XrEventDataDisplayRefreshRateChangedFB*)&event)->toDisplayRefreshRate;
+            __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "display now runs at %.0f Hz", mRefreshRate);
         }
     }
 }
@@ -779,6 +851,9 @@ void GfxWindowBackendOpenXR::Teardown() {
         }
         mActivity = nullptr;
     }
+    mRequestRefreshRate = nullptr;
+    mRefreshRates.clear();
+    mRefreshRate = 0.0f;
     mActive = false;
     mRunning = false;
     mFrameOpen = false;

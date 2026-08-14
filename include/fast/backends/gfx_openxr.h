@@ -33,6 +33,9 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
 
     void Init(const char* gameName, const char* apiName, bool startFullScreen, uint32_t width, uint32_t height,
               int32_t posX, int32_t posY) override;
+    void GetActiveWindowRefreshRate(uint32_t* refreshRate) override;
+    std::vector<float> GetSupportedRefreshRates() override;
+    bool SetRefreshRate(float rate) override;
     uint32_t BeginRenderFrame() override;
     void BeginRenderView(uint32_t view) override;
     void SwapBuffersBegin() override;
@@ -41,6 +44,7 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
   private:
     bool StartSession();
     bool StartActions(bool handInteraction);
+    void StartRefreshRates();
     void PollEvents();
     void HandleStateChange(const XrEventDataSessionStateChanged& changed);
     void PumpPointer(XrTime displayTime);
@@ -77,6 +81,10 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     bool mWindowSized = false;
 
     bool mSrgbWriteControl = false;
+
+    PFN_xrRequestDisplayRefreshRateFB mRequestRefreshRate = nullptr;
+    std::vector<float> mRefreshRates;
+    float mRefreshRate = 0.0f;
 
     XrActionSet mActionSet = XR_NULL_HANDLE;
     XrAction mAimAction = XR_NULL_HANDLE;

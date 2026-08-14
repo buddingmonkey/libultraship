@@ -89,6 +89,10 @@ class Fast3dWindow : public Ship::Window {
     uint32_t BeginRenderFrame();
     void BeginRenderView(uint32_t view);
 
+    // Rates the display can be driven at, and a request for one of them. Empty off a headset.
+    std::vector<float> GetSupportedRefreshRates();
+    bool SetRefreshRate(float rate);
+
     std::weak_ptr<Interpreter> GetInterpreterWeak() const;
 
     /** @brief Returns the graphics debugger for this Fast3D window. */
