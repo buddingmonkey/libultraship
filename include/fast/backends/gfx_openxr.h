@@ -54,6 +54,8 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     uint32_t mSwapchainWidth = 0;
     uint32_t mSwapchainHeight = 0;
 
+    bool mSrgbWriteControl = false;
+
     XrActionSet mActionSet = XR_NULL_HANDLE;
     XrAction mAimAction = XR_NULL_HANDLE;
     XrAction mSelectAction = XR_NULL_HANDLE;

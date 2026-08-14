@@ -7,6 +7,11 @@
 
 #include <android/log.h>
 #include <GLES3/gl3.h>
+
+#ifndef GL_FRAMEBUFFER_SRGB_EXT
+#define GL_FRAMEBUFFER_SRGB_EXT 0x8DB9
+#endif
+
 #include <SDL2/SDL.h>
 #include <spdlog/spdlog.h>
 
@@ -210,11 +215,17 @@ bool GfxWindowBackendOpenXR::StartSession() {
                "xrEnumerateSwapchainFormats")) {
         return false;
     }
-    // The game draws display-referred colour into the default framebuffer. An sRGB swapchain makes
-    // the blit encode it a second time, which washes the picture out and turns red pink.
+    // The game draws display-referred colour. A linear swapchain makes the runtime encode it to
+    // sRGB on the way to the display; an sRGB one makes the blit encode it. Either washes the
+    // picture out. The fix is an sRGB swapchain, which the runtime reads correctly, with the write
+    // conversion turned off so the blit copies the bytes as they are.
+    const char* glExtensions = (const char*)glGetString(GL_EXTENSIONS);
+    mSrgbWriteControl = glExtensions != nullptr && strstr(glExtensions, "GL_EXT_sRGB_write_control") != nullptr;
+
+    const int64_t wanted = mSrgbWriteControl ? GL_SRGB8_ALPHA8 : GL_RGBA8;
     int64_t format = formats.empty() ? 0 : formats[0];
     for (int64_t candidate : formats) {
-        if (candidate == GL_RGBA8 || candidate == GL_RGB8) {
+        if (candidate == wanted) {
             format = candidate;
             break;
         }
@@ -266,8 +277,9 @@ bool GfxWindowBackendOpenXR::StartSession() {
         __android_log_print(ANDROID_LOG_ERROR, "LighthouseXR", "pointer actions failed; pinch will not reach the game");
     }
 
-    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "session up: %u images %ux%u, format 0x%04x, blend mode %d",
-                        imageCount, mSwapchainWidth, mSwapchainHeight, (unsigned)format, (int)mBlendMode);
+    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR",
+                        "session up: %u images %ux%u, format 0x%04x, blend %d, srgb ctl %d", imageCount,
+                        mSwapchainWidth, mSwapchainHeight, (unsigned)format, (int)mBlendMode, (int)mSrgbWriteControl);
     return true;
 }
 
@@ -449,25 +461,37 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         return;
     }
 
-    SDL_Event event{};
-    event.tfinger.timestamp = SDL_GetTicks();
-    event.tfinger.touchId = 1;
-    event.tfinger.fingerId = 1;
-    event.tfinger.x = sPointerU;
-    event.tfinger.y = sPointerV;
-    event.tfinger.pressure = down ? 1.0f : 0.0f;
+    // The pad reads SDL's touch device list, which SDL_PushEvent cannot reach, so the pinch goes
+    // in there directly. ImGui reads mouse events, which is what SDL synthesises from a touch on a
+    // phone, so the menu is driven the same way here.
+    const int x = (int)(sPointerU * (float)mSwapchainWidth);
+    const int y = (int)(sPointerV * (float)mSwapchainHeight);
 
-    if (down && !wasDown) {
-        event.type = SDL_FINGERDOWN;
-    } else if (down) {
-        event.type = SDL_FINGERMOTION;
-    } else if (wasDown) {
-        event.type = SDL_FINGERUP;
-    } else {
-        sPointerDown = false;
-        return;
+    // ImGui's SDL backend drops an event whose window it does not know, and a pushed event does
+    // not carry one by itself.
+    const Uint32 windowId = SDL_GetWindowID(SDL_GL_GetCurrentWindow());
+
+    SDL_Event motion{};
+    motion.type = SDL_MOUSEMOTION;
+    motion.motion.windowID = windowId;
+    motion.motion.timestamp = SDL_GetTicks();
+    motion.motion.state = down ? SDL_BUTTON_LMASK : 0;
+    motion.motion.x = x;
+    motion.motion.y = y;
+    SDL_PushEvent(&motion);
+
+    if (down != wasDown) {
+        SDL_Event button{};
+        button.type = down ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
+        button.button.windowID = windowId;
+        button.button.timestamp = SDL_GetTicks();
+        button.button.button = SDL_BUTTON_LEFT;
+        button.button.state = down ? SDL_PRESSED : SDL_RELEASED;
+        button.button.clicks = 1;
+        button.button.x = x;
+        button.button.y = y;
+        SDL_PushEvent(&button);
     }
-    SDL_PushEvent(&event);
     sPointerDown = down;
 }
 
@@ -516,6 +540,9 @@ void GfxWindowBackendOpenXR::PresentQuad() {
     if (!Failed(mInstance, xrWaitSwapchainImage(mSwapchain, &waitInfo), "xrWaitSwapchainImage")) {
         // The game has just drawn its frame into the default framebuffer. A GLES swapchain image is
         // an ordinary GL texture, so it keeps the bottom-up orientation and the blit is 1:1.
+        if (mSrgbWriteControl) {
+            glDisable(GL_FRAMEBUFFER_SRGB_EXT);
+        }
         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mImageFbos[index]);
         glBlitFramebuffer(0, 0, mSwapchainWidth, mSwapchainHeight, 0, 0, mSwapchainWidth, mSwapchainHeight,
