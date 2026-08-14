@@ -22,8 +22,9 @@
 namespace Fast {
 
 // Presents the game on a window anchored in the room. The frame is drawn once per eye, each with
-// an off-axis frustum from that eye to the window rectangle, and each lands on its own quad layer.
-// SDL keeps the window, the GLES context, audio and controllers.
+// an off-axis frustum from that eye to the window rectangle. Each eye's image is then drawn onto
+// the window rectangle inside a full-view projection layer, with the room showing through the
+// alpha around it. SDL keeps the window, the GLES context, audio and controllers.
 class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
   public:
     static constexpr uint32_t VIEW_COUNT = 2;
@@ -50,8 +51,12 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     void PumpPointer(XrTime displayTime);
     bool OpenFrame();
     void LocateViews();
+    void Recentre();
+    XrVector3f ToWindowAxes(const XrVector3f& point) const;
     void SizeWindow();
+    bool StartPlacementPass();
     void PresentView(uint32_t view);
+    void DrawEye(uint32_t eye, uint32_t sourceView);
     void EndRenderFrame();
     void Teardown();
 
@@ -59,6 +64,9 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     XrSystemId mSystemId = XR_NULL_SYSTEM_ID;
     XrSession mSession = XR_NULL_HANDLE;
     XrSpace mSpace = XR_NULL_HANDLE;
+    XrReferenceSpaceType mSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+    XrSpace mAnchorSpace = XR_NULL_HANDLE;
+    PFN_xrCreateAnchorSpaceANDROID mCreateAnchorSpace = nullptr;
     XrSwapchain mSwapchain[VIEW_COUNT] = { XR_NULL_HANDLE, XR_NULL_HANDLE };
     XrSessionState mState = XR_SESSION_STATE_UNKNOWN;
     XrEnvironmentBlendMode mBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
@@ -67,6 +75,14 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     std::vector<uint32_t> mImageFbos[VIEW_COUNT];
     uint32_t mSwapchainWidth = 0;
     uint32_t mSwapchainHeight = 0;
+
+    uint32_t mGameWidth = 0;
+    uint32_t mGameHeight = 0;
+    uint32_t mGameTex[VIEW_COUNT] = { 0, 0 };
+    uint32_t mGameFbo[VIEW_COUNT] = { 0, 0 };
+    uint32_t mProgram = 0;
+    uint32_t mVao = 0;
+    int32_t mMvpLoc = -1;
 
     XrView mViews[VIEW_COUNT] = {};
     bool mViewsValid = false;
@@ -79,6 +95,10 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     float mWindowWidth = 0.0f;
     float mWindowHeight = 0.0f;
     float mWindowDistance = 0.0f;
+    XrPosef mAnchorPose = {};
+    XrVector3f mViewpoint = {};
+    float mAnchorYaw = 0.0f;
+    bool mAnchorValid = false;
     bool mWindowSized = false;
 
     bool mSrgbWriteControl = false;

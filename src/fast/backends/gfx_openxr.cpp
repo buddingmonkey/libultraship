@@ -22,8 +22,8 @@ namespace Fast {
 
 // The window hangs in front of where the user faced at start, as wide as the game's field of view
 // needs it to be there. The width below only holds until the first frame says otherwise.
-static constexpr float WINDOW_DISTANCE_DEFAULT = 1.25f;
-static constexpr float WINDOW_DISTANCE_MIN = 0.7f;
+static constexpr float WINDOW_DISTANCE_DEFAULT = 0.5f;
+static constexpr float WINDOW_DISTANCE_MIN = 0.25f;
 static constexpr float WINDOW_DISTANCE_MAX = 4.0f;
 static constexpr float WINDOW_WIDTH_METRES = 1.6f;
 
@@ -129,6 +129,14 @@ bool GfxWindowBackendOpenXR::StartSession() {
     if (refreshRate) {
         enabled.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
     }
+    const bool unbounded = HasExtension(extensions, "XR_ANDROID_unbounded_reference_space");
+    if (unbounded) {
+        enabled.push_back("XR_ANDROID_unbounded_reference_space");
+    }
+    const bool trackables = HasExtension(extensions, XR_ANDROID_TRACKABLES_EXTENSION_NAME);
+    if (trackables) {
+        enabled.push_back(XR_ANDROID_TRACKABLES_EXTENSION_NAME);
+    }
 
     XrInstanceCreateInfoAndroidKHR androidInfo{ XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR };
     androidInfo.applicationVM = vm;
@@ -190,12 +198,27 @@ bool GfxWindowBackendOpenXR::StartSession() {
         return false;
     }
 
+    // LOCAL on Android XR follows the head position, so nothing put in it stands still in the
+    // room. UNBOUNDED is the space that does.
     XrReferenceSpaceCreateInfo spaceInfo{ XR_TYPE_REFERENCE_SPACE_CREATE_INFO };
-    spaceInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+    spaceInfo.referenceSpaceType = unbounded ? XR_REFERENCE_SPACE_TYPE_UNBOUNDED_ANDROID : XR_REFERENCE_SPACE_TYPE_LOCAL;
     spaceInfo.poseInReferenceSpace.orientation.w = 1.0f;
-    if (Failed(mInstance, xrCreateReferenceSpace(mSession, &spaceInfo, &mSpace), "xrCreateReferenceSpace")) {
+    if (unbounded && XR_FAILED(xrCreateReferenceSpace(mSession, &spaceInfo, &mSpace))) {
+        spaceInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+    }
+    if (mSpace == XR_NULL_HANDLE &&
+        Failed(mInstance, xrCreateReferenceSpace(mSession, &spaceInfo, &mSpace), "xrCreateReferenceSpace")) {
         return false;
     }
+    mSpaceType = spaceInfo.referenceSpaceType;
+
+    if (trackables &&
+        XR_FAILED(xrGetInstanceProcAddr(mInstance, "xrCreateAnchorSpaceANDROID",
+                                        (PFN_xrVoidFunction*)&mCreateAnchorSpace))) {
+        mCreateAnchorSpace = nullptr;
+    }
+    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "reference space %s",
+                        spaceInfo.referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL ? "LOCAL" : "UNBOUNDED");
 
     // Alpha blend puts the room behind the quad. Opaque fills everything the quad does not cover
     // with black, which reads as a screen in a void.
@@ -250,8 +273,20 @@ bool GfxWindowBackendOpenXR::StartSession() {
     int32_t ignoredX = 0;
     int32_t ignoredY = 0;
     GetDimensions(&width, &height, &ignoredX, &ignoredY);
-    mSwapchainWidth = width;
-    mSwapchainHeight = height;
+    mGameWidth = width;
+    mGameHeight = height;
+
+    XrViewConfigurationView configViews[VIEW_COUNT] = { { XR_TYPE_VIEW_CONFIGURATION_VIEW },
+                                                        { XR_TYPE_VIEW_CONFIGURATION_VIEW } };
+    uint32_t viewConfigCount = 0;
+    if (Failed(mInstance,
+               xrEnumerateViewConfigurationViews(mInstance, mSystemId, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
+                                                 VIEW_COUNT, &viewConfigCount, configViews),
+               "xrEnumerateViewConfigurationViews")) {
+        return false;
+    }
+    mSwapchainWidth = configViews[0].recommendedImageRectWidth;
+    mSwapchainHeight = configViews[0].recommendedImageRectHeight;
 
     uint32_t imageCount = 0;
     for (uint32_t view = 0; view < VIEW_COUNT; view++) {
@@ -286,8 +321,24 @@ bool GfxWindowBackendOpenXR::StartSession() {
             glBindFramebuffer(GL_FRAMEBUFFER, mImageFbos[view][i]);
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mImages[view][i].image, 0);
         }
+
+        glGenTextures(1, &mGameTex[view]);
+        glBindTexture(GL_TEXTURE_2D, mGameTex[view]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, mGameWidth, mGameHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenFramebuffers(1, &mGameFbo[view]);
+        glBindFramebuffer(GL_FRAMEBUFFER, mGameFbo[view]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mGameTex[view], 0);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    if (!StartPlacementPass()) {
+        return false;
+    }
 
     // Until the first frame says what the game's field of view needs, the window keeps a plain size.
     mWindowDistance = sWindowDistance;
@@ -481,6 +532,7 @@ static float sViewTanHalfHeight = 0.0f;
 static float sWindowAngularWidth = 0.0f;
 static bool sFlatProjection = false;
 static bool sStereo = true;
+static bool sRecentreWanted = true;
 
 bool GetXrViewGeometry(XrViewGeometry* geometry) {
     if (!sViewGeometryValid || sFlatProjection) {
@@ -493,6 +545,10 @@ bool GetXrViewGeometry(XrViewGeometry* geometry) {
 void SetXrViewTangents(float tanHalfWidth, float tanHalfHeight) {
     sViewTanHalfWidth = tanHalfWidth;
     sViewTanHalfHeight = tanHalfHeight;
+}
+
+void RecentreXrWindow() {
+    sRecentreWanted = true;
 }
 
 void SetXrStereo(bool enabled) {
@@ -518,7 +574,7 @@ float GetXrWindowAngularWidth() {
 }
 
 void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
-    if (mActionSet == XR_NULL_HANDLE || mState != XR_SESSION_STATE_FOCUSED) {
+    if (mActionSet == XR_NULL_HANDLE || mState != XR_SESSION_STATE_FOCUSED || !mAnchorValid) {
         return;
     }
 
@@ -543,8 +599,11 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
             continue;
         }
 
-        const XrVector3f origin = location.pose.position;
-        const XrVector3f forward = RotateByQuaternion(location.pose.orientation, { 0.0f, 0.0f, -1.0f });
+        const XrVector3f origin = ToWindowAxes(location.pose.position);
+        const XrVector3f aim = RotateByQuaternion(location.pose.orientation, { 0.0f, 0.0f, -1.0f });
+        const float c = cosf(mAnchorYaw);
+        const float sn = sinf(mAnchorYaw);
+        const XrVector3f forward = { c * aim.x - sn * aim.z, aim.y, sn * aim.x + c * aim.z };
         if (forward.z >= -1e-4f) {
             continue;
         }
@@ -594,8 +653,8 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
     // The pad reads SDL's touch device list, which SDL_PushEvent cannot reach, so the pinch goes
     // in there directly. ImGui reads mouse events, which is what SDL synthesises from a touch on a
     // phone, so the menu is driven the same way here.
-    const int x = (int)(sPointerU * (float)mSwapchainWidth);
-    const int y = (int)(sPointerV * (float)mSwapchainHeight);
+    const int x = (int)(sPointerU * (float)mGameWidth);
+    const int y = (int)(sPointerV * (float)mGameHeight);
 
     // ImGui's SDL backend drops an event whose window it does not know, and a pushed event does
     // not carry one by itself.
@@ -637,6 +696,15 @@ void GfxWindowBackendOpenXR::PollEvents() {
             HandleStateChange(*(const XrEventDataSessionStateChanged*)&event);
         } else if (event.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) {
             mActive = false;
+        } else if (event.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
+            // Only a change of the space the window hangs in moves the window. Android XR also
+            // announces every lazy-follow recenter of LOCAL, which is no reason to re-front.
+            // A recenter is the user asking for the content at their new front; honour it even
+            // though the anchor itself would ride out the re-origin.
+            const auto& change = *(const XrEventDataReferenceSpaceChangePending*)&event;
+            if (change.referenceSpaceType == mSpaceType) {
+                sRecentreWanted = true;
+            }
         } else if (event.type == XR_TYPE_EVENT_DATA_DISPLAY_REFRESH_RATE_CHANGED_FB) {
             // The runtime can refuse or later drop the rate the game asked for, and the sub-frame
             // count follows whatever it reports here.
@@ -680,6 +748,60 @@ void GfxWindowBackendOpenXR::LocateViews() {
     mViewsValid = count == VIEW_COUNT && (viewState.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0;
 }
 
+// Puts the window where the user is looking now, upright and level. Nothing else ever placed it:
+// it used to hang off the origin of the reference space, which is wherever the headset happened to
+// be when the session opened.
+void GfxWindowBackendOpenXR::Recentre() {
+    // The head pose comes from the views already located this frame. Locating VIEW space instead
+    // reports no valid pose on Galaxy XR while the headset is worn, which silently disabled every
+    // recentre.
+    const XrQuaternionf& q = mViews[0].pose.orientation;
+    const XrVector3f& left = mViews[0].pose.position;
+    const XrVector3f& right = mViews[1].pose.position;
+
+    // Yaw alone. A window that took the head's pitch and roll would hang askew in the room.
+    mAnchorYaw = atan2f(2.0f * (q.w * q.y + q.x * q.z), 1.0f - 2.0f * (q.y * q.y + q.z * q.z));
+    mViewpoint = { 0.5f * (left.x + right.x), 0.5f * (left.y + right.y), 0.5f * (left.z + right.z) };
+    mAnchorPose.orientation = { 0.0f, sinf(0.5f * mAnchorYaw), 0.0f, cosf(0.5f * mAnchorYaw) };
+    mAnchorPose.position = { mViewpoint.x - sinf(mAnchorYaw) * mWindowDistance, mViewpoint.y,
+                             mViewpoint.z - cosf(mAnchorYaw) * mWindowDistance };
+    mAnchorValid = true;
+    sRecentreWanted = false;
+
+    // A spatial anchor holds a pose through SLAM itself, so the window stays put even when the
+    // reference spaces re-origin around the user.
+    if (mCreateAnchorSpace != nullptr) {
+        if (mAnchorSpace != XR_NULL_HANDLE) {
+            xrDestroySpace(mAnchorSpace);
+            mAnchorSpace = XR_NULL_HANDLE;
+        }
+        XrAnchorSpaceCreateInfoANDROID anchorInfo{ XR_TYPE_ANCHOR_SPACE_CREATE_INFO_ANDROID };
+        anchorInfo.space = mSpace;
+        anchorInfo.time = mDisplayTime;
+        anchorInfo.pose = mAnchorPose;
+        anchorInfo.trackable = XR_NULL_TRACKABLE_ANDROID;
+        const XrResult result = mCreateAnchorSpace(mSession, &anchorInfo, &mAnchorSpace);
+        if (XR_FAILED(result)) {
+            mAnchorSpace = XR_NULL_HANDLE;
+            __android_log_print(ANDROID_LOG_WARN, "LighthouseXR", "anchor creation failed (%d)", (int)result);
+        }
+    }
+
+    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "window placed at %.2f %.2f %.2f facing %.0f degrees%s",
+                        mAnchorPose.position.x, mAnchorPose.position.y, mAnchorPose.position.z,
+                        mAnchorYaw * 180.0f / (float)M_PI, mAnchorSpace != XR_NULL_HANDLE ? " on an anchor" : "");
+}
+
+// The head offset from the viewpoint the window was placed for, in the window's own axes.
+XrVector3f GfxWindowBackendOpenXR::ToWindowAxes(const XrVector3f& point) const {
+    const float dx = point.x - mViewpoint.x;
+    const float dy = point.y - mViewpoint.y;
+    const float dz = point.z - mViewpoint.z;
+    const float c = cosf(mAnchorYaw);
+    const float sn = sinf(mAnchorYaw);
+    return { c * dx - sn * dz, dy, sn * dx + c * dz };
+}
+
 void GfxWindowBackendOpenXR::SizeWindow() {
     if (sViewTanHalfWidth <= 0.0f || sViewTanHalfHeight <= 0.0f) {
         return;
@@ -689,6 +811,7 @@ void GfxWindowBackendOpenXR::SizeWindow() {
     }
     mWindowSized = true;
     mWindowDistance = sWindowDistance;
+    sRecentreWanted = true;
     mWindowWidth = 2.0f * mWindowDistance * sViewTanHalfWidth;
     mWindowHeight = 2.0f * mWindowDistance * sViewTanHalfHeight;
     sWindowAngularWidth = 2.0f * atanf(0.5f * mWindowWidth / mWindowDistance);
@@ -727,6 +850,26 @@ bool GfxWindowBackendOpenXR::OpenFrame() {
     mShouldRender = frameState.shouldRender == XR_TRUE;
 
     LocateViews();
+    if (mViewsValid && (sRecentreWanted || !mAnchorValid)) {
+        Recentre();
+    }
+
+    // The anchor is the ground truth for where the window hangs. Follow it in the app space so
+    // the off-axis frustum and the pointer agree with the quad the compositor shows.
+    if (mAnchorSpace != XR_NULL_HANDLE && mAnchorValid) {
+        XrSpaceLocation anchor{ XR_TYPE_SPACE_LOCATION };
+        const XrSpaceLocationFlags needed =
+            XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+        if (XR_SUCCEEDED(xrLocateSpace(mAnchorSpace, mSpace, mDisplayTime, &anchor)) &&
+            (anchor.locationFlags & needed) == needed) {
+            const XrQuaternionf& q = anchor.pose.orientation;
+            mAnchorYaw = atan2f(2.0f * (q.w * q.y + q.x * q.z), 1.0f - 2.0f * (q.y * q.y + q.z * q.z));
+            mAnchorPose = anchor.pose;
+            mViewpoint = { anchor.pose.position.x + sinf(mAnchorYaw) * mWindowDistance, anchor.pose.position.y,
+                           anchor.pose.position.z + cosf(mAnchorYaw) * mWindowDistance };
+        }
+    }
+
     PumpPointer(mDisplayTime);
 
     // Without a head pose there is no off-axis frustum to build, so the frame falls back to one
@@ -743,7 +886,7 @@ uint32_t GfxWindowBackendOpenXR::BeginRenderFrame() {
 void GfxWindowBackendOpenXR::BeginRenderView(uint32_t view) {
     mCurrentView = view;
     sViewGeometryValid = false;
-    if (!mFrameOpen || !mViewsValid || view >= VIEW_COUNT) {
+    if (!mFrameOpen || !mViewsValid || !mAnchorValid || view >= VIEW_COUNT) {
         return;
     }
 
@@ -756,46 +899,180 @@ void GfxWindowBackendOpenXR::BeginRenderView(uint32_t view) {
     // One image for both eyes is drawn from between them, not from either one.
     const bool mono = mViewCount != VIEW_COUNT;
     const XrVector3f& eye = mViews[view].pose.position;
-    sViewGeometry.eyeOffset[0] = (mono ? 0.5f * (left.x + right.x) : eye.x) * unitsPerMetre;
-    sViewGeometry.eyeOffset[1] = (mono ? 0.5f * (left.y + right.y) : eye.y) * unitsPerMetre;
-    sViewGeometry.eyeOffset[2] = (mono ? 0.5f * (left.z + right.z) : eye.z) * unitsPerMetre;
+    const XrVector3f world =
+        mono ? XrVector3f{ 0.5f * (left.x + right.x), 0.5f * (left.y + right.y), 0.5f * (left.z + right.z) } : eye;
+    const XrVector3f offset = ToWindowAxes(world);
+    sViewGeometry.eyeOffset[0] = offset.x * unitsPerMetre;
+    sViewGeometry.eyeOffset[1] = offset.y * unitsPerMetre;
+    sViewGeometry.eyeOffset[2] = offset.z * unitsPerMetre;
     sViewGeometry.windowDistance = WINDOW_DEPTH_UNITS;
     sViewGeometryValid = true;
 }
 
+bool GfxWindowBackendOpenXR::StartPlacementPass() {
+    static const char* VERTEX = "#version 300 es\n"
+                                "uniform mat4 uMvp;\n"
+                                "out vec2 vUv;\n"
+                                "void main() {\n"
+                                "    vec2 c = vec2((gl_VertexID & 1) == 1 ? 0.5 : -0.5, (gl_VertexID & 2) == 2 ? 0.5 : -0.5);\n"
+                                "    vUv = c + 0.5;\n"
+                                "    gl_Position = uMvp * vec4(c, 0.0, 1.0);\n"
+                                "}\n";
+    static const char* FRAGMENT = "#version 300 es\n"
+                                  "precision highp float;\n"
+                                  "uniform sampler2D uTex;\n"
+                                  "in vec2 vUv;\n"
+                                  "out vec4 oColor;\n"
+                                  "void main() { oColor = vec4(texture(uTex, vUv).rgb, 1.0); }\n";
+
+    auto compile = [](GLenum type, const char* source) -> GLuint {
+        GLuint shader = glCreateShader(type);
+        glShaderSource(shader, 1, &source, nullptr);
+        glCompileShader(shader);
+        GLint ok = GL_FALSE;
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+        if (ok != GL_TRUE) {
+            char log[512] = "";
+            glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
+            SPDLOG_ERROR("OpenXR: placement shader failed: {}", log);
+            glDeleteShader(shader);
+            return 0;
+        }
+        return shader;
+    };
+
+    const GLuint vertex = compile(GL_VERTEX_SHADER, VERTEX);
+    const GLuint fragment = compile(GL_FRAGMENT_SHADER, FRAGMENT);
+    if (vertex == 0 || fragment == 0) {
+        return false;
+    }
+    mProgram = glCreateProgram();
+    glAttachShader(mProgram, vertex);
+    glAttachShader(mProgram, fragment);
+    glLinkProgram(mProgram);
+    glDeleteShader(vertex);
+    glDeleteShader(fragment);
+    GLint ok = GL_FALSE;
+    glGetProgramiv(mProgram, GL_LINK_STATUS, &ok);
+    if (ok != GL_TRUE) {
+        SPDLOG_ERROR("OpenXR: placement program failed to link");
+        return false;
+    }
+    mMvpLoc = glGetUniformLocation(mProgram, "uMvp");
+    glUseProgram(mProgram);
+    glUniform1i(glGetUniformLocation(mProgram, "uTex"), 0);
+    glUseProgram(0);
+    glGenVertexArrays(1, &mVao);
+    return true;
+}
+
+// Column-major 4x4, as GL wants them.
+static void MulMatrix(const float a[16], const float b[16], float out[16]) {
+    for (int col = 0; col < 4; col++) {
+        for (int row = 0; row < 4; row++) {
+            out[col * 4 + row] = a[row] * b[col * 4] + a[4 + row] * b[col * 4 + 1] + a[8 + row] * b[col * 4 + 2] +
+                                 a[12 + row] * b[col * 4 + 3];
+        }
+    }
+}
+
+static void RotationFromQuaternion(const XrQuaternionf& q, float r[9]) {
+    r[0] = 1.0f - 2.0f * (q.y * q.y + q.z * q.z);
+    r[1] = 2.0f * (q.x * q.y + q.z * q.w);
+    r[2] = 2.0f * (q.x * q.z - q.y * q.w);
+    r[3] = 2.0f * (q.x * q.y - q.z * q.w);
+    r[4] = 1.0f - 2.0f * (q.x * q.x + q.z * q.z);
+    r[5] = 2.0f * (q.y * q.z + q.x * q.w);
+    r[6] = 2.0f * (q.x * q.z + q.y * q.w);
+    r[7] = 2.0f * (q.y * q.z - q.x * q.w);
+    r[8] = 1.0f - 2.0f * (q.x * q.x + q.y * q.y);
+}
+
+// The window rectangle at the anchor pose, seen from the eye pose, through the eye's frustum.
+static void PlacementMatrix(const XrView& eye, const XrPosef& anchor, float width, float height, float mvp[16]) {
+    float r[9];
+    RotationFromQuaternion(anchor.orientation, r);
+    const float model[16] = { r[0] * width,  r[1] * width,  r[2] * width,  0.0f, //
+                              r[3] * height, r[4] * height, r[5] * height, 0.0f, //
+                              r[6],          r[7],          r[8],          0.0f, //
+                              anchor.position.x, anchor.position.y, anchor.position.z, 1.0f };
+
+    RotationFromQuaternion(eye.pose.orientation, r);
+    const XrVector3f& p = eye.pose.position;
+    const float view[16] = { r[0], r[3], r[6], 0.0f, //
+                             r[1], r[4], r[7], 0.0f, //
+                             r[2], r[5], r[8], 0.0f, //
+                             -(r[0] * p.x + r[1] * p.y + r[2] * p.z), -(r[3] * p.x + r[4] * p.y + r[5] * p.z),
+                             -(r[6] * p.x + r[7] * p.y + r[8] * p.z), 1.0f };
+
+    const float tl = tanf(eye.fov.angleLeft);
+    const float tr = tanf(eye.fov.angleRight);
+    const float td = tanf(eye.fov.angleDown);
+    const float tu = tanf(eye.fov.angleUp);
+    const float nearZ = 0.1f;
+    const float farZ = 100.0f;
+    float proj[16] = {};
+    proj[0] = 2.0f / (tr - tl);
+    proj[5] = 2.0f / (tu - td);
+    proj[8] = (tr + tl) / (tr - tl);
+    proj[9] = (tu + td) / (tu - td);
+    proj[10] = -(farZ + nearZ) / (farZ - nearZ);
+    proj[11] = -1.0f;
+    proj[14] = -2.0f * farZ * nearZ / (farZ - nearZ);
+
+    float viewModel[16];
+    MulMatrix(view, model, viewModel);
+    MulMatrix(proj, viewModel, mvp);
+}
+
+// The game has just drawn this eye into the default framebuffer; keep a copy to place later.
 void GfxWindowBackendOpenXR::PresentView(uint32_t view) {
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mGameFbo[view]);
+    glBlitFramebuffer(0, 0, mGameWidth, mGameHeight, 0, 0, mGameWidth, mGameHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+// Draws the captured game image onto the window rectangle inside this eye's full view. Alpha
+// stays zero everywhere else, so the room shows through around the window.
+void GfxWindowBackendOpenXR::DrawEye(uint32_t eye, uint32_t sourceView) {
     uint32_t index = 0;
     XrSwapchainImageAcquireInfo acquireInfo{ XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
-    if (Failed(mInstance, xrAcquireSwapchainImage(mSwapchain[view], &acquireInfo, &index), "xrAcquireSwapchainImage")) {
+    if (Failed(mInstance, xrAcquireSwapchainImage(mSwapchain[eye], &acquireInfo, &index), "xrAcquireSwapchainImage")) {
         return;
     }
 
     XrSwapchainImageWaitInfo waitInfo{ XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
     waitInfo.timeout = XR_INFINITE_DURATION;
-    if (!Failed(mInstance, xrWaitSwapchainImage(mSwapchain[view], &waitInfo), "xrWaitSwapchainImage")) {
-        // The game has just drawn this eye into the default framebuffer. A GLES swapchain image is
-        // an ordinary GL texture, so it keeps the bottom-up orientation and the blit is 1:1.
+    if (!Failed(mInstance, xrWaitSwapchainImage(mSwapchain[eye], &waitInfo), "xrWaitSwapchainImage")) {
         if (mSrgbWriteControl) {
             glDisable(GL_FRAMEBUFFER_SRGB_EXT);
         }
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mImageFbos[view][index]);
-        glBlitFramebuffer(0, 0, mSwapchainWidth, mSwapchainHeight, 0, 0, mSwapchainWidth, mSwapchainHeight,
-                          GL_COLOR_BUFFER_BIT, GL_LINEAR);
-
-        // The runtime reads the layer's alpha to decide where the room shows through, and it only
-        // reads it when the layer asks it to. The game keeps no meaningful alpha, so make the whole
-        // image opaque; the room then shows everywhere the window is not, and nowhere inside it.
+        glBindFramebuffer(GL_FRAMEBUFFER, mImageFbos[eye][index]);
+        glViewport(0, 0, mSwapchainWidth, mSwapchainHeight);
         glDisable(GL_SCISSOR_TEST);
-        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_BLEND);
+        glDisable(GL_CULL_FACE);
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        float mvp[16];
+        PlacementMatrix(mViews[eye], mAnchorPose, mWindowWidth, mWindowHeight, mvp);
+        glUseProgram(mProgram);
+        glUniformMatrix4fv(mMvpLoc, 1, GL_FALSE, mvp);
+        glBindVertexArray(mVao);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, mGameTex[sourceView]);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        glBindVertexArray(0);
+        glUseProgram(0);
+        glBindTexture(GL_TEXTURE_2D, 0);
 
         if (DebugCapture::Pending()) {
-            glBindFramebuffer(GL_FRAMEBUFFER, mImageFbos[view][index]);
-            DebugCapture::WriteBoundFramebuffer(view == 0 ? "left" : "right", mSwapchainWidth, mSwapchainHeight);
-            if (view + 1 >= mViewCount) {
+            DebugCapture::WriteBoundFramebuffer(eye == 0 ? "left" : "right", mSwapchainWidth, mSwapchainHeight);
+            if (eye + 1 >= VIEW_COUNT) {
                 DebugCapture::Finish();
             }
         }
@@ -803,30 +1080,32 @@ void GfxWindowBackendOpenXR::PresentView(uint32_t view) {
     }
 
     XrSwapchainImageReleaseInfo releaseInfo{ XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
-    Failed(mInstance, xrReleaseSwapchainImage(mSwapchain[view], &releaseInfo), "xrReleaseSwapchainImage");
+    Failed(mInstance, xrReleaseSwapchainImage(mSwapchain[eye], &releaseInfo), "xrReleaseSwapchainImage");
 }
 
 void GfxWindowBackendOpenXR::EndRenderFrame() {
-    XrCompositionLayerQuad quads[VIEW_COUNT] = {};
-    const XrCompositionLayerBaseHeader* layers[VIEW_COUNT] = {};
+    XrCompositionLayerProjectionView projectionViews[VIEW_COUNT];
+    XrCompositionLayerProjection projection{ XR_TYPE_COMPOSITION_LAYER_PROJECTION };
+    const XrCompositionLayerBaseHeader* layers[1] = {};
     uint32_t layerCount = 0;
 
-    if (mShouldRender) {
-        static constexpr XrEyeVisibility VISIBILITY[VIEW_COUNT] = { XR_EYE_VISIBILITY_LEFT, XR_EYE_VISIBILITY_RIGHT };
-        for (uint32_t view = 0; view < mViewCount; view++) {
-            quads[view] = { XR_TYPE_COMPOSITION_LAYER_QUAD };
-            quads[view].layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-            quads[view].space = mSpace;
-            quads[view].eyeVisibility = mViewCount == VIEW_COUNT ? VISIBILITY[view] : XR_EYE_VISIBILITY_BOTH;
-            quads[view].subImage.swapchain = mSwapchain[view];
-            quads[view].subImage.imageRect = { { 0, 0 }, { (int32_t)mSwapchainWidth, (int32_t)mSwapchainHeight } };
-            quads[view].subImage.imageArrayIndex = 0;
-            quads[view].pose.orientation.w = 1.0f;
-            quads[view].pose.position.z = -mWindowDistance;
-            quads[view].size.width = mWindowWidth;
-            quads[view].size.height = mWindowHeight;
-            layers[layerCount++] = (const XrCompositionLayerBaseHeader*)&quads[view];
+    if (mShouldRender && mViewsValid && mAnchorValid) {
+        for (uint32_t eye = 0; eye < VIEW_COUNT; eye++) {
+            DrawEye(eye, mViewCount == VIEW_COUNT ? eye : 0);
+            projectionViews[eye] = { XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW };
+            projectionViews[eye].pose = mViews[eye].pose;
+            projectionViews[eye].fov = mViews[eye].fov;
+            projectionViews[eye].subImage.swapchain = mSwapchain[eye];
+            projectionViews[eye].subImage.imageRect = { { 0, 0 },
+                                                        { (int32_t)mSwapchainWidth, (int32_t)mSwapchainHeight } };
+            projectionViews[eye].subImage.imageArrayIndex = 0;
         }
+        projection.layerFlags =
+            XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
+        projection.space = mSpace;
+        projection.viewCount = VIEW_COUNT;
+        projection.views = projectionViews;
+        layers[layerCount++] = (const XrCompositionLayerBaseHeader*)&projection;
     }
 
     XrFrameEndInfo endInfo{ XR_TYPE_FRAME_END_INFO };
@@ -868,11 +1147,32 @@ void GfxWindowBackendOpenXR::Teardown() {
             glDeleteFramebuffers((GLsizei)mImageFbos[view].size(), mImageFbos[view].data());
             mImageFbos[view].clear();
         }
+        if (mGameFbo[view] != 0) {
+            glDeleteFramebuffers(1, &mGameFbo[view]);
+            mGameFbo[view] = 0;
+        }
+        if (mGameTex[view] != 0) {
+            glDeleteTextures(1, &mGameTex[view]);
+            mGameTex[view] = 0;
+        }
         if (mSwapchain[view] != XR_NULL_HANDLE) {
             xrDestroySwapchain(mSwapchain[view]);
             mSwapchain[view] = XR_NULL_HANDLE;
         }
     }
+    if (mProgram != 0) {
+        glDeleteProgram(mProgram);
+        mProgram = 0;
+    }
+    if (mVao != 0) {
+        glDeleteVertexArrays(1, &mVao);
+        mVao = 0;
+    }
+    if (mAnchorSpace != XR_NULL_HANDLE) {
+        xrDestroySpace(mAnchorSpace);
+        mAnchorSpace = XR_NULL_HANDLE;
+    }
+    mCreateAnchorSpace = nullptr;
     if (mSpace != XR_NULL_HANDLE) {
         xrDestroySpace(mSpace);
         mSpace = XR_NULL_HANDLE;

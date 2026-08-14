@@ -26,6 +26,9 @@ void SetXrViewTangents(float tanHalfWidth, float tanHalfHeight);
 // eyes diverge.
 void SetXrWindowDistance(float metres);
 
+// Puts the window in front of the viewer, where they are looking now.
+void RecentreXrWindow();
+
 // Draws one image for both eyes instead of one per eye. There is no parallax then, but the frame
 // costs half as much and only one layer reaches the compositor.
 void SetXrStereo(bool enabled);
