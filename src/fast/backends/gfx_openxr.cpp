@@ -103,7 +103,13 @@ bool GfxWindowBackendOpenXR::StartSession() {
         return false;
     }
 
-    const char* enabled[] = { XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME, XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME };
+    const bool handInteraction = HasExtension(extensions, "XR_EXT_hand_interaction");
+
+    std::vector<const char*> enabled = { XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME,
+                                         XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME };
+    if (handInteraction) {
+        enabled.push_back("XR_EXT_hand_interaction");
+    }
 
     XrInstanceCreateInfoAndroidKHR androidInfo{ XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR };
     androidInfo.applicationVM = vm;
@@ -116,8 +122,8 @@ bool GfxWindowBackendOpenXR::StartSession() {
     snprintf(instanceInfo.applicationInfo.engineName, XR_MAX_ENGINE_NAME_SIZE, "Fast3D");
     instanceInfo.applicationInfo.engineVersion = 1;
     instanceInfo.applicationInfo.apiVersion = XR_API_VERSION_1_0;
-    instanceInfo.enabledExtensionCount = 2;
-    instanceInfo.enabledExtensionNames = enabled;
+    instanceInfo.enabledExtensionCount = (uint32_t)enabled.size();
+    instanceInfo.enabledExtensionNames = enabled.data();
     if (Failed(XR_NULL_HANDLE, xrCreateInstance(&instanceInfo, &mInstance), "xrCreateInstance")) {
         return false;
     }
@@ -256,9 +262,213 @@ bool GfxWindowBackendOpenXR::StartSession() {
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
+    if (!StartActions(handInteraction)) {
+        __android_log_print(ANDROID_LOG_ERROR, "LighthouseXR", "pointer actions failed; pinch will not reach the game");
+    }
+
     __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "session up: %u images %ux%u, format 0x%04x, blend mode %d",
                         imageCount, mSwapchainWidth, mSwapchainHeight, (unsigned)format, (int)mBlendMode);
     return true;
+}
+
+bool GfxWindowBackendOpenXR::StartActions(bool handInteraction) {
+    XrActionSetCreateInfo setInfo{ XR_TYPE_ACTION_SET_CREATE_INFO };
+    snprintf(setInfo.actionSetName, XR_MAX_ACTION_SET_NAME_SIZE, "pointer");
+    snprintf(setInfo.localizedActionSetName, XR_MAX_LOCALIZED_ACTION_SET_NAME_SIZE, "Pointer");
+    if (Failed(mInstance, xrCreateActionSet(mInstance, &setInfo, &mActionSet), "xrCreateActionSet")) {
+        return false;
+    }
+
+    xrStringToPath(mInstance, "/user/hand/left", &mHandPath[0]);
+    xrStringToPath(mInstance, "/user/hand/right", &mHandPath[1]);
+
+    XrActionCreateInfo aimInfo{ XR_TYPE_ACTION_CREATE_INFO };
+    snprintf(aimInfo.actionName, XR_MAX_ACTION_NAME_SIZE, "aim");
+    snprintf(aimInfo.localizedActionName, XR_MAX_LOCALIZED_ACTION_NAME_SIZE, "Aim");
+    aimInfo.actionType = XR_ACTION_TYPE_POSE_INPUT;
+    aimInfo.countSubactionPaths = 2;
+    aimInfo.subactionPaths = mHandPath;
+    if (Failed(mInstance, xrCreateAction(mActionSet, &aimInfo, &mAimAction), "xrCreateAction(aim)")) {
+        return false;
+    }
+
+    XrActionCreateInfo selectInfo{ XR_TYPE_ACTION_CREATE_INFO };
+    snprintf(selectInfo.actionName, XR_MAX_ACTION_NAME_SIZE, "select");
+    snprintf(selectInfo.localizedActionName, XR_MAX_LOCALIZED_ACTION_NAME_SIZE, "Select");
+    selectInfo.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
+    selectInfo.countSubactionPaths = 2;
+    selectInfo.subactionPaths = mHandPath;
+    if (Failed(mInstance, xrCreateAction(mActionSet, &selectInfo, &mSelectAction), "xrCreateAction(select)")) {
+        return false;
+    }
+
+    auto suggest = [&](const char* profile, const char* leftSelect, const char* rightSelect) {
+        XrPath profilePath = XR_NULL_PATH;
+        if (XR_FAILED(xrStringToPath(mInstance, profile, &profilePath))) {
+            return;
+        }
+        XrPath leftAim = XR_NULL_PATH;
+        XrPath rightAim = XR_NULL_PATH;
+        XrPath leftClick = XR_NULL_PATH;
+        XrPath rightClick = XR_NULL_PATH;
+        xrStringToPath(mInstance, "/user/hand/left/input/aim/pose", &leftAim);
+        xrStringToPath(mInstance, "/user/hand/right/input/aim/pose", &rightAim);
+        xrStringToPath(mInstance, leftSelect, &leftClick);
+        xrStringToPath(mInstance, rightSelect, &rightClick);
+
+        const XrActionSuggestedBinding bindings[] = {
+            { mAimAction, leftAim },
+            { mAimAction, rightAim },
+            { mSelectAction, leftClick },
+            { mSelectAction, rightClick },
+        };
+        XrInteractionProfileSuggestedBinding suggestion{ XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING };
+        suggestion.interactionProfile = profilePath;
+        suggestion.countSuggestedBindings = 4;
+        suggestion.suggestedBindings = bindings;
+        xrSuggestInteractionProfileBindings(mInstance, &suggestion);
+    };
+
+    suggest("/interaction_profiles/khr/simple_controller", "/user/hand/left/input/select/click",
+            "/user/hand/right/input/select/click");
+    if (handInteraction) {
+        suggest("/interaction_profiles/ext/hand_interaction_ext", "/user/hand/left/input/aim_activate_ext/value",
+                "/user/hand/right/input/aim_activate_ext/value");
+    }
+
+    for (int hand = 0; hand < 2; hand++) {
+        XrActionSpaceCreateInfo spaceInfo{ XR_TYPE_ACTION_SPACE_CREATE_INFO };
+        spaceInfo.action = mAimAction;
+        spaceInfo.subactionPath = mHandPath[hand];
+        spaceInfo.poseInActionSpace.orientation.w = 1.0f;
+        if (Failed(mInstance, xrCreateActionSpace(mSession, &spaceInfo, &mAimSpace[hand]), "xrCreateActionSpace")) {
+            return false;
+        }
+    }
+
+    XrSessionActionSetsAttachInfo attachInfo{ XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO };
+    attachInfo.countActionSets = 1;
+    attachInfo.actionSets = &mActionSet;
+    return !Failed(mInstance, xrAttachSessionActionSets(mSession, &attachInfo), "xrAttachSessionActionSets");
+}
+
+static XrVector3f RotateByQuaternion(const XrQuaternionf& q, const XrVector3f& v) {
+    const float x = q.y * v.z - q.z * v.y + q.w * v.x;
+    const float y = q.z * v.x - q.x * v.z + q.w * v.y;
+    const float z = q.x * v.y - q.y * v.x + q.w * v.z;
+    return { v.x + 2.0f * (q.y * z - q.z * y), v.y + 2.0f * (q.z * x - q.x * z), v.z + 2.0f * (q.x * y - q.y * x) };
+}
+
+static bool sPointerValid = false;
+static bool sPointerDown = false;
+static float sPointerU = 0.0f;
+static float sPointerV = 0.0f;
+
+bool GetXrPointer(float* u, float* v, bool* down) {
+    if (!sPointerValid) {
+        return false;
+    }
+    *u = sPointerU;
+    *v = sPointerV;
+    *down = sPointerDown;
+    return true;
+}
+
+void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
+    if (mActionSet == XR_NULL_HANDLE || mState != XR_SESSION_STATE_FOCUSED) {
+        return;
+    }
+
+    XrActiveActionSet active{ mActionSet, XR_NULL_PATH };
+    XrActionsSyncInfo syncInfo{ XR_TYPE_ACTIONS_SYNC_INFO };
+    syncInfo.countActiveActionSets = 1;
+    syncInfo.activeActionSets = &active;
+    if (Failed(mInstance, xrSyncActions(mSession, &syncInfo), "xrSyncActions")) {
+        return;
+    }
+
+    const float quadHeight = QUAD_WIDTH_METRES * (float)mSwapchainHeight / (float)mSwapchainWidth;
+    bool hit = false;
+    bool down = false;
+    float u = 0.0f;
+    float v = 0.0f;
+
+    for (int hand = 0; hand < 2; hand++) {
+        XrSpaceLocation location{ XR_TYPE_SPACE_LOCATION };
+        if (XR_FAILED(xrLocateSpace(mAimSpace[hand], mSpace, displayTime, &location)) ||
+            (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) == 0 ||
+            (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) == 0) {
+            continue;
+        }
+
+        const XrVector3f origin = location.pose.position;
+        const XrVector3f forward = RotateByQuaternion(location.pose.orientation, { 0.0f, 0.0f, -1.0f });
+        if (forward.z >= -1e-4f) {
+            continue;
+        }
+        const float t = (-QUAD_DISTANCE_METRES - origin.z) / forward.z;
+        if (t <= 0.0f) {
+            continue;
+        }
+
+        const float hitU = (origin.x + t * forward.x) / QUAD_WIDTH_METRES + 0.5f;
+        const float hitV = 0.5f - (origin.y + t * forward.y) / quadHeight;
+        if (hitU < 0.0f || hitU > 1.0f || hitV < 0.0f || hitV > 1.0f) {
+            continue;
+        }
+
+        XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
+        getInfo.action = mSelectAction;
+        getInfo.subactionPath = mHandPath[hand];
+        XrActionStateBoolean select{ XR_TYPE_ACTION_STATE_BOOLEAN };
+        const bool pinching = XR_SUCCEEDED(xrGetActionStateBoolean(mSession, &getInfo, &select)) && select.isActive &&
+                              select.currentState == XR_TRUE;
+
+        // A pinching hand wins; otherwise the first hand on the quad drives the cursor.
+        if (!hit || pinching) {
+            hit = true;
+            down = pinching;
+            u = hitU;
+            v = hitV;
+        }
+        if (pinching) {
+            break;
+        }
+    }
+
+    const bool wasDown = sPointerDown;
+    if (hit) {
+        sPointerValid = true;
+        sPointerU = u;
+        sPointerV = v;
+    } else if (!wasDown) {
+        sPointerValid = false;
+    }
+
+    if (!hit && !wasDown) {
+        return;
+    }
+
+    SDL_Event event{};
+    event.tfinger.timestamp = SDL_GetTicks();
+    event.tfinger.touchId = 1;
+    event.tfinger.fingerId = 1;
+    event.tfinger.x = sPointerU;
+    event.tfinger.y = sPointerV;
+    event.tfinger.pressure = down ? 1.0f : 0.0f;
+
+    if (down && !wasDown) {
+        event.type = SDL_FINGERDOWN;
+    } else if (down) {
+        event.type = SDL_FINGERMOTION;
+    } else if (wasDown) {
+        event.type = SDL_FINGERUP;
+    } else {
+        sPointerDown = false;
+        return;
+    }
+    SDL_PushEvent(&event);
+    sPointerDown = down;
 }
 
 void GfxWindowBackendOpenXR::PollEvents() {
@@ -346,6 +556,8 @@ void GfxWindowBackendOpenXR::SwapBuffersBegin() {
     if (Failed(mInstance, xrBeginFrame(mSession, &beginInfo), "xrBeginFrame")) {
         return;
     }
+
+    PumpPointer(frameState.predictedDisplayTime);
 
     XrCompositionLayerQuad quad{ XR_TYPE_COMPOSITION_LAYER_QUAD };
     const XrCompositionLayerBaseHeader* layers[] = { (const XrCompositionLayerBaseHeader*)&quad };

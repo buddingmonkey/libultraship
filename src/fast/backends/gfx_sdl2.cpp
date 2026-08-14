@@ -46,6 +46,7 @@
 #endif
 
 #ifdef __ANDROID__
+#include <android/log.h>
 #include "fast/backends/gfx_debug_capture.h"
 #endif
 
@@ -623,6 +624,12 @@ void GfxWindowBackendSDL2::OnMouseButtonUp(int btn) const {
 }
 
 void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
+#ifdef __ANDROID__
+    if (event.type == SDL_FINGERDOWN || event.type == SDL_FINGERUP || event.type == SDL_FINGERMOTION ||
+        event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP || event.type == SDL_MOUSEMOTION) {
+        __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "pointer event 0x%x", event.type);
+    }
+#endif
     Fast::WindowEvent event_impl;
     event_impl.Sdl = { &event };
     auto gui = Ship::Context::GetRawInstance()->GetWindow()->GetGui();

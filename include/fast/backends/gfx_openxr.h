@@ -16,6 +16,7 @@
 // gfx_sdl.h names SDL types without including SDL itself.
 #include <SDL2/SDL.h>
 #include "gfx_sdl.h"
+#include "gfx_xr_pointer.h"
 
 namespace Fast {
 
@@ -33,8 +34,10 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
 
   private:
     bool StartSession();
+    bool StartActions(bool handInteraction);
     void PollEvents();
     void HandleStateChange(const XrEventDataSessionStateChanged& changed);
+    void PumpPointer(XrTime displayTime);
     void PresentQuad();
     void Teardown();
 
@@ -51,6 +54,11 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     uint32_t mSwapchainWidth = 0;
     uint32_t mSwapchainHeight = 0;
 
+    XrActionSet mActionSet = XR_NULL_HANDLE;
+    XrAction mAimAction = XR_NULL_HANDLE;
+    XrAction mSelectAction = XR_NULL_HANDLE;
+    XrSpace mAimSpace[2] = { XR_NULL_HANDLE, XR_NULL_HANDLE };
+    XrPath mHandPath[2] = { XR_NULL_PATH, XR_NULL_PATH };
     jobject mActivity = nullptr;
     bool mActive = false;
     bool mRunning = false;
