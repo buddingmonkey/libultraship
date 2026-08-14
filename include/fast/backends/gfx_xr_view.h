@@ -14,6 +14,11 @@ struct XrViewGeometry {
 
 bool GetXrViewGeometry(XrViewGeometry* geometry);
 
+// How near the game drew, in game units from the viewpoint. The glass goes at the nearest of
+// these, so nothing stands in front of the window. It leaves the picture alone and only scales
+// the world behind the glass.
+void SetXrSceneNear(float units);
+
 // The half-angle tangents the game asks for, after the widescreen adjustment. The backend sizes
 // the window to match, so the framing does not change when the off-axis frustum replaces the
 // game's own projection.

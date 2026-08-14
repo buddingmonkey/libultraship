@@ -1550,6 +1550,8 @@ void Interpreter::GfxSpMatrix(uint8_t parameters, const int32_t* addr) {
 
 void Interpreter::ApplyXrProjection() {
 #ifdef ENABLE_OPENXR
+    mXrProjection = false;
+
     XrViewGeometry view;
     // An offscreen buffer holds a portrait, a map or a mirror, none of which is the room's window.
     if (mFbActive || !GetXrViewGeometry(&view)) {
@@ -1585,7 +1587,7 @@ void Interpreter::ApplyXrProjection() {
     const float eyeX = view.eyeOffset[0];
     const float eyeY = view.eyeOffset[1];
     const float eyeZ = view.windowDistance + view.eyeOffset[2];
-    if (eyeZ < nearPlane) {
+    if (eyeZ < 0.1f * view.windowDistance) {
         return; // the head has reached the glass
     }
 
@@ -1612,8 +1614,74 @@ void Interpreter::ApplyXrProjection() {
     p[3][1] = -eyeY * scaleY - view.eyeOffset[2] * shearY;
     p[3][2] = -view.eyeOffset[2] * depth + offset;
     p[3][3] = view.eyeOffset[2];
+
+    mXrProjection = true;
+    mXrEyeZ = view.eyeOffset[2];
+    mXrNearPlane = nearPlane;
 #endif
 }
+
+#ifdef ENABLE_OPENXR
+float Interpreter::XrVisibleDepth(struct LoadedVertex* const vertices[3]) const {
+    float depth;
+
+    // A triangle that sits on the screen whole, which most do, answers with its nearest corner.
+    if (((vertices[0]->clip_rej | vertices[1]->clip_rej | vertices[2]->clip_rej) & 15) == 0) {
+        depth = vertices[0]->w;
+        for (int i = 1; i < 3; i++) {
+            if (vertices[i]->w < depth) {
+                depth = vertices[i]->w;
+            }
+        }
+    } else {
+        // The clip w runs linearly across the triangle, so the nearest point of the part that
+        // reaches the screen is a corner of that part. Five cuts leave at most eight corners.
+        float poly[2][8][4];
+        int count = 3;
+        for (int i = 0; i < 3; i++) {
+            poly[0][i][0] = vertices[i]->x;
+            poly[0][i][1] = vertices[i]->y;
+            poly[0][i][2] = vertices[i]->z;
+            poly[0][i][3] = vertices[i]->w;
+        }
+        for (int plane = 0; plane < 5; plane++) {
+            const int axis = plane >> 1;
+            const float sign = (plane & 1) != 0 ? -1.0f : 1.0f;
+            const float (*in)[4] = poly[plane & 1];
+            float (*out)[4] = poly[(plane & 1) ^ 1];
+            int kept = 0;
+            for (int i = 0; i < count; i++) {
+                const float* a = in[i];
+                const float* b = in[(i + 1) % count];
+                const float da = a[3] + sign * a[axis];
+                const float db = b[3] + sign * b[axis];
+                if (da >= 0.0f && kept < 8) {
+                    memcpy(out[kept++], a, sizeof(float) * 4);
+                }
+                if ((da >= 0.0f) != (db >= 0.0f) && kept < 8) {
+                    const float t = da / (da - db);
+                    for (int k = 0; k < 4; k++) {
+                        out[kept][k] = a[k] + t * (b[k] - a[k]);
+                    }
+                    kept++;
+                }
+            }
+            count = kept;
+            if (count < 3) {
+                return std::numeric_limits<float>::max(); // nothing of it reaches the screen
+            }
+        }
+        depth = poly[1][0][3];
+        for (int i = 1; i < count; i++) {
+            if (poly[1][i][3] < depth) {
+                depth = poly[1][i][3];
+            }
+        }
+    }
+
+    return (depth < mXrNearPlane ? mXrNearPlane : depth) - mXrEyeZ;
+}
+#endif
 
 void Interpreter::GfxSpPopMatrix(uint32_t count) {
     while (count--) {
@@ -1903,6 +1971,14 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
             return;
         }
     }
+
+#ifdef ENABLE_OPENXR
+    // A rectangle carries screen coordinates, not a place in the world, so it is not something the
+    // window has to stay in front of.
+    if (mXrProjection && !is_rect && !mFbActive) {
+        SetXrSceneNear(XrVisibleDepth(v_arr));
+    }
+#endif
 
     // depth_test is set when the fragment has a depth value to compare (either from vertex Z via
     // RSP G_ZBUFFER, or from the prim-depth register via G_ZS_PRIM) and Z_CMP is requested.
@@ -5016,6 +5092,7 @@ void Interpreter::SpReset() {
     while (!mShaderStack.empty()) {
         mShaderStack.pop();
     }
+    mXrProjection = false;
     mRsp->modelview_matrix_stack_size = 1;
     mRsp->current_num_lights = 2;
     mRsp->lights_changed = true;

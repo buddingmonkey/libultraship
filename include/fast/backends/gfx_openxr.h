@@ -53,6 +53,7 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     void LocateViews();
     void Recentre();
     XrVector3f ToWindowAxes(const XrVector3f& point) const;
+    void MoveGlass();
     void SizeWindow();
     bool StartPlacementPass();
     void PresentView(uint32_t view);

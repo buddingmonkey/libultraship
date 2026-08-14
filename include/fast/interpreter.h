@@ -446,6 +446,9 @@ class Interpreter {
     // Swaps the game's perspective for an off-axis frustum from the tracked eye to a window fixed
     // in the room. The game's own view stays where it is; only the apex of the frustum moves.
     void ApplyXrProjection();
+    // Depth from the viewpoint to the nearest part of the triangle that reaches the screen. A
+    // corner that misses the screen must not count: the glass would sit at it for nothing.
+    float XrVisibleDepth(struct LoadedVertex* const vertices[3]) const;
     void GfxSpPopMatrix(uint32_t count);
     void GfxSpVertex(size_t numVertices, size_t destIndex, const F3DVtx* vertices);
     void GfxSpModifyVertex(uint16_t vtxIdx, uint8_t where, uint32_t val);
@@ -541,6 +544,12 @@ class Interpreter {
     bool mRendersToFb{}; // game_renders_to_framebuffer;
     std::map<int, FBInfo>::iterator mActiveFrameBuffer;
     std::map<int, FBInfo> mFrameBuffers;
+
+    // Set while the off-axis frustum of a headset stands in for the game's projection, with the
+    // two numbers that turn a clip w back into a depth from the viewpoint.
+    bool mXrProjection{};
+    float mXrEyeZ{};
+    float mXrNearPlane{};
 
     int mGameFb{};             // game_framebuffer;
     int mGameFbMsaaResolved{}; // game_framebuffer_msaa_resolved;

@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <string>
 
 #include <android/log.h>
@@ -27,10 +28,19 @@ static constexpr float WINDOW_DISTANCE_MIN = 0.25f;
 static constexpr float WINDOW_DISTANCE_MAX = 4.0f;
 static constexpr float WINDOW_WIDTH_METRES = 1.6f;
 
-// Game units from the viewpoint to the glass. Everything nearer than this stands in front of the
-// window, everything further recedes behind it. Banjo sits about this far from the camera, so the
-// scene stays behind the glass where a quad layer can hold it.
-static constexpr float WINDOW_DEPTH_UNITS = 700.0f;
+// Game units from the viewpoint to the glass, which is also the scale: this many game units fill
+// one window distance of the room. A flat quad cannot hold anything nearer than the glass, so the
+// glass goes at the nearest thing the game drew and never deeper than the range Banjo stands at.
+static constexpr float WINDOW_DEPTH_MAX = 700.0f;
+static constexpr float WINDOW_DEPTH_MIN = 1.0f;
+
+// Seconds for the glass to come back out. Long, so it holds about the nearest of the last few
+// seconds instead of chasing the camera in and out of every corner.
+static constexpr float WINDOW_DEPTH_RELEASE = 2.0f;
+
+// The glass keeps this much clear of the nearest thing. The reading is a frame old, so without the
+// margin anything moving towards the camera crosses the glass for a frame before it moves.
+static constexpr float WINDOW_DEPTH_MARGIN = 0.9f;
 
 static float sWindowDistance = WINDOW_DISTANCE_DEFAULT;
 
@@ -533,6 +543,8 @@ static float sWindowAngularWidth = 0.0f;
 static bool sFlatProjection = false;
 static bool sStereo = true;
 static bool sRecentreWanted = true;
+static float sSceneNear = std::numeric_limits<float>::max();
+static float sGlassDepth = WINDOW_DEPTH_MAX;
 
 bool GetXrViewGeometry(XrViewGeometry* geometry) {
     if (!sViewGeometryValid || sFlatProjection) {
@@ -545,6 +557,12 @@ bool GetXrViewGeometry(XrViewGeometry* geometry) {
 void SetXrViewTangents(float tanHalfWidth, float tanHalfHeight) {
     sViewTanHalfWidth = tanHalfWidth;
     sViewTanHalfHeight = tanHalfHeight;
+}
+
+void SetXrSceneNear(float units) {
+    if (units < sSceneNear) {
+        sSceneNear = units;
+    }
 }
 
 void RecentreXrWindow() {
@@ -802,6 +820,25 @@ XrVector3f GfxWindowBackendOpenXR::ToWindowAxes(const XrVector3f& point) const {
     return { c * dx - sn * dz, dy, sn * dx + c * dz };
 }
 
+// In at once, so nothing is ever left standing in front of the window; out slowly, so one near
+// object in one frame does not throw the world back and hold it there.
+void GfxWindowBackendOpenXR::MoveGlass() {
+    float target = sSceneNear * WINDOW_DEPTH_MARGIN;
+    if (target > WINDOW_DEPTH_MAX) {
+        target = WINDOW_DEPTH_MAX;
+    } else if (target < WINDOW_DEPTH_MIN) {
+        target = WINDOW_DEPTH_MIN;
+    }
+
+    if (target < sGlassDepth) {
+        sGlassDepth = target;
+    } else {
+        const float rate = mRefreshRate > 0.0f ? mRefreshRate : 60.0f;
+        sGlassDepth += (target - sGlassDepth) * (1.0f - expf(-1.0f / (rate * WINDOW_DEPTH_RELEASE)));
+    }
+    sSceneNear = std::numeric_limits<float>::max();
+}
+
 void GfxWindowBackendOpenXR::SizeWindow() {
     if (sViewTanHalfWidth <= 0.0f || sViewTanHalfHeight <= 0.0f) {
         return;
@@ -816,9 +853,9 @@ void GfxWindowBackendOpenXR::SizeWindow() {
     mWindowHeight = 2.0f * mWindowDistance * sViewTanHalfHeight;
     sWindowAngularWidth = 2.0f * atanf(0.5f * mWindowWidth / mWindowDistance);
     __android_log_print(ANDROID_LOG_INFO, "LighthouseXR",
-                        "window %.2f x %.2f m at %.2f m, %.1f degrees wide, %.0f units per metre", mWindowWidth,
+                        "window %.2f x %.2f m at %.2f m, %.1f degrees wide, up to %.0f units per metre", mWindowWidth,
                         mWindowHeight, mWindowDistance, sWindowAngularWidth * 180.0f / (float)M_PI,
-                        WINDOW_DEPTH_UNITS / mWindowDistance);
+                        WINDOW_DEPTH_MAX / mWindowDistance);
 }
 
 bool GfxWindowBackendOpenXR::OpenFrame() {
@@ -832,6 +869,7 @@ bool GfxWindowBackendOpenXR::OpenFrame() {
         return false;
     }
 
+    MoveGlass();
     SizeWindow();
 
     XrFrameWaitInfo waitInfo{ XR_TYPE_FRAME_WAIT_INFO };
@@ -891,9 +929,9 @@ void GfxWindowBackendOpenXR::BeginRenderView(uint32_t view) {
     }
 
     // The window plane is a copy of the game's own screen, so the head offset converts with the
-    // one scale that puts the glass WINDOW_DEPTH_UNITS from the viewpoint. LOCAL space starts at
-    // the head, and the window hangs straight ahead of it, so the eye pose is already the offset.
-    const float unitsPerMetre = WINDOW_DEPTH_UNITS / mWindowDistance;
+    // one scale that puts the glass sGlassDepth from the viewpoint. LOCAL space starts at the
+    // head, and the window hangs straight ahead of it, so the eye pose is already the offset.
+    const float unitsPerMetre = sGlassDepth / mWindowDistance;
     const XrVector3f& left = mViews[0].pose.position;
     const XrVector3f& right = mViews[1].pose.position;
     // One image for both eyes is drawn from between them, not from either one.
@@ -905,7 +943,7 @@ void GfxWindowBackendOpenXR::BeginRenderView(uint32_t view) {
     sViewGeometry.eyeOffset[0] = offset.x * unitsPerMetre;
     sViewGeometry.eyeOffset[1] = offset.y * unitsPerMetre;
     sViewGeometry.eyeOffset[2] = offset.z * unitsPerMetre;
-    sViewGeometry.windowDistance = WINDOW_DEPTH_UNITS;
+    sViewGeometry.windowDistance = sGlassDepth;
     sViewGeometryValid = true;
 }
 
