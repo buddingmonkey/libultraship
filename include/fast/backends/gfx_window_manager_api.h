@@ -29,6 +29,14 @@ class GfxWindowBackend {
     virtual Ship::WindowRect GetPrimaryMonitorRect() = 0;
     virtual void HandleEvents() = 0;
     virtual bool IsFrameReady() = 0;
+    // How many views the caller must draw the frame into, and which one it is about to draw. A
+    // headset backend answers two and takes the eye pose from the view; everything else answers
+    // one and ignores the rest.
+    virtual uint32_t BeginRenderFrame() {
+        return 1;
+    }
+    virtual void BeginRenderView(uint32_t view) {
+    }
     virtual void SwapBuffersBegin() = 0;
     virtual void SwapBuffersEnd() = 0;
     virtual double GetTime() = 0;

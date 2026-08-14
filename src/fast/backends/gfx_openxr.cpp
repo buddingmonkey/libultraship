@@ -2,6 +2,7 @@
 
 #include "fast/backends/gfx_openxr.h"
 
+#include <cmath>
 #include <cstring>
 #include <string>
 
@@ -19,10 +20,16 @@
 
 namespace Fast {
 
-// The quad hangs this far in front of where the user faced at start, and is this wide. Part 2.3
-// turns both into settings.
-static constexpr float QUAD_DISTANCE_METRES = 2.0f;
-static constexpr float QUAD_WIDTH_METRES = 1.6f;
+// The window hangs this far in front of where the user faced at start. It is as wide as the game's
+// own field of view needs it to be, so the framing does not change; the size below only holds
+// until the first frame says otherwise. Part 2.3 turns all of this into settings.
+static constexpr float WINDOW_DISTANCE_METRES = 2.0f;
+static constexpr float WINDOW_WIDTH_METRES = 1.6f;
+
+// Game units from the viewpoint to the glass. Everything nearer than this stands in front of the
+// window, everything further recedes behind it, and the number therefore sets how large the world
+// is: Banjo sits about this far from the camera.
+static constexpr float WINDOW_DEPTH_UNITS = 700.0f;
 
 static bool Failed(XrInstance instance, XrResult result, const char* what) {
     if (XR_SUCCEEDED(result)) {
@@ -239,46 +246,55 @@ bool GfxWindowBackendOpenXR::StartSession() {
     mSwapchainWidth = width;
     mSwapchainHeight = height;
 
-    XrSwapchainCreateInfo swapchainInfo{ XR_TYPE_SWAPCHAIN_CREATE_INFO };
-    swapchainInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
-    swapchainInfo.format = format;
-    swapchainInfo.sampleCount = 1;
-    swapchainInfo.width = mSwapchainWidth;
-    swapchainInfo.height = mSwapchainHeight;
-    swapchainInfo.faceCount = 1;
-    swapchainInfo.arraySize = 1;
-    swapchainInfo.mipCount = 1;
-    if (Failed(mInstance, xrCreateSwapchain(mSession, &swapchainInfo, &mSwapchain), "xrCreateSwapchain")) {
-        return false;
-    }
-
     uint32_t imageCount = 0;
-    if (Failed(mInstance, xrEnumerateSwapchainImages(mSwapchain, 0, &imageCount, nullptr),
-               "xrEnumerateSwapchainImages")) {
-        return false;
-    }
-    mImages.assign(imageCount, { XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR });
-    if (Failed(mInstance,
-               xrEnumerateSwapchainImages(mSwapchain, imageCount, &imageCount,
-                                          (XrSwapchainImageBaseHeader*)mImages.data()),
-               "xrEnumerateSwapchainImages")) {
-        return false;
-    }
+    for (uint32_t view = 0; view < VIEW_COUNT; view++) {
+        XrSwapchainCreateInfo swapchainInfo{ XR_TYPE_SWAPCHAIN_CREATE_INFO };
+        swapchainInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
+        swapchainInfo.format = format;
+        swapchainInfo.sampleCount = 1;
+        swapchainInfo.width = mSwapchainWidth;
+        swapchainInfo.height = mSwapchainHeight;
+        swapchainInfo.faceCount = 1;
+        swapchainInfo.arraySize = 1;
+        swapchainInfo.mipCount = 1;
+        if (Failed(mInstance, xrCreateSwapchain(mSession, &swapchainInfo, &mSwapchain[view]), "xrCreateSwapchain")) {
+            return false;
+        }
 
-    mImageFbos.resize(imageCount);
-    glGenFramebuffers(imageCount, mImageFbos.data());
-    for (uint32_t i = 0; i < imageCount; i++) {
-        glBindFramebuffer(GL_FRAMEBUFFER, mImageFbos[i]);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mImages[i].image, 0);
+        if (Failed(mInstance, xrEnumerateSwapchainImages(mSwapchain[view], 0, &imageCount, nullptr),
+                   "xrEnumerateSwapchainImages")) {
+            return false;
+        }
+        mImages[view].assign(imageCount, { XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR });
+        if (Failed(mInstance,
+                   xrEnumerateSwapchainImages(mSwapchain[view], imageCount, &imageCount,
+                                              (XrSwapchainImageBaseHeader*)mImages[view].data()),
+                   "xrEnumerateSwapchainImages")) {
+            return false;
+        }
+
+        mImageFbos[view].resize(imageCount);
+        glGenFramebuffers(imageCount, mImageFbos[view].data());
+        for (uint32_t i = 0; i < imageCount; i++) {
+            glBindFramebuffer(GL_FRAMEBUFFER, mImageFbos[view][i]);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mImages[view][i].image, 0);
+        }
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    mWindowWidth = WINDOW_WIDTH_METRES;
+    mWindowHeight = WINDOW_WIDTH_METRES * (float)mSwapchainHeight / (float)mSwapchainWidth;
+
+    for (XrView& view : mViews) {
+        view = { XR_TYPE_VIEW };
+    }
 
     if (!StartActions(handInteraction)) {
         __android_log_print(ANDROID_LOG_ERROR, "LighthouseXR", "pointer actions failed; pinch will not reach the game");
     }
 
     __android_log_print(ANDROID_LOG_INFO, "LighthouseXR",
-                        "session up: %u images %ux%u, format 0x%04x, blend %d, srgb ctl %d", imageCount,
+                        "session up: %u images %ux%u per eye, format 0x%04x, blend %d, srgb ctl %d", imageCount,
                         mSwapchainWidth, mSwapchainHeight, (unsigned)format, (int)mBlendMode, (int)mSrgbWriteControl);
     return true;
 }
@@ -386,6 +402,29 @@ bool GetXrPointer(float* u, float* v, bool* down) {
     return true;
 }
 
+static bool sViewGeometryValid = false;
+static XrViewGeometry sViewGeometry = {};
+static float sViewTanHalfWidth = 0.0f;
+static float sViewTanHalfHeight = 0.0f;
+static float sWindowAngularWidth = 0.0f;
+
+bool GetXrViewGeometry(XrViewGeometry* geometry) {
+    if (!sViewGeometryValid) {
+        return false;
+    }
+    *geometry = sViewGeometry;
+    return true;
+}
+
+void SetXrViewTangents(float tanHalfWidth, float tanHalfHeight) {
+    sViewTanHalfWidth = tanHalfWidth;
+    sViewTanHalfHeight = tanHalfHeight;
+}
+
+float GetXrWindowAngularWidth() {
+    return sWindowAngularWidth;
+}
+
 void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
     if (mActionSet == XR_NULL_HANDLE || mState != XR_SESSION_STATE_FOCUSED) {
         return;
@@ -399,7 +438,6 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         return;
     }
 
-    const float quadHeight = QUAD_WIDTH_METRES * (float)mSwapchainHeight / (float)mSwapchainWidth;
     bool hit = false;
     bool down = false;
     float u = 0.0f;
@@ -418,13 +456,13 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         if (forward.z >= -1e-4f) {
             continue;
         }
-        const float t = (-QUAD_DISTANCE_METRES - origin.z) / forward.z;
+        const float t = (-WINDOW_DISTANCE_METRES - origin.z) / forward.z;
         if (t <= 0.0f) {
             continue;
         }
 
-        const float hitU = (origin.x + t * forward.x) / QUAD_WIDTH_METRES + 0.5f;
-        const float hitV = 0.5f - (origin.y + t * forward.y) / quadHeight;
+        const float hitU = (origin.x + t * forward.x) / mWindowWidth + 0.5f;
+        const float hitV = 0.5f - (origin.y + t * forward.y) / mWindowHeight;
         if (hitU < 0.0f || hitU > 1.0f || hitV < 0.0f || hitV > 1.0f) {
             continue;
         }
@@ -528,38 +566,165 @@ void GfxWindowBackendOpenXR::HandleStateChange(const XrEventDataSessionStateChan
     }
 }
 
-void GfxWindowBackendOpenXR::PresentQuad() {
+void GfxWindowBackendOpenXR::LocateViews() {
+    mViewsValid = false;
+
+    XrViewLocateInfo locateInfo{ XR_TYPE_VIEW_LOCATE_INFO };
+    locateInfo.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+    locateInfo.displayTime = mDisplayTime;
+    locateInfo.space = mSpace;
+
+    XrViewState viewState{ XR_TYPE_VIEW_STATE };
+    uint32_t count = 0;
+    if (Failed(mInstance, xrLocateViews(mSession, &locateInfo, &viewState, VIEW_COUNT, &count, mViews),
+               "xrLocateViews")) {
+        return;
+    }
+    mViewsValid = count == VIEW_COUNT && (viewState.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0;
+}
+
+void GfxWindowBackendOpenXR::SizeWindow() {
+    if (mWindowSized || sViewTanHalfWidth <= 0.0f || sViewTanHalfHeight <= 0.0f) {
+        return;
+    }
+    mWindowWidth = 2.0f * WINDOW_DISTANCE_METRES * sViewTanHalfWidth;
+    mWindowHeight = 2.0f * WINDOW_DISTANCE_METRES * sViewTanHalfHeight;
+    mWindowSized = true;
+    sWindowAngularWidth = 2.0f * atanf(0.5f * mWindowWidth / WINDOW_DISTANCE_METRES);
+    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "window %.2f x %.2f m at %.1f m, %.1f degrees wide",
+                        mWindowWidth, mWindowHeight, WINDOW_DISTANCE_METRES,
+                        sWindowAngularWidth * 180.0f / (float)M_PI);
+}
+
+bool GfxWindowBackendOpenXR::OpenFrame() {
+    sViewGeometryValid = false;
+    if (!mActive) {
+        return false;
+    }
+
+    PollEvents();
+    if (!mRunning) {
+        return false;
+    }
+
+    SizeWindow();
+
+    XrFrameWaitInfo waitInfo{ XR_TYPE_FRAME_WAIT_INFO };
+    XrFrameState frameState{ XR_TYPE_FRAME_STATE };
+    if (Failed(mInstance, xrWaitFrame(mSession, &waitInfo, &frameState), "xrWaitFrame")) {
+        return false;
+    }
+
+    XrFrameBeginInfo beginInfo{ XR_TYPE_FRAME_BEGIN_INFO };
+    if (Failed(mInstance, xrBeginFrame(mSession, &beginInfo), "xrBeginFrame")) {
+        return false;
+    }
+
+    mFrameOpen = true;
+    mDisplayTime = frameState.predictedDisplayTime;
+    mShouldRender = frameState.shouldRender == XR_TRUE;
+
+    LocateViews();
+    PumpPointer(mDisplayTime);
+
+    // Without a head pose there is no off-axis frustum to build, so the frame falls back to one
+    // image that both eyes read, which is what 2.1 presented.
+    mViewCount = mViewsValid ? VIEW_COUNT : 1;
+    mCurrentView = 0;
+    return true;
+}
+
+uint32_t GfxWindowBackendOpenXR::BeginRenderFrame() {
+    return OpenFrame() ? mViewCount : 1;
+}
+
+void GfxWindowBackendOpenXR::BeginRenderView(uint32_t view) {
+    mCurrentView = view;
+    sViewGeometryValid = false;
+    if (!mFrameOpen || !mViewsValid || view >= VIEW_COUNT) {
+        return;
+    }
+
+    // The window plane is a copy of the game's own screen, so the head offset converts with the
+    // one scale that puts the glass WINDOW_DEPTH_UNITS from the viewpoint. LOCAL space starts at
+    // the head, and the window hangs straight ahead of it, so the eye pose is already the offset.
+    const float unitsPerMetre = WINDOW_DEPTH_UNITS / WINDOW_DISTANCE_METRES;
+    const XrVector3f& position = mViews[view].pose.position;
+    sViewGeometry.eyeOffset[0] = position.x * unitsPerMetre;
+    sViewGeometry.eyeOffset[1] = position.y * unitsPerMetre;
+    sViewGeometry.eyeOffset[2] = position.z * unitsPerMetre;
+    sViewGeometry.windowDistance = WINDOW_DEPTH_UNITS;
+    sViewGeometryValid = true;
+}
+
+void GfxWindowBackendOpenXR::PresentView(uint32_t view) {
     uint32_t index = 0;
     XrSwapchainImageAcquireInfo acquireInfo{ XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
-    if (Failed(mInstance, xrAcquireSwapchainImage(mSwapchain, &acquireInfo, &index), "xrAcquireSwapchainImage")) {
+    if (Failed(mInstance, xrAcquireSwapchainImage(mSwapchain[view], &acquireInfo, &index), "xrAcquireSwapchainImage")) {
         return;
     }
 
     XrSwapchainImageWaitInfo waitInfo{ XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
     waitInfo.timeout = XR_INFINITE_DURATION;
-    if (!Failed(mInstance, xrWaitSwapchainImage(mSwapchain, &waitInfo), "xrWaitSwapchainImage")) {
-        // The game has just drawn its frame into the default framebuffer. A GLES swapchain image is
+    if (!Failed(mInstance, xrWaitSwapchainImage(mSwapchain[view], &waitInfo), "xrWaitSwapchainImage")) {
+        // The game has just drawn this eye into the default framebuffer. A GLES swapchain image is
         // an ordinary GL texture, so it keeps the bottom-up orientation and the blit is 1:1.
         if (mSrgbWriteControl) {
             glDisable(GL_FRAMEBUFFER_SRGB_EXT);
         }
         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mImageFbos[index]);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mImageFbos[view][index]);
         glBlitFramebuffer(0, 0, mSwapchainWidth, mSwapchainHeight, 0, 0, mSwapchainWidth, mSwapchainHeight,
                           GL_COLOR_BUFFER_BIT, GL_LINEAR);
 
         if (DebugCapture::Pending()) {
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            DebugCapture::WriteBoundFramebuffer("source", mSwapchainWidth, mSwapchainHeight);
-            glBindFramebuffer(GL_FRAMEBUFFER, mImageFbos[index]);
-            DebugCapture::WriteBoundFramebuffer("quad", mSwapchainWidth, mSwapchainHeight);
-            DebugCapture::Finish();
+            glBindFramebuffer(GL_FRAMEBUFFER, mImageFbos[view][index]);
+            DebugCapture::WriteBoundFramebuffer(view == 0 ? "left" : "right", mSwapchainWidth, mSwapchainHeight);
+            if (view + 1 >= mViewCount) {
+                DebugCapture::Finish();
+            }
         }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 
     XrSwapchainImageReleaseInfo releaseInfo{ XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
-    Failed(mInstance, xrReleaseSwapchainImage(mSwapchain, &releaseInfo), "xrReleaseSwapchainImage");
+    Failed(mInstance, xrReleaseSwapchainImage(mSwapchain[view], &releaseInfo), "xrReleaseSwapchainImage");
+}
+
+void GfxWindowBackendOpenXR::EndRenderFrame() {
+    XrCompositionLayerQuad quads[VIEW_COUNT] = {};
+    const XrCompositionLayerBaseHeader* layers[VIEW_COUNT] = {};
+    uint32_t layerCount = 0;
+
+    if (mShouldRender) {
+        static constexpr XrEyeVisibility VISIBILITY[VIEW_COUNT] = { XR_EYE_VISIBILITY_LEFT, XR_EYE_VISIBILITY_RIGHT };
+        for (uint32_t view = 0; view < mViewCount; view++) {
+            quads[view] = { XR_TYPE_COMPOSITION_LAYER_QUAD };
+            // No source-alpha bit: the game does not keep a meaningful alpha channel, and honouring
+            // it under alpha blend makes parts of the picture see-through.
+            quads[view].layerFlags = 0;
+            quads[view].space = mSpace;
+            quads[view].eyeVisibility = mViewCount == VIEW_COUNT ? VISIBILITY[view] : XR_EYE_VISIBILITY_BOTH;
+            quads[view].subImage.swapchain = mSwapchain[view];
+            quads[view].subImage.imageRect = { { 0, 0 }, { (int32_t)mSwapchainWidth, (int32_t)mSwapchainHeight } };
+            quads[view].subImage.imageArrayIndex = 0;
+            quads[view].pose.orientation.w = 1.0f;
+            quads[view].pose.position.z = -WINDOW_DISTANCE_METRES;
+            quads[view].size.width = mWindowWidth;
+            quads[view].size.height = mWindowHeight;
+            layers[layerCount++] = (const XrCompositionLayerBaseHeader*)&quads[view];
+        }
+    }
+
+    XrFrameEndInfo endInfo{ XR_TYPE_FRAME_END_INFO };
+    endInfo.displayTime = mDisplayTime;
+    endInfo.environmentBlendMode = mBlendMode;
+    endInfo.layerCount = layerCount;
+    endInfo.layers = layers;
+    Failed(mInstance, xrEndFrame(mSession, &endInfo), "xrEndFrame");
+
+    mFrameOpen = false;
+    sViewGeometryValid = false;
 }
 
 void GfxWindowBackendOpenXR::SwapBuffersBegin() {
@@ -567,63 +732,33 @@ void GfxWindowBackendOpenXR::SwapBuffersBegin() {
         GfxWindowBackendSDL2::SwapBuffersBegin();
         return;
     }
-
-    PollEvents();
-    if (!mRunning) {
-        return;
+    if (!mFrameOpen) {
+        // A caller that draws the gui by itself, as the extractor's progress screen does, asks for
+        // no views at all. Open a frame for it and let both eyes read the one image.
+        if (!OpenFrame()) {
+            return;
+        }
+        mViewCount = 1;
     }
 
-    XrFrameWaitInfo waitInfo{ XR_TYPE_FRAME_WAIT_INFO };
-    XrFrameState frameState{ XR_TYPE_FRAME_STATE };
-    if (Failed(mInstance, xrWaitFrame(mSession, &waitInfo, &frameState), "xrWaitFrame")) {
-        return;
+    if (mShouldRender) {
+        PresentView(mCurrentView);
     }
-
-    XrFrameBeginInfo beginInfo{ XR_TYPE_FRAME_BEGIN_INFO };
-    if (Failed(mInstance, xrBeginFrame(mSession, &beginInfo), "xrBeginFrame")) {
-        return;
+    if (mCurrentView + 1 >= mViewCount) {
+        EndRenderFrame();
     }
-
-    PumpPointer(frameState.predictedDisplayTime);
-
-    XrCompositionLayerQuad quad{ XR_TYPE_COMPOSITION_LAYER_QUAD };
-    const XrCompositionLayerBaseHeader* layers[] = { (const XrCompositionLayerBaseHeader*)&quad };
-    uint32_t layerCount = 0;
-
-    if (frameState.shouldRender == XR_TRUE) {
-        PresentQuad();
-
-        // No source-alpha bit: the game does not keep a meaningful alpha channel, and honouring it
-        // under alpha blend makes parts of the picture see-through.
-        quad.layerFlags = 0;
-        quad.space = mSpace;
-        quad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-        quad.subImage.swapchain = mSwapchain;
-        quad.subImage.imageRect = { { 0, 0 }, { (int32_t)mSwapchainWidth, (int32_t)mSwapchainHeight } };
-        quad.subImage.imageArrayIndex = 0;
-        quad.pose.orientation.w = 1.0f;
-        quad.pose.position.z = -QUAD_DISTANCE_METRES;
-        quad.size.width = QUAD_WIDTH_METRES;
-        quad.size.height = QUAD_WIDTH_METRES * (float)mSwapchainHeight / (float)mSwapchainWidth;
-        layerCount = 1;
-    }
-
-    XrFrameEndInfo endInfo{ XR_TYPE_FRAME_END_INFO };
-    endInfo.displayTime = frameState.predictedDisplayTime;
-    endInfo.environmentBlendMode = mBlendMode;
-    endInfo.layerCount = layerCount;
-    endInfo.layers = layers;
-    Failed(mInstance, xrEndFrame(mSession, &endInfo), "xrEndFrame");
 }
 
 void GfxWindowBackendOpenXR::Teardown() {
-    if (!mImageFbos.empty()) {
-        glDeleteFramebuffers((GLsizei)mImageFbos.size(), mImageFbos.data());
-        mImageFbos.clear();
-    }
-    if (mSwapchain != XR_NULL_HANDLE) {
-        xrDestroySwapchain(mSwapchain);
-        mSwapchain = XR_NULL_HANDLE;
+    for (uint32_t view = 0; view < VIEW_COUNT; view++) {
+        if (!mImageFbos[view].empty()) {
+            glDeleteFramebuffers((GLsizei)mImageFbos[view].size(), mImageFbos[view].data());
+            mImageFbos[view].clear();
+        }
+        if (mSwapchain[view] != XR_NULL_HANDLE) {
+            xrDestroySwapchain(mSwapchain[view]);
+            mSwapchain[view] = XR_NULL_HANDLE;
+        }
     }
     if (mSpace != XR_NULL_HANDLE) {
         xrDestroySpace(mSpace);
@@ -646,6 +781,8 @@ void GfxWindowBackendOpenXR::Teardown() {
     }
     mActive = false;
     mRunning = false;
+    mFrameOpen = false;
+    sViewGeometryValid = false;
 }
 
 void GfxWindowBackendOpenXR::Destroy() {

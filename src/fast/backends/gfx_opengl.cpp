@@ -769,7 +769,13 @@ void GfxRenderingAPIOGL::OnResize() {
 }
 
 void GfxRenderingAPIOGL::StartFrame() {
-    mFrameCount++;
+    if (!mFrameNoiseHeld) {
+        mFrameCount++;
+    }
+}
+
+void GfxRenderingAPIOGL::HoldFrameNoise(bool hold) {
+    mFrameNoiseHeld = hold;
 }
 
 void GfxRenderingAPIOGL::EndFrame() {

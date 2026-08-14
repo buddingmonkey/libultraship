@@ -82,6 +82,7 @@ class GfxRenderingAPIOGL final : public GfxRenderingAPI {
     void Init() override;
     void OnResize() override;
     void StartFrame() override;
+    void HoldFrameNoise(bool hold) override;
     void EndFrame() override;
     void FinishRender() override;
     int CreateFramebuffer() override;
@@ -128,6 +129,7 @@ class GfxRenderingAPIOGL final : public GfxRenderingAPI {
 #endif
 
     uint32_t mFrameCount = 0;
+    bool mFrameNoiseHeld = false;
 
     std::vector<FramebufferOGL> mFrameBuffers;
     size_t mCurrentFrameBuffer = 0;

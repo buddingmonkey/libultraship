@@ -31,6 +31,7 @@
 #include "fast/lus_gbi.h"
 #include "fast/backends/gfx_window_manager_api.h"
 #include "fast/backends/gfx_rendering_api.h"
+#include "fast/backends/gfx_xr_view.h"
 
 #include "ship/window/gui/Gui.h"
 #include "ship/resource/ResourceManager.h"
@@ -1524,6 +1525,7 @@ void Interpreter::GfxSpMatrix(uint8_t parameters, const int32_t* addr) {
     if (parameters & mtx_projection) {
         if (parameters & mtx_load) {
             memcpy(mRsp->P_matrix, matrix, sizeof(matrix));
+            ApplyXrProjection();
         } else {
             MatrixMul(mRsp->P_matrix, matrix, mRsp->P_matrix);
         }
@@ -1544,6 +1546,73 @@ void Interpreter::GfxSpMatrix(uint8_t parameters, const int32_t* addr) {
         mRsp->lights_changed = 1;
     }
     MatrixMul(mRsp->MP_matrix, mRsp->modelview_matrix_stack[mRsp->modelview_matrix_stack_size - 1], mRsp->P_matrix);
+}
+
+void Interpreter::ApplyXrProjection() {
+#ifdef ENABLE_OPENXR
+    XrViewGeometry view;
+    // An offscreen buffer holds a portrait, a map or a mirror, none of which is the room's window.
+    if (mFbActive || !GetXrViewGeometry(&view)) {
+        return;
+    }
+
+    float(&p)[4][4] = mRsp->P_matrix;
+    if (p[2][3] == 0.0f) {
+        return; // guOrtho, which the game uses for its flat passes
+    }
+
+    // A projection matrix survives any uniform scale, and guPerspective applies one, so divide it
+    // out before reading the planes back off the matrix.
+    const float unit = -1.0f / p[2][3];
+    const float depthScale = p[2][2] * unit;
+    const float depthBias = p[3][2] * unit;
+    const float tanHalfWidth = 1.0f / (p[0][0] * unit);
+    const float tanHalfHeight = 1.0f / (p[1][1] * unit);
+    if (depthScale >= -1.0f || depthBias >= 0.0f || tanHalfWidth <= 0.0f || tanHalfHeight <= 0.0f) {
+        return;
+    }
+    const float nearPlane = depthBias / (depthScale - 1.0f);
+    const float farPlane = depthBias / (depthScale + 1.0f);
+
+    // AdjXForAspectRatio widens the picture after the projection, so the window is wider than the
+    // matrix alone says.
+    SetXrViewTangents(tanHalfWidth * mCurDimensions.aspect_ratio * 0.75f, tanHalfHeight);
+
+    // The window keeps the size the game's own frustum gives it at the viewpoint, so the framing
+    // does not change; the head only moves the apex of the frustum away from the centre.
+    const float halfWidth = view.windowDistance * tanHalfWidth;
+    const float halfHeight = view.windowDistance * tanHalfHeight;
+    const float eyeX = view.eyeOffset[0];
+    const float eyeY = view.eyeOffset[1];
+    const float eyeZ = view.windowDistance + view.eyeOffset[2];
+    if (eyeZ < nearPlane) {
+        return; // the head has reached the glass
+    }
+
+    const float left = (-halfWidth - eyeX) * nearPlane / eyeZ;
+    const float right = (halfWidth - eyeX) * nearPlane / eyeZ;
+    const float bottom = (-halfHeight - eyeY) * nearPlane / eyeZ;
+    const float top = (halfHeight - eyeY) * nearPlane / eyeZ;
+
+    const float scaleX = 2.0f * nearPlane / (right - left);
+    const float scaleY = 2.0f * nearPlane / (top - bottom);
+    const float shearX = (right + left) / (right - left);
+    const float shearY = (top + bottom) / (top - bottom);
+    const float depth = (farPlane + nearPlane) / (nearPlane - farPlane);
+    const float offset = 2.0f * farPlane * nearPlane / (nearPlane - farPlane);
+
+    memset(p, 0, sizeof(p));
+    p[0][0] = scaleX;
+    p[1][1] = scaleY;
+    p[2][0] = shearX;
+    p[2][1] = shearY;
+    p[2][2] = depth;
+    p[2][3] = -1.0f;
+    p[3][0] = -eyeX * scaleX - view.eyeOffset[2] * shearX;
+    p[3][1] = -eyeY * scaleY - view.eyeOffset[2] * shearY;
+    p[3][2] = -view.eyeOffset[2] * depth + offset;
+    p[3][3] = view.eyeOffset[2];
+#endif
 }
 
 void Interpreter::GfxSpPopMatrix(uint32_t count) {

@@ -443,6 +443,9 @@ class Interpreter {
     void SetResolvedResourceCacheEnabled(bool enabled);
 
     void GfxSpMatrix(uint8_t params, const int32_t* addr);
+    // Swaps the game's perspective for an off-axis frustum from the tracked eye to a window fixed
+    // in the room. The game's own view stays where it is; only the apex of the frustum moves.
+    void ApplyXrProjection();
     void GfxSpPopMatrix(uint32_t count);
     void GfxSpVertex(size_t numVertices, size_t destIndex, const F3DVtx* vertices);
     void GfxSpModifyVertex(uint16_t vtxIdx, uint8_t where, uint32_t val);

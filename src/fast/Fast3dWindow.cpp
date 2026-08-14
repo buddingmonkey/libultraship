@@ -221,18 +221,32 @@ bool Fast3dWindow::DrawAndRunGraphicsCommands(Gfx* commands, const std::unordere
     auto gui = wnd->GetGui();
     // Setup mouse state manager
     wnd->GetMouseStateManager()->StartFrame();
-    // Setup of the backend frames and draw initial Window and GUI menus
-    gui->StartDraw();
-    // Setup game framebuffers to match available window space
-    mInterpreter->StartFrame();
-    // Execute the games gfx commands
-    mInterpreter->Run(commands, mtxReplacements);
-    // Renders the game frame buffer to the final window and finishes the GUI
-    gui->EndDraw();
-    // Finalize swap buffers
-    mInterpreter->EndFrame();
+    // A headset asks for the frame once per eye; every other backend asks for it once
+    const uint32_t views = BeginRenderFrame();
+    for (uint32_t view = 0; view < views; view++) {
+        BeginRenderView(view);
+        // Setup of the backend frames and draw initial Window and GUI menus
+        gui->StartDraw();
+        // Setup game framebuffers to match available window space
+        mInterpreter->StartFrame();
+        // Execute the games gfx commands
+        mInterpreter->Run(commands, mtxReplacements);
+        // Renders the game frame buffer to the final window and finishes the GUI
+        gui->EndDraw();
+        // Finalize swap buffers
+        mInterpreter->EndFrame();
+    }
 
     return true;
+}
+
+uint32_t Fast3dWindow::BeginRenderFrame() {
+    return mWindowManagerApi->BeginRenderFrame();
+}
+
+void Fast3dWindow::BeginRenderView(uint32_t view) {
+    mWindowManagerApi->BeginRenderView(view);
+    mRenderingApi->HoldFrameNoise(view > 0);
 }
 
 void Fast3dWindow::HandleEvents() {
