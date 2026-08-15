@@ -18,6 +18,11 @@
 #include <spdlog/spdlog.h>
 
 #include "fast/backends/gfx_debug_capture.h"
+#include "ship/Context.h"
+#include "ship/window/MouseStateManager.h"
+#include "ship/window/Window.h"
+#include "ship/window/gui/Gui.h"
+#include "ship/window/gui/GuiWindow.h"
 
 namespace Fast {
 
@@ -41,6 +46,22 @@ static constexpr float WINDOW_DEPTH_RELEASE = 2.0f;
 // The glass keeps this much clear of the nearest thing. The reading is a frame old, so without the
 // margin anything moving towards the camera crosses the glass for a frame before it moves.
 static constexpr float WINDOW_DEPTH_MARGIN = 0.9f;
+
+// The menu button, in window heights: how large it is drawn, how far above the top edge it sits,
+// and how much larger than the drawing the rectangle that takes the pinch is. A target in the air
+// needs more than its outline, and the gap is wider than the growth, so the button and the picture
+// never contest the same pinch.
+static constexpr float MENU_BUTTON_SIDE = 0.06f;
+static constexpr float MENU_BUTTON_GAP = 0.04f;
+static constexpr float MENU_BUTTON_REACH = 1.6f;
+
+// The cursor shows in a zone this many button sides wide around the button. The zone reaches down
+// past the top edge of the window, so the cursor never goes out while the hand crosses from the
+// picture to the button, which is the only place a small target is hard to find.
+static constexpr float MENU_BUTTON_ZONE = 3.0f;
+
+// The cursor, in window heights. The rest of the rectangle holds the shadow.
+static constexpr float CURSOR_SIDE = 0.075f;
 
 static float sWindowDistance = WINDOW_DISTANCE_DEFAULT;
 
@@ -524,6 +545,25 @@ static bool sPointerValid = false;
 static bool sPointerDown = false;
 static float sPointerU = 0.0f;
 static float sPointerV = 0.0f;
+static bool sMenuHover = false;
+static bool sMenuHeld = false;
+// Where the cursor is drawn, in metres from the middle of the window, on the plane it hangs in.
+static bool sCursorValid = false;
+static float sCursorX = 0.0f;
+static float sCursorY = 0.0f;
+
+static void ToggleMenu() {
+    auto context = Ship::Context::GetRawInstance();
+    if (context == nullptr || context->GetWindow() == nullptr || context->GetWindow()->GetGui() == nullptr) {
+        return;
+    }
+    auto menu = context->GetWindow()->GetGui()->GetMenu();
+    if (menu == nullptr) {
+        return;
+    }
+    menu->ToggleVisibility();
+    context->GetWindow()->GetMouseStateManager()->UpdateMouseCapture();
+}
 
 bool GetXrPointer(float* u, float* v, bool* down) {
     if (!sPointerValid) {
@@ -593,6 +633,9 @@ float GetXrWindowAngularWidth() {
 
 void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
     if (mActionSet == XR_NULL_HANDLE || mState != XR_SESSION_STATE_FOCUSED || !mAnchorValid) {
+        sMenuHover = false;
+        sMenuHeld = false;
+        sCursorValid = false;
         return;
     }
 
@@ -606,8 +649,17 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
 
     bool hit = false;
     bool down = false;
+    bool menuHit = false;
+    bool menuDown = false;
+    bool cursor = false;
+    float cursorX = 0.0f;
+    float cursorY = 0.0f;
     float u = 0.0f;
     float v = 0.0f;
+
+    const float menuHalf = 0.5f * MenuSide();
+    const float zoneHalf = 0.5f * MenuZone();
+    const float menuRise = MenuRise();
 
     for (int hand = 0; hand < 2; hand++) {
         XrSpaceLocation location{ XR_TYPE_SPACE_LOCATION };
@@ -630,9 +682,14 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
             continue;
         }
 
-        const float hitU = (origin.x + t * forward.x) / mWindowWidth + 0.5f;
-        const float hitV = 0.5f - (origin.y + t * forward.y) / mWindowHeight;
-        if (hitU < 0.0f || hitU > 1.0f || hitV < 0.0f || hitV > 1.0f) {
+        // Where the ray meets the plane the window hangs in, in metres from the middle of it. The
+        // button sits on the same plane, so one intersection answers for both.
+        const float planeX = origin.x + t * forward.x;
+        const float planeY = origin.y + t * forward.y;
+        const bool onMenu = fabsf(planeX) <= menuHalf && fabsf(planeY - menuRise) <= menuHalf;
+        const bool onWindow = fabsf(planeX) <= 0.5f * mWindowWidth && fabsf(planeY) <= 0.5f * mWindowHeight;
+        const bool inZone = fabsf(planeX) <= zoneHalf && fabsf(planeY - menuRise) <= zoneHalf;
+        if (!onWindow && !inZone) {
             continue;
         }
 
@@ -644,11 +701,21 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
                               select.currentState == XR_TRUE;
 
         // A pinching hand wins; otherwise the first hand on the quad drives the cursor.
-        if (!hit || pinching) {
+        if (!cursor || pinching) {
+            cursor = true;
+            cursorX = planeX;
+            cursorY = planeY;
+        }
+        if (onMenu) {
+            if (!menuHit || pinching) {
+                menuHit = true;
+                menuDown = pinching;
+            }
+        } else if (onWindow && (!hit || pinching)) {
             hit = true;
             down = pinching;
-            u = hitU;
-            v = hitV;
+            u = planeX / mWindowWidth + 0.5f;
+            v = 0.5f - planeY / mWindowHeight;
         }
         if (pinching) {
             break;
@@ -656,6 +723,29 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
     }
 
     const bool wasDown = sPointerDown;
+
+    // A pinch that lands on the button holds it until it lifts. It works on the lift, so a pinch
+    // that leaves the button before it opens does nothing, and one that arrives from the picture
+    // already closed never takes it.
+    const bool holding = menuHit && menuDown;
+    if (sMenuHeld && !holding) {
+        if (menuHit) {
+            ToggleMenu();
+        }
+        sMenuHeld = false;
+    } else if (holding && !wasDown) {
+        sMenuHeld = true;
+    }
+    sMenuHover = menuHit;
+
+    if (cursor) {
+        sCursorValid = true;
+        sCursorX = cursorX;
+        sCursorY = cursorY;
+    } else if (!wasDown) {
+        sCursorValid = false;
+    }
+
     if (hit) {
         sPointerValid = true;
         sPointerU = u;
@@ -858,6 +948,35 @@ void GfxWindowBackendOpenXR::SizeWindow() {
                         WINDOW_DEPTH_MAX / mWindowDistance);
 }
 
+// The rectangle the button is drawn and aimed at, the zone around it the cursor shows in, the
+// cursor itself, and how far the button sits above the middle of the window. All follow the window,
+// so they keep their size and place as the window resizes.
+float GfxWindowBackendOpenXR::MenuSide() const {
+    return mWindowHeight * MENU_BUTTON_SIDE * MENU_BUTTON_REACH;
+}
+
+float GfxWindowBackendOpenXR::MenuZone() const {
+    return mWindowHeight * MENU_BUTTON_SIDE * MENU_BUTTON_ZONE;
+}
+
+float GfxWindowBackendOpenXR::CursorSide() const {
+    return mWindowHeight * CURSOR_SIDE;
+}
+
+float GfxWindowBackendOpenXR::MenuRise() const {
+    return mWindowHeight * (0.5f + MENU_BUTTON_GAP + MENU_BUTTON_SIDE * 0.5f);
+}
+
+// A pose on the window plane, that many metres right of and above the middle of the window.
+XrPosef GfxWindowBackendOpenXR::PlanePose(float x, float y) const {
+    const XrVector3f right = RotateByQuaternion(mAnchorPose.orientation, { 1.0f, 0.0f, 0.0f });
+    const XrVector3f up = RotateByQuaternion(mAnchorPose.orientation, { 0.0f, 1.0f, 0.0f });
+    XrPosef pose = mAnchorPose;
+    pose.position = { pose.position.x + right.x * x + up.x * y, pose.position.y + right.y * x + up.y * y,
+                      pose.position.z + right.z * x + up.z * y };
+    return pose;
+}
+
 bool GfxWindowBackendOpenXR::OpenFrame() {
     sViewGeometryValid = false;
     if (!mActive) {
@@ -947,6 +1066,42 @@ void GfxWindowBackendOpenXR::BeginRenderView(uint32_t view) {
     sViewGeometryValid = true;
 }
 
+static GLuint CompileShader(GLenum type, const char* source) {
+    GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, &source, nullptr);
+    glCompileShader(shader);
+    GLint ok = GL_FALSE;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+    if (ok != GL_TRUE) {
+        char log[512] = "";
+        glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
+        SPDLOG_ERROR("OpenXR: placement shader failed: {}", log);
+        glDeleteShader(shader);
+        return 0;
+    }
+    return shader;
+}
+
+static GLuint LinkProgram(GLuint vertex, const char* fragmentSource) {
+    const GLuint fragment = CompileShader(GL_FRAGMENT_SHADER, fragmentSource);
+    if (vertex == 0 || fragment == 0) {
+        return 0;
+    }
+    const GLuint program = glCreateProgram();
+    glAttachShader(program, vertex);
+    glAttachShader(program, fragment);
+    glLinkProgram(program);
+    glDeleteShader(fragment);
+    GLint ok = GL_FALSE;
+    glGetProgramiv(program, GL_LINK_STATUS, &ok);
+    if (ok != GL_TRUE) {
+        SPDLOG_ERROR("OpenXR: placement program failed to link");
+        glDeleteProgram(program);
+        return 0;
+    }
+    return program;
+}
+
 bool GfxWindowBackendOpenXR::StartPlacementPass() {
     static const char* VERTEX = "#version 300 es\n"
                                 "uniform mat4 uMvp;\n"
@@ -962,44 +1117,81 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
                                   "in vec2 vUv;\n"
                                   "out vec4 oColor;\n"
                                   "void main() { oColor = vec4(texture(uTex, vUv).rgb, 1.0); }\n";
+    // Three bars in a rounded square, drawn from the distance to each shape so the edges stay clean
+    // at any range. SIDE is 1 / MENU_BUTTON_REACH: the rest of the rectangle keeps its alpha at
+    // zero and is the part of the target the user cannot see. The colour comes out multiplied by
+    // the alpha, as the layer and the blend both read it.
+    static const char* MENU_FRAGMENT =
+        "#version 300 es\n"
+        "precision highp float;\n"
+        "uniform float uGlow;\n"
+        "in vec2 vUv;\n"
+        "out vec4 oColor;\n"
+        "const float SIDE = 0.625;\n"
+        "float Box(vec2 p, vec2 corner, float radius) {\n"
+        "    vec2 d = abs(p) - corner + radius;\n"
+        "    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;\n"
+        "}\n"
+        "float Cover(float d) {\n"
+        "    float aa = fwidth(d);\n"
+        "    return 1.0 - smoothstep(-aa, aa, d);\n"
+        "}\n"
+        "void main() {\n"
+        "    vec2 p = vUv - 0.5;\n"
+        "    float body = Box(p, vec2(SIDE * 0.5), SIDE * 0.3);\n"
+        "    float fill = Cover(body);\n"
+        "    float ring = fill - Cover(body + SIDE * 0.045);\n"
+        "    float bars = 0.0;\n"
+        "    for (int i = -1; i <= 1; i++) {\n"
+        "        bars = max(bars, Cover(Box(p - vec2(0.0, float(i) * SIDE * 0.22),\n"
+        "                                   vec2(SIDE * 0.25, SIDE * 0.037), SIDE * 0.037)));\n"
+        "    }\n"
+        "    float alpha = mix(mix(fill * 0.22, 0.55, ring), 0.85, bars);\n"
+        "    alpha = min(alpha * uGlow, 1.0);\n"
+        "    oColor = vec4(vec3(alpha), alpha);\n"
+        "}\n";
+    // A ring with a soft dark edge outside it, which is what makes the cursor hold up on a bright
+    // sky and on a black cave alike. The shadow stops at the ring: under it, it shows through the
+    // open middle and turns the white grey.
+    static const char* CURSOR_FRAGMENT =
+        "#version 300 es\n"
+        "precision highp float;\n"
+        "uniform float uDown;\n"
+        "in vec2 vUv;\n"
+        "out vec4 oColor;\n"
+        "void main() {\n"
+        "    vec2 p = vUv - 0.5;\n"
+        "    float r = mix(0.32, 0.267, uDown);\n"
+        "    float t = 0.053;\n"
+        "    float d = length(p);\n"
+        "    float aa = fwidth(d);\n"
+        "    float disc = 1.0 - smoothstep(r - aa, r + aa, d);\n"
+        "    float inner = 1.0 - smoothstep(r - t - aa, r - t + aa, d);\n"
+        "    float shadow = (1.0 - smoothstep(r - 0.005, r + 0.05, d)) * (1.0 - disc);\n"
+        "    float fillA = inner * mix(0.25, 0.45, uDown);\n"
+        "    float ringA = (disc - inner) * mix(0.60, 0.90, uDown);\n"
+        "    vec4 c = vec4(0.0, 0.0, 0.0, shadow * 0.55);\n"
+        "    c = vec4(vec3(fillA), fillA) + c * (1.0 - fillA);\n"
+        "    c = vec4(vec3(ringA), ringA) + c * (1.0 - ringA);\n"
+        "    oColor = c;\n"
+        "}\n";
 
-    auto compile = [](GLenum type, const char* source) -> GLuint {
-        GLuint shader = glCreateShader(type);
-        glShaderSource(shader, 1, &source, nullptr);
-        glCompileShader(shader);
-        GLint ok = GL_FALSE;
-        glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
-        if (ok != GL_TRUE) {
-            char log[512] = "";
-            glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
-            SPDLOG_ERROR("OpenXR: placement shader failed: {}", log);
-            glDeleteShader(shader);
-            return 0;
-        }
-        return shader;
-    };
-
-    const GLuint vertex = compile(GL_VERTEX_SHADER, VERTEX);
-    const GLuint fragment = compile(GL_FRAGMENT_SHADER, FRAGMENT);
-    if (vertex == 0 || fragment == 0) {
-        return false;
-    }
-    mProgram = glCreateProgram();
-    glAttachShader(mProgram, vertex);
-    glAttachShader(mProgram, fragment);
-    glLinkProgram(mProgram);
+    const GLuint vertex = CompileShader(GL_VERTEX_SHADER, VERTEX);
+    mProgram = LinkProgram(vertex, FRAGMENT);
+    mMenuProgram = LinkProgram(vertex, MENU_FRAGMENT);
+    mCursorProgram = LinkProgram(vertex, CURSOR_FRAGMENT);
     glDeleteShader(vertex);
-    glDeleteShader(fragment);
-    GLint ok = GL_FALSE;
-    glGetProgramiv(mProgram, GL_LINK_STATUS, &ok);
-    if (ok != GL_TRUE) {
-        SPDLOG_ERROR("OpenXR: placement program failed to link");
+    if (mProgram == 0 || mMenuProgram == 0 || mCursorProgram == 0) {
         return false;
     }
     mMvpLoc = glGetUniformLocation(mProgram, "uMvp");
     glUseProgram(mProgram);
     glUniform1i(glGetUniformLocation(mProgram, "uTex"), 0);
     glUseProgram(0);
+    mMenuMvpLoc = glGetUniformLocation(mMenuProgram, "uMvp");
+    mMenuGlowLoc = glGetUniformLocation(mMenuProgram, "uGlow");
+    mCursorMvpLoc = glGetUniformLocation(mCursorProgram, "uMvp");
+    mCursorDownLoc = glGetUniformLocation(mCursorProgram, "uDown");
     glGenVertexArrays(1, &mVao);
     return true;
 }
@@ -1071,6 +1263,48 @@ void GfxWindowBackendOpenXR::PresentView(uint32_t view) {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+// The button hangs over the top edge of the window, on the same plane and in the same layer. It is
+// outside the picture, so nothing the game draws has to make room for it. The cursor goes on the
+// same plane, over the picture as readily as over the room, and over the button last of all.
+void GfxWindowBackendOpenXR::DrawOverlays(uint32_t eye) {
+    if (mMenuProgram == 0 || mCursorProgram == 0) {
+        return;
+    }
+    // The game's renderer sets the blend function once, at start, and counts on it for the life of
+    // the app. Put back what was found, or every alpha it draws from here on adds instead of blends.
+    GLint blend[4] = {};
+    glGetIntegerv(GL_BLEND_SRC_RGB, &blend[0]);
+    glGetIntegerv(GL_BLEND_DST_RGB, &blend[1]);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &blend[2]);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &blend[3]);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glBindVertexArray(mVao);
+
+    float mvp[16];
+    const float side = MenuSide();
+    PlacementMatrix(mViews[eye], PlanePose(0.0f, MenuRise()), side, side, mvp);
+    glUseProgram(mMenuProgram);
+    glUniformMatrix4fv(mMenuMvpLoc, 1, GL_FALSE, mvp);
+    glUniform1f(mMenuGlowLoc, sMenuHeld ? 1.8f : (sMenuHover ? 1.3f : 1.0f));
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    if (sCursorValid) {
+        const float cursor = CursorSide();
+        PlacementMatrix(mViews[eye], PlanePose(sCursorX, sCursorY), cursor, cursor, mvp);
+        glUseProgram(mCursorProgram);
+        glUniformMatrix4fv(mCursorMvpLoc, 1, GL_FALSE, mvp);
+        glUniform1f(mCursorDownLoc, sPointerDown || sMenuHeld ? 1.0f : 0.0f);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
+
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glDisable(GL_BLEND);
+    glBlendFuncSeparate(blend[0], blend[1], blend[2], blend[3]);
+}
+
 // Draws the captured game image onto the window rectangle inside this eye's full view. Alpha
 // stays zero everywhere else, so the room shows through around the window.
 void GfxWindowBackendOpenXR::DrawEye(uint32_t eye, uint32_t sourceView) {
@@ -1108,6 +1342,8 @@ void GfxWindowBackendOpenXR::DrawEye(uint32_t eye, uint32_t sourceView) {
         glUseProgram(0);
         glBindTexture(GL_TEXTURE_2D, 0);
 
+        DrawOverlays(eye);
+
         if (DebugCapture::Pending()) {
             DebugCapture::WriteBoundFramebuffer(eye == 0 ? "left" : "right", mSwapchainWidth, mSwapchainHeight);
             if (eye + 1 >= VIEW_COUNT) {
@@ -1138,8 +1374,9 @@ void GfxWindowBackendOpenXR::EndRenderFrame() {
                                                         { (int32_t)mSwapchainWidth, (int32_t)mSwapchainHeight } };
             projectionViews[eye].subImage.imageArrayIndex = 0;
         }
-        projection.layerFlags =
-            XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
+        // Everything drawn over the picture blends into the same image, and a blend that keeps the
+        // alpha right can only work on colour already multiplied by it. The layer reads it the same way.
+        projection.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
         projection.space = mSpace;
         projection.viewCount = VIEW_COUNT;
         projection.views = projectionViews;
@@ -1201,6 +1438,14 @@ void GfxWindowBackendOpenXR::Teardown() {
     if (mProgram != 0) {
         glDeleteProgram(mProgram);
         mProgram = 0;
+    }
+    if (mMenuProgram != 0) {
+        glDeleteProgram(mMenuProgram);
+        mMenuProgram = 0;
+    }
+    if (mCursorProgram != 0) {
+        glDeleteProgram(mCursorProgram);
+        mCursorProgram = 0;
     }
     if (mVao != 0) {
         glDeleteVertexArrays(1, &mVao);
