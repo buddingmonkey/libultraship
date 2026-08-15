@@ -23,8 +23,9 @@ namespace Fast {
 // Presents the game on a window anchored in the room. The frame is drawn once per eye, each with
 // an off-axis frustum from that eye to the window rectangle. Each eye's image is then drawn onto
 // the window rectangle inside a full-view projection layer, with the room showing through the
-// alpha around it. A button that opens the menu hangs in that alpha above the window, so the
-// picture holds nothing but the game. SDL keeps the window, the GLES context, audio and controllers.
+// alpha around it. A button that opens the menu, a bar that moves the window and a handle that
+// resizes it hang in that alpha, so the picture holds nothing but the game, and a pinch on the
+// picture still belongs to the game. SDL keeps the window, the GLES context, audio and controllers.
 class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
   public:
     static constexpr uint32_t VIEW_COUNT = 2;
@@ -43,6 +44,8 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     void Destroy() override;
 
   private:
+    enum class Grab { None, Move, Resize };
+
     bool StartSession();
     bool StartActions(bool handInteraction);
     void StartRefreshRates();
@@ -50,18 +53,32 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     void HandleStateChange(const XrEventDataSessionStateChanged& changed);
     void HandleReferenceSpaceChange(const XrEventDataReferenceSpaceChangePending& change);
     void PollLocalSpace();
+    XrVector3f HeadPosition() const;
+    bool PlaneHit(const XrPosef& pose, float* planeX, float* planeY) const;
+    float DiagonalReach(float planeX, float planeY) const;
+    bool OnBar(float planeX, float planeY) const;
+    int OnCorner(float planeX, float planeY) const;
+    void StartGrab(Grab kind, int hand, const XrVector3f& handPosition, float planeX, float planeY);
+    bool UpdateGrab(XrTime displayTime);
+    void EndGrab();
     void PumpPointer(XrTime displayTime);
     bool OpenFrame();
     void LocateViews();
+    void PlaceWindow();
+    void AnchorHere();
     void Recentre();
     XrVector3f ToWindowAxes(const XrVector3f& point) const;
     void MoveGlass();
-    void SizeWindow();
+    void ApplySettings();
     bool StartPlacementPass();
     float MenuSide() const;
     float MenuZone() const;
     float CursorSide() const;
     float MenuRise() const;
+    float BarWidth() const;
+    float BarHeight() const;
+    float BarDrop() const;
+    float CornerSide() const;
     XrPosef PlanePose(float x, float y) const;
     void PresentView(uint32_t view);
     void DrawOverlays(uint32_t eye);
@@ -93,12 +110,19 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     uint32_t mProgram = 0;
     uint32_t mMenuProgram = 0;
     uint32_t mCursorProgram = 0;
+    uint32_t mBarProgram = 0;
+    uint32_t mCornerProgram = 0;
     uint32_t mVao = 0;
     int32_t mMvpLoc = -1;
     int32_t mMenuMvpLoc = -1;
     int32_t mMenuGlowLoc = -1;
     int32_t mCursorMvpLoc = -1;
     int32_t mCursorDownLoc = -1;
+    int32_t mBarMvpLoc = -1;
+    int32_t mBarGlowLoc = -1;
+    int32_t mBarAspectLoc = -1;
+    int32_t mCornerMvpLoc = -1;
+    int32_t mCornerGlowLoc = -1;
 
     XrView mViews[VIEW_COUNT] = {};
     bool mViewsValid = false;
@@ -112,11 +136,23 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     float mWindowWidth = 0.0f;
     float mWindowHeight = 0.0f;
     float mWindowDistance = 0.0f;
+    float mWindowRadius = 0.0f;
+    float mWindowScale = 1.0f;
+    XrVector3f mPlacementHead = {};
+    XrVector3f mWindowDir = { 0.0f, 0.0f, -1.0f };
     XrPosef mAnchorPose = {};
     XrVector3f mViewpoint = {};
-    float mAnchorYaw = 0.0f;
     bool mAnchorValid = false;
     bool mWindowSized = false;
+
+    Grab mGrab = Grab::None;
+    int mGrabHand = 0;
+    XrVector3f mGrabHandPosition = {};
+    XrVector3f mGrabWindowPosition = {};
+    float mGrabScale = 1.0f;
+    float mGrabReach = 0.0f;
+    bool mBarHover = false;
+    int mCornerHover = -1;
 
     bool mSrgbWriteControl = false;
 

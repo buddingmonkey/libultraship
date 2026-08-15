@@ -28,8 +28,16 @@ void SetXrViewTangents(float tanHalfWidth, float tanHalfHeight);
 // game's field of view gives it, so this does not change the framing: it scales the whole diorama
 // towards the viewer, and a smaller world at a shorter range has more depth in it. Parallax on the
 // glass never exceeds one eye separation whatever the distance, so no setting here can make the
-// eyes diverge.
+// eyes diverge. The move bar writes the same number, so read it back before writing it again: the
+// one that moved last owns the range.
 void SetXrWindowDistance(float metres);
+float GetXrWindowDistance();
+
+// How large the window is drawn, as a multiple of the size the game's field of view gives it at
+// that range. It holds the range and widens the angle, so a larger window shows a larger diorama
+// where a shorter range shows a deeper one. The corner handles write the same number.
+void SetXrWindowScale(float scale);
+float GetXrWindowScale();
 
 // Puts the window in front of the viewer, where they are looking now.
 void RecentreXrWindow();

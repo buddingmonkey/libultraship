@@ -29,11 +29,25 @@
 namespace Fast {
 
 // The window hangs in front of where the user faced at start, as wide as the game's field of view
-// needs it to be there. The width below only holds until the first frame says otherwise.
+// needs it to be there. The width below only holds until the first frame says otherwise. The range
+// covers exactly what the depth setting can express, so a range the move bar leaves survives the
+// read-back into that setting.
 static constexpr float WINDOW_DISTANCE_DEFAULT = 0.5f;
-static constexpr float WINDOW_DISTANCE_MIN = 0.25f;
+static constexpr float WINDOW_DISTANCE_MIN = 0.5f;
 static constexpr float WINDOW_DISTANCE_MAX = 4.0f;
 static constexpr float WINDOW_WIDTH_METRES = 1.6f;
+
+// What the corner handles can do to the size, as a multiple of the size the game's field of view
+// gives the window at its range.
+static constexpr float WINDOW_SCALE_MIN = 0.5f;
+static constexpr float WINDOW_SCALE_MAX = 2.0f;
+
+// How far above or below the eyes the window can go, in radians, and where it starts to bend in to
+// face the user. Below the first figure it stands upright. The second is the end of the capsule,
+// and it is short of a quarter turn on purpose: a window that faces the user has no yaw at all
+// straight overhead.
+static constexpr float WINDOW_RISE_FLAT = 0.35f;
+static constexpr float WINDOW_RISE_MAX = 1.22f;
 
 // Game units from the viewpoint to the glass, which is also the scale: this many game units fill
 // one window distance of the room. A flat quad cannot hold anything nearer than the glass, so the
@@ -65,12 +79,37 @@ static constexpr float MENU_BUTTON_ZONE = 3.0f;
 // The cursor, in window heights. The rest of the rectangle holds the shadow.
 static constexpr float CURSOR_SIDE = 0.075f;
 
+// The move bar, in window widths and window heights: how wide and how tall it is drawn, how far
+// below the bottom edge it hangs, and how much taller than the drawing the rectangle that takes the
+// pinch is. A bar that thin needs the extra height to be reachable, and the gap is wider than the
+// growth, so the bar and the picture never contest the same pinch.
+static constexpr float MOVE_BAR_WIDTH = 0.22f;
+static constexpr float MOVE_BAR_HEIGHT = 0.022f;
+static constexpr float MOVE_BAR_GAP = 0.035f;
+static constexpr float MOVE_BAR_REACH = 2.6f;
+
+// The corner handle, in window heights: how large the drawing is, and how far outside the corner
+// the pinch reaches. The target is the part of that square outside the picture, so a pinch near a
+// corner of the game view still belongs to the game.
+static constexpr float CORNER_SIDE = 0.16f;
+static constexpr float CORNER_ZONE = 0.11f;
+
 // Radians of turn in a new LOCAL origin below which it reads as the system keeping the space near
 // the user rather than the user asking for a recentre. A gesture made while facing the old front
 // falls under it, and costs nothing: the window is already there.
 static constexpr float RECENTRE_YAW_MIN = 0.035f;
 
 static float sWindowDistance = WINDOW_DISTANCE_DEFAULT;
+static float sWindowScale = 1.0f;
+
+static float Clamp(float value, float low, float high) {
+    return value < low ? low : (value > high ? high : value);
+}
+
+static float Smoothstep(float low, float high, float value) {
+    const float t = Clamp((value - low) / (high - low), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
 
 static bool Failed(XrInstance instance, XrResult result, const char* what) {
     if (XR_SUCCEEDED(result)) {
@@ -394,7 +433,9 @@ bool GfxWindowBackendOpenXR::StartSession() {
     }
 
     // Until the first frame says what the game's field of view needs, the window keeps a plain size.
-    mWindowDistance = sWindowDistance;
+    mWindowRadius = sWindowDistance;
+    mWindowScale = sWindowScale;
+    mWindowDistance = mWindowRadius * mWindowScale;
     mWindowWidth = WINDOW_WIDTH_METRES;
     mWindowHeight = WINDOW_WIDTH_METRES * (float)mSwapchainHeight / (float)mSwapchainWidth;
 
@@ -563,6 +604,18 @@ static XrVector3f RotateByQuaternion(const XrQuaternionf& q, const XrVector3f& v
     return { v.x + 2.0f * (q.y * z - q.z * y), v.y + 2.0f * (q.z * x - q.x * z), v.z + 2.0f * (q.x * y - q.y * x) };
 }
 
+static XrVector3f RotateInverse(const XrQuaternionf& q, const XrVector3f& v) {
+    return RotateByQuaternion({ -q.x, -q.y, -q.z, q.w }, v);
+}
+
+static XrVector3f Subtract(const XrVector3f& a, const XrVector3f& b) {
+    return { a.x - b.x, a.y - b.y, a.z - b.z };
+}
+
+static float Length(const XrVector3f& v) {
+    return sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
+}
+
 static bool sPointerValid = false;
 static bool sPointerDown = false;
 static float sPointerU = 0.0f;
@@ -630,17 +683,195 @@ void SetXrFlatProjection(bool flat) {
 }
 
 void SetXrWindowDistance(float metres) {
-    if (metres < WINDOW_DISTANCE_MIN) {
-        metres = WINDOW_DISTANCE_MIN;
-    }
-    if (metres > WINDOW_DISTANCE_MAX) {
-        metres = WINDOW_DISTANCE_MAX;
-    }
-    sWindowDistance = metres;
+    sWindowDistance = Clamp(metres, WINDOW_DISTANCE_MIN, WINDOW_DISTANCE_MAX);
+}
+
+float GetXrWindowDistance() {
+    return sWindowDistance;
+}
+
+void SetXrWindowScale(float scale) {
+    sWindowScale = Clamp(scale, WINDOW_SCALE_MIN, WINDOW_SCALE_MAX);
+}
+
+float GetXrWindowScale() {
+    return sWindowScale;
 }
 
 float GetXrWindowAngularWidth() {
     return sWindowAngularWidth;
+}
+
+XrVector3f GfxWindowBackendOpenXR::HeadPosition() const {
+    const XrVector3f& left = mViews[0].pose.position;
+    const XrVector3f& right = mViews[1].pose.position;
+    return { 0.5f * (left.x + right.x), 0.5f * (left.y + right.y), 0.5f * (left.z + right.z) };
+}
+
+// Where an aim ray meets the plane the window hangs in, in metres from the middle of it. The button,
+// the move bar and the corner handle are all on that plane, so one intersection answers for them
+// all.
+bool GfxWindowBackendOpenXR::PlaneHit(const XrPosef& pose, float* planeX, float* planeY) const {
+    const XrVector3f origin = ToWindowAxes(pose.position);
+    const XrVector3f aim = RotateByQuaternion(pose.orientation, { 0.0f, 0.0f, -1.0f });
+    const XrVector3f forward = RotateInverse(mAnchorPose.orientation, aim);
+    if (forward.z >= -1e-4f) {
+        return false;
+    }
+    const float t = (-mWindowDistance - origin.z) / forward.z;
+    if (t <= 0.0f) {
+        return false;
+    }
+    *planeX = origin.x + t * forward.x;
+    *planeY = origin.y + t * forward.y;
+    return true;
+}
+
+// How far out along the window's diagonal a point on the plane sits. The aspect is locked, so the
+// direction of that diagonal does not change with the size and this one number is the whole resize.
+float GfxWindowBackendOpenXR::DiagonalReach(float planeX, float planeY) const {
+    const float halfWidth = 0.5f * mWindowWidth;
+    const float halfHeight = 0.5f * mWindowHeight;
+    const float diagonal = sqrtf(halfWidth * halfWidth + halfHeight * halfHeight);
+    return diagonal > 0.0f ? (fabsf(planeX) * halfWidth + fabsf(planeY) * halfHeight) / diagonal : 0.0f;
+}
+
+float GfxWindowBackendOpenXR::BarWidth() const {
+    return mWindowWidth * MOVE_BAR_WIDTH;
+}
+
+float GfxWindowBackendOpenXR::BarHeight() const {
+    return mWindowHeight * MOVE_BAR_HEIGHT;
+}
+
+float GfxWindowBackendOpenXR::BarDrop() const {
+    return -mWindowHeight * (0.5f + MOVE_BAR_GAP + MOVE_BAR_HEIGHT * 0.5f);
+}
+
+float GfxWindowBackendOpenXR::CornerSide() const {
+    return mWindowHeight * CORNER_SIDE;
+}
+
+bool GfxWindowBackendOpenXR::OnBar(float planeX, float planeY) const {
+    return fabsf(planeX) <= 0.625f * BarWidth() && fabsf(planeY - BarDrop()) <= 0.5f * BarHeight() * MOVE_BAR_REACH;
+}
+
+// The corner outside the picture, never the picture inside it. Bit 0 is the right side, bit 1 the top.
+int GfxWindowBackendOpenXR::OnCorner(float planeX, float planeY) const {
+    const float zone = mWindowHeight * CORNER_ZONE;
+    const float halfWidth = 0.5f * mWindowWidth;
+    const float halfHeight = 0.5f * mWindowHeight;
+    const float x = fabsf(planeX);
+    const float y = fabsf(planeY);
+    if (x <= halfWidth - zone || x >= halfWidth + zone || y <= halfHeight - zone || y >= halfHeight + zone ||
+        (x <= halfWidth && y <= halfHeight)) {
+        return -1;
+    }
+    return (planeX > 0.0f ? 1 : 0) | (planeY > 0.0f ? 2 : 0);
+}
+
+// A grab re-bases the window onto the head as it is now, so the range and the size it leaves are
+// the ones the user sees from where they stand.
+void GfxWindowBackendOpenXR::StartGrab(Grab kind, int hand, const XrVector3f& handPosition, float planeX,
+                                       float planeY) {
+    const XrVector3f head = HeadPosition();
+    const XrVector3f reach = Subtract(mAnchorPose.position, head);
+    const float radius = Length(reach);
+    mGrabReach = DiagonalReach(planeX, planeY);
+    if (radius < 1e-3f || (kind == Grab::Resize && mGrabReach < 1e-3f)) {
+        return;
+    }
+    mGrab = kind;
+    mGrabHand = hand;
+    mBarHover = kind == Grab::Move;
+    if (kind == Grab::Move) {
+        mCornerHover = -1;
+    }
+
+    // The grab must change nothing that can be seen. The head has moved since the window was
+    // placed, so the range from where the user is now is not the range it was placed with. The
+    // size takes up the difference, which holds the picture, and the window turns to face the
+    // user because that is what a window taken hold of does.
+    mGrabHandPosition = handPosition;
+    mGrabWindowPosition = mAnchorPose.position;
+    mGrabScale = mWindowDistance / radius;
+    mPlacementHead = head;
+    mWindowDir = { reach.x / radius, reach.y / radius, reach.z / radius };
+    mWindowRadius = radius;
+    mWindowScale = mGrabScale;
+    PlaceWindow();
+    sWindowDistance = mWindowRadius;
+    sWindowScale = mWindowScale;
+
+    // An anchor is a fixed pose and cannot follow the hand. A new one is made where the pinch lifts.
+    if (mAnchorSpace != XR_NULL_HANDLE) {
+        xrDestroySpace(mAnchorSpace);
+        mAnchorSpace = XR_NULL_HANDLE;
+    }
+}
+
+// Answers false when the pinch has lifted, which is what leaves the window where the hand left it.
+bool GfxWindowBackendOpenXR::UpdateGrab(XrTime displayTime) {
+    XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
+    getInfo.action = mSelectAction;
+    getInfo.subactionPath = mHandPath[mGrabHand];
+    XrActionStateBoolean select{ XR_TYPE_ACTION_STATE_BOOLEAN };
+    XrSpaceLocation location{ XR_TYPE_SPACE_LOCATION };
+    const XrSpaceLocationFlags needed = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+    if (XR_FAILED(xrGetActionStateBoolean(mSession, &getInfo, &select)) || !select.isActive ||
+        select.currentState != XR_TRUE ||
+        XR_FAILED(xrLocateSpace(mAimSpace[mGrabHand], mSpace, displayTime, &location)) ||
+        (location.locationFlags & needed) != needed) {
+        return false;
+    }
+
+    if (mGrab == Grab::Move) {
+        // The window goes where the hand goes, one metre for one metre. The user thus keeps hold of
+        // the part of the bar they took, and the window does not jump at the moment of the grab.
+        const XrVector3f moved = Subtract(location.pose.position, mGrabHandPosition);
+        const XrVector3f from = { mGrabWindowPosition.x + moved.x - mPlacementHead.x,
+                                  mGrabWindowPosition.y + moved.y - mPlacementHead.y,
+                                  mGrabWindowPosition.z + moved.z - mPlacementHead.z };
+        const float radius = Length(from);
+        if (radius > 1e-3f) {
+            mWindowDir = { from.x / radius, from.y / radius, from.z / radius };
+            mWindowRadius = radius;
+            mWindowScale = mGrabScale;
+            PlaceWindow();
+            sWindowDistance = mWindowRadius;
+            sWindowScale = mWindowScale;
+        }
+    } else {
+        // The plane does not move under a resize, so the corner stays under the ray that took it.
+        float planeX = 0.0f;
+        float planeY = 0.0f;
+        if (PlaneHit(location.pose, &planeX, &planeY)) {
+            const float reach = DiagonalReach(planeX, planeY);
+            if (reach > 1e-3f) {
+                mWindowScale = mGrabScale * reach / mGrabReach;
+                PlaceWindow();
+                sWindowDistance = mWindowRadius;
+                sWindowScale = mWindowScale;
+            }
+        }
+    }
+
+    // The hand is on the handle, and the handle lights to say so. A cursor as well is one mark too
+    // many, and under a move it would have to leave the point the user took hold of.
+    sCursorValid = false;
+    return true;
+}
+
+void GfxWindowBackendOpenXR::EndGrab() {
+    const Grab kind = mGrab;
+    mGrab = Grab::None;
+    mBarHover = false;
+    mCornerHover = -1;
+    AnchorHere();
+    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR",
+                        "window %s: %.2f x %.2f m at %.2f m, %.2f times its own size, %.1f degrees wide",
+                        kind == Grab::Move ? "moved" : "resized", mWindowWidth, mWindowHeight, mWindowRadius,
+                        mWindowScale, sWindowAngularWidth * 180.0f / (float)M_PI);
 }
 
 void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
@@ -648,6 +879,13 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         sMenuHover = false;
         sMenuHeld = false;
         sCursorValid = false;
+        // A session that stops answering ends the grab where the window stands, anchor and all.
+        if (mGrab != Grab::None && mAnchorValid) {
+            EndGrab();
+        }
+        mBarHover = false;
+        mCornerHover = -1;
+        mGrab = Grab::None;
         return;
     }
 
@@ -659,15 +897,31 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         return;
     }
 
+    // A held handle owns that hand until it lifts, and nothing else on the window answers.
+    if (mGrab != Grab::None) {
+        if (UpdateGrab(displayTime)) {
+            return;
+        }
+        EndGrab();
+    }
+
     bool hit = false;
     bool down = false;
     bool menuHit = false;
     bool menuDown = false;
+    bool barHit = false;
+    bool barDown = false;
+    int cornerHit = -1;
+    bool cornerDown = false;
     bool cursor = false;
     float cursorX = 0.0f;
     float cursorY = 0.0f;
     float u = 0.0f;
     float v = 0.0f;
+    int pinchHand = -1;
+    XrVector3f pinchPosition = {};
+    float pinchX = 0.0f;
+    float pinchY = 0.0f;
 
     const float menuHalf = 0.5f * MenuSide();
     const float zoneHalf = 0.5f * MenuZone();
@@ -681,27 +935,18 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
             continue;
         }
 
-        const XrVector3f origin = ToWindowAxes(location.pose.position);
-        const XrVector3f aim = RotateByQuaternion(location.pose.orientation, { 0.0f, 0.0f, -1.0f });
-        const float c = cosf(mAnchorYaw);
-        const float sn = sinf(mAnchorYaw);
-        const XrVector3f forward = { c * aim.x - sn * aim.z, aim.y, sn * aim.x + c * aim.z };
-        if (forward.z >= -1e-4f) {
-            continue;
-        }
-        const float t = (-mWindowDistance - origin.z) / forward.z;
-        if (t <= 0.0f) {
+        float planeX = 0.0f;
+        float planeY = 0.0f;
+        if (!PlaneHit(location.pose, &planeX, &planeY)) {
             continue;
         }
 
-        // Where the ray meets the plane the window hangs in, in metres from the middle of it. The
-        // button sits on the same plane, so one intersection answers for both.
-        const float planeX = origin.x + t * forward.x;
-        const float planeY = origin.y + t * forward.y;
         const bool onMenu = fabsf(planeX) <= menuHalf && fabsf(planeY - menuRise) <= menuHalf;
         const bool onWindow = fabsf(planeX) <= 0.5f * mWindowWidth && fabsf(planeY) <= 0.5f * mWindowHeight;
         const bool inZone = fabsf(planeX) <= zoneHalf && fabsf(planeY - menuRise) <= zoneHalf;
-        if (!onWindow && !inZone) {
+        const bool onBar = OnBar(planeX, planeY);
+        const int onCorner = OnCorner(planeX, planeY);
+        if (!onWindow && !inZone && !onBar && onCorner < 0) {
             continue;
         }
 
@@ -723,6 +968,16 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
                 menuHit = true;
                 menuDown = pinching;
             }
+        } else if (onBar) {
+            if (!barHit || pinching) {
+                barHit = true;
+                barDown = pinching;
+            }
+        } else if (onCorner >= 0) {
+            if (cornerHit < 0 || pinching) {
+                cornerHit = onCorner;
+                cornerDown = pinching;
+            }
         } else if (onWindow && (!hit || pinching)) {
             hit = true;
             down = pinching;
@@ -730,11 +985,30 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
             v = 0.5f - planeY / mWindowHeight;
         }
         if (pinching) {
+            pinchHand = hand;
+            pinchPosition = location.pose.position;
+            pinchX = planeX;
+            pinchY = planeY;
             break;
         }
     }
 
     const bool wasDown = sPointerDown;
+    mBarHover = barHit;
+    mCornerHover = cornerHit;
+
+    // A pinch on a handle takes the window, but only if it did not start on the picture: a finger
+    // already down belongs to the game until it lifts.
+    if (!wasDown && !sMenuHeld && mViewsValid && pinchHand >= 0 && (barDown || cornerDown)) {
+        StartGrab(barDown ? Grab::Move : Grab::Resize, pinchHand, pinchPosition, pinchX, pinchY);
+        if (mGrab != Grab::None) {
+            sMenuHover = false;
+            sCursorValid = true;
+            sCursorX = cursorX;
+            sCursorY = cursorY;
+            return;
+        }
+    }
 
     // A pinch that lands on the button holds it until it lifts. It works on the lift, so a pinch
     // that leaves the button before it opens does nothing, and one that arrives from the picture
@@ -895,28 +1169,55 @@ void GfxWindowBackendOpenXR::LocateViews() {
     mViewsValid = count == VIEW_COUNT && (viewState.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0;
 }
 
-// Puts the window where the user is looking now, upright and level. Nothing else ever placed it:
-// it used to hang off the origin of the reference space, which is wherever the headset happened to
-// be when the session opened.
-void GfxWindowBackendOpenXR::Recentre() {
-    // The head pose comes from the views already located this frame. Locating VIEW space instead
-    // reports no valid pose on Galaxy XR while the headset is worn, which silently disabled every
-    // recentre.
-    const XrQuaternionf& q = mViews[0].pose.orientation;
-    const XrVector3f& left = mViews[0].pose.position;
-    const XrVector3f& right = mViews[1].pose.position;
+// Where the window hangs comes from four numbers: the head it was placed around, the direction from
+// that head to its middle, the range, and what the corner handles left. The apex of the game's
+// frustum sits a scaled range behind the glass, which is what lets a larger window show a larger
+// diorama from the same place where a shorter range shows a deeper one.
+//
+// The window hangs on a capsule around the user, not a sphere. It faces the user in the horizontal
+// and stands upright through the middle of the range, so it can go up and down with no tilt at all.
+// It bends in only near the ends, where an upright panel is read at too flat an angle. The bend
+// stops short of straight up, because the yaw of a window that faces the user has no answer there.
+void GfxWindowBackendOpenXR::PlaceWindow() {
+    mWindowRadius = Clamp(mWindowRadius, WINDOW_DISTANCE_MIN, WINDOW_DISTANCE_MAX);
+    mWindowScale = Clamp(mWindowScale, WINDOW_SCALE_MIN, WINDOW_SCALE_MAX);
+    mWindowDistance = mWindowRadius * mWindowScale;
+    if (sViewTanHalfWidth > 0.0f && sViewTanHalfHeight > 0.0f) {
+        mWindowSized = true;
+        mWindowWidth = 2.0f * mWindowDistance * sViewTanHalfWidth;
+        mWindowHeight = 2.0f * mWindowDistance * sViewTanHalfHeight;
+    }
+    sWindowAngularWidth = 2.0f * atanf(0.5f * mWindowWidth / mWindowRadius);
 
-    // Yaw alone. A window that took the head's pitch and roll would hang askew in the room.
-    mAnchorYaw = YawOf(q);
-    mViewpoint = { 0.5f * (left.x + right.x), 0.5f * (left.y + right.y), 0.5f * (left.z + right.z) };
-    mAnchorPose.orientation = { 0.0f, sinf(0.5f * mAnchorYaw), 0.0f, cosf(0.5f * mAnchorYaw) };
-    mAnchorPose.position = { mViewpoint.x - sinf(mAnchorYaw) * mWindowDistance, mViewpoint.y,
-                             mViewpoint.z - cosf(mAnchorYaw) * mWindowDistance };
+    const float across = sqrtf(mWindowDir.x * mWindowDir.x + mWindowDir.z * mWindowDir.z);
+    const float azimuth = across > 1e-4f ? atan2f(mWindowDir.x, mWindowDir.z) : 0.0f;
+    const float rise = Clamp(atan2f(mWindowDir.y, across), -WINDOW_RISE_MAX, WINDOW_RISE_MAX);
+    mWindowDir = { sinf(azimuth) * cosf(rise), sinf(rise), cosf(azimuth) * cosf(rise) };
+
+    // Yaw and pitch. A window that took a roll as well would hang askew in the room.
+    const float pitch = rise * Smoothstep(WINDOW_RISE_FLAT, WINDOW_RISE_MAX, fabsf(rise));
+    const float yaw = atan2f(-mWindowDir.x, -mWindowDir.z);
+    const float cy = cosf(0.5f * yaw);
+    const float sy = sinf(0.5f * yaw);
+    const float cp = cosf(0.5f * pitch);
+    const float sp = sinf(0.5f * pitch);
+    mAnchorPose.orientation = { cy * sp, sy * cp, -sy * sp, cy * cp };
+    mAnchorPose.position = { mPlacementHead.x + mWindowDir.x * mWindowRadius,
+                             mPlacementHead.y + mWindowDir.y * mWindowRadius,
+                             mPlacementHead.z + mWindowDir.z * mWindowRadius };
+
+    // Along the window's own normal, which is not the line to the head once the window stands
+    // upright below or above it. The apex of the frustum has to sit square behind the glass.
+    const XrVector3f normal = RotateByQuaternion(mAnchorPose.orientation, { 0.0f, 0.0f, 1.0f });
+    mViewpoint = { mAnchorPose.position.x + normal.x * mWindowDistance,
+                   mAnchorPose.position.y + normal.y * mWindowDistance,
+                   mAnchorPose.position.z + normal.z * mWindowDistance };
     mAnchorValid = true;
-    sRecentreWanted = false;
+}
 
-    // A spatial anchor holds a pose through SLAM itself, so the window stays put even when the
-    // reference spaces re-origin around the user.
+// A spatial anchor holds a pose through SLAM itself, so the window stays put even when the
+// reference spaces re-origin around the user.
+void GfxWindowBackendOpenXR::AnchorHere() {
     if (mCreateAnchorSpace != nullptr) {
         if (mAnchorSpace != XR_NULL_HANDLE) {
             xrDestroySpace(mAnchorSpace);
@@ -933,20 +1234,36 @@ void GfxWindowBackendOpenXR::Recentre() {
             __android_log_print(ANDROID_LOG_WARN, "LighthouseXR", "anchor creation failed (%d)", (int)result);
         }
     }
+}
+
+// Puts the window where the user is looking now, upright and level. Nothing else ever placed it:
+// it used to hang off the origin of the reference space, which is wherever the headset happened to
+// be when the session opened.
+void GfxWindowBackendOpenXR::Recentre() {
+    // The head pose comes from the views already located this frame. Locating VIEW space instead
+    // reports no valid pose on Galaxy XR while the headset is worn, which silently disabled every
+    // recentre.
+    const float yaw = YawOf(mViews[0].pose.orientation);
+    // A recentre wins over a drag: it is the way back from a window put where no hand can reach it.
+    mGrab = Grab::None;
+    mBarHover = false;
+    mCornerHover = -1;
+    mPlacementHead = HeadPosition();
+    mWindowDir = { -sinf(yaw), 0.0f, -cosf(yaw) };
+    mWindowRadius = sWindowDistance;
+    mWindowScale = sWindowScale;
+    sRecentreWanted = false;
+    PlaceWindow();
+    AnchorHere();
 
     __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "window placed at %.2f %.2f %.2f facing %.0f degrees%s",
                         mAnchorPose.position.x, mAnchorPose.position.y, mAnchorPose.position.z,
-                        mAnchorYaw * 180.0f / (float)M_PI, mAnchorSpace != XR_NULL_HANDLE ? " on an anchor" : "");
+                        yaw * 180.0f / (float)M_PI, mAnchorSpace != XR_NULL_HANDLE ? " on an anchor" : "");
 }
 
-// The head offset from the viewpoint the window was placed for, in the window's own axes.
+// A point measured from the viewpoint the window was placed for, in the window's own axes.
 XrVector3f GfxWindowBackendOpenXR::ToWindowAxes(const XrVector3f& point) const {
-    const float dx = point.x - mViewpoint.x;
-    const float dy = point.y - mViewpoint.y;
-    const float dz = point.z - mViewpoint.z;
-    const float c = cosf(mAnchorYaw);
-    const float sn = sinf(mAnchorYaw);
-    return { c * dx - sn * dz, dy, sn * dx + c * dz };
+    return RotateInverse(mAnchorPose.orientation, Subtract(point, mViewpoint));
 }
 
 // In at once, so nothing is ever left standing in front of the window; out slowly, so one near
@@ -968,22 +1285,22 @@ void GfxWindowBackendOpenXR::MoveGlass() {
     sSceneNear = std::numeric_limits<float>::max();
 }
 
-void GfxWindowBackendOpenXR::SizeWindow() {
-    if (sViewTanHalfWidth <= 0.0f || sViewTanHalfHeight <= 0.0f) {
+// The settings and the handles write the same two numbers, and the handles write them through
+// PlaceWindow, so anything that differs here came from the menu and moves the window in place.
+void GfxWindowBackendOpenXR::ApplySettings() {
+    const bool ranged = sWindowDistance != mWindowRadius || sWindowScale != mWindowScale;
+    if (!ranged && (mWindowSized || sViewTanHalfWidth <= 0.0f)) {
         return;
     }
-    if (mWindowSized && sWindowDistance == mWindowDistance) {
-        return;
+    mWindowRadius = sWindowDistance;
+    mWindowScale = sWindowScale;
+    PlaceWindow();
+    if (ranged) {
+        AnchorHere();
     }
-    mWindowSized = true;
-    mWindowDistance = sWindowDistance;
-    sRecentreWanted = true;
-    mWindowWidth = 2.0f * mWindowDistance * sViewTanHalfWidth;
-    mWindowHeight = 2.0f * mWindowDistance * sViewTanHalfHeight;
-    sWindowAngularWidth = 2.0f * atanf(0.5f * mWindowWidth / mWindowDistance);
     __android_log_print(ANDROID_LOG_INFO, "LighthouseXR",
                         "window %.2f x %.2f m at %.2f m, %.1f degrees wide, up to %.0f units per metre", mWindowWidth,
-                        mWindowHeight, mWindowDistance, sWindowAngularWidth * 180.0f / (float)M_PI,
+                        mWindowHeight, mWindowRadius, sWindowAngularWidth * 180.0f / (float)M_PI,
                         WINDOW_DEPTH_MAX / mWindowDistance);
 }
 
@@ -1028,7 +1345,6 @@ bool GfxWindowBackendOpenXR::OpenFrame() {
     }
 
     MoveGlass();
-    SizeWindow();
 
     XrFrameWaitInfo waitInfo{ XR_TYPE_FRAME_WAIT_INFO };
     XrFrameState frameState{ XR_TYPE_FRAME_STATE };
@@ -1049,20 +1365,28 @@ bool GfxWindowBackendOpenXR::OpenFrame() {
     PollLocalSpace();
     if (mViewsValid && (!mAnchorValid || (sRecentreWanted && mDisplayTime >= mRecentreAfter))) {
         Recentre();
+    } else if (mAnchorValid && mGrab == Grab::None) {
+        ApplySettings();
     }
 
     // The anchor is the ground truth for where the window hangs. Follow it in the app space so
-    // the off-axis frustum and the pointer agree with the quad the compositor shows.
-    if (mAnchorSpace != XR_NULL_HANDLE && mAnchorValid) {
+    // the off-axis frustum and the pointer agree with the picture the compositor shows.
+    if (mAnchorSpace != XR_NULL_HANDLE && mAnchorValid && mGrab == Grab::None) {
         XrSpaceLocation anchor{ XR_TYPE_SPACE_LOCATION };
         const XrSpaceLocationFlags needed =
             XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
         if (XR_SUCCEEDED(xrLocateSpace(mAnchorSpace, mSpace, mDisplayTime, &anchor)) &&
             (anchor.locationFlags & needed) == needed) {
-            mAnchorYaw = YawOf(anchor.pose.orientation);
             mAnchorPose = anchor.pose;
-            mViewpoint = { anchor.pose.position.x + sinf(mAnchorYaw) * mWindowDistance, anchor.pose.position.y,
-                           anchor.pose.position.z + cosf(mAnchorYaw) * mWindowDistance };
+            const XrVector3f normal = RotateByQuaternion(anchor.pose.orientation, { 0.0f, 0.0f, 1.0f });
+            mViewpoint = { anchor.pose.position.x + normal.x * mWindowDistance,
+                           anchor.pose.position.y + normal.y * mWindowDistance,
+                           anchor.pose.position.z + normal.z * mWindowDistance };
+            // The head the window was placed around goes with the anchor. It is not the reverse of
+            // the normal any more: an upright window above or below the eyes does not face them.
+            mPlacementHead = { anchor.pose.position.x - mWindowDir.x * mWindowRadius,
+                               anchor.pose.position.y - mWindowDir.y * mWindowRadius,
+                               anchor.pose.position.z - mWindowDir.z * mWindowRadius };
         }
     }
 
@@ -1216,12 +1540,53 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
         "    oColor = c;\n"
         "}\n";
 
+    // The move bar. The quad is far wider than it is tall, so the shape is drawn in a space the
+    // width stretches, or the ends would be ellipses rather than half circles.
+    static const char* BAR_FRAGMENT = "#version 300 es\n"
+                                      "precision highp float;\n"
+                                      "uniform float uGlow;\n"
+                                      "uniform float uAspect;\n"
+                                      "in vec2 vUv;\n"
+                                      "out vec4 oColor;\n"
+                                      "void main() {\n"
+                                      "    vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);\n"
+                                      "    vec2 d = abs(p) - vec2(0.5 * uAspect - 0.5, 0.0);\n"
+                                      "    float sd = length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - 0.5;\n"
+                                      "    float aa = fwidth(sd);\n"
+                                      "    float alpha = min((1.0 - smoothstep(-aa, aa, sd)) * uGlow, 1.0);\n"
+                                      "    oColor = vec4(vec3(alpha), alpha);\n"
+                                      "}\n";
+    // A quarter turn of a thick round-capped stroke, outside one corner of the picture. The quad is
+    // centred on that corner and the picture lies towards negative x and y, so the handle never
+    // covers the game. Beyond the quarter the arc ends in its caps, which is what rounds the ends.
+    static const char* CORNER_FRAGMENT =
+        "#version 300 es\n"
+        "precision highp float;\n"
+        "uniform float uGlow;\n"
+        "in vec2 vUv;\n"
+        "out vec4 oColor;\n"
+        "const float GAP = 0.125;\n"
+        "const float RADIUS = 0.28;\n"
+        "const float THICK = 0.05;\n"
+        "void main() {\n"
+        "    vec2 p = vUv - 0.5 - vec2(GAP - RADIUS);\n"
+        "    float d = (p.x > 0.0 && p.y > 0.0)\n"
+        "                  ? abs(length(p) - RADIUS)\n"
+        "                  : min(length(p - vec2(RADIUS, 0.0)), length(p - vec2(0.0, RADIUS)));\n"
+        "    d -= THICK;\n"
+        "    float aa = fwidth(d);\n"
+        "    float alpha = min((1.0 - smoothstep(-aa, aa, d)) * uGlow, 1.0);\n"
+        "    oColor = vec4(vec3(alpha), alpha);\n"
+        "}\n";
+
     const GLuint vertex = CompileShader(GL_VERTEX_SHADER, VERTEX);
     mProgram = LinkProgram(vertex, FRAGMENT);
     mMenuProgram = LinkProgram(vertex, MENU_FRAGMENT);
     mCursorProgram = LinkProgram(vertex, CURSOR_FRAGMENT);
+    mBarProgram = LinkProgram(vertex, BAR_FRAGMENT);
+    mCornerProgram = LinkProgram(vertex, CORNER_FRAGMENT);
     glDeleteShader(vertex);
-    if (mProgram == 0 || mMenuProgram == 0 || mCursorProgram == 0) {
+    if (mProgram == 0 || mMenuProgram == 0 || mCursorProgram == 0 || mBarProgram == 0 || mCornerProgram == 0) {
         return false;
     }
     mMvpLoc = glGetUniformLocation(mProgram, "uMvp");
@@ -1232,6 +1597,11 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
     mMenuGlowLoc = glGetUniformLocation(mMenuProgram, "uGlow");
     mCursorMvpLoc = glGetUniformLocation(mCursorProgram, "uMvp");
     mCursorDownLoc = glGetUniformLocation(mCursorProgram, "uDown");
+    mBarMvpLoc = glGetUniformLocation(mBarProgram, "uMvp");
+    mBarGlowLoc = glGetUniformLocation(mBarProgram, "uGlow");
+    mBarAspectLoc = glGetUniformLocation(mBarProgram, "uAspect");
+    mCornerMvpLoc = glGetUniformLocation(mCornerProgram, "uMvp");
+    mCornerGlowLoc = glGetUniformLocation(mCornerProgram, "uGlow");
     glGenVertexArrays(1, &mVao);
     return true;
 }
@@ -1341,6 +1711,30 @@ void GfxWindowBackendOpenXR::DrawOverlays(uint32_t eye) {
     glUniformMatrix4fv(mMenuMvpLoc, 1, GL_FALSE, mvp);
     glUniform1f(mMenuGlowLoc, sMenuHeld ? 1.8f : (sMenuHover ? 1.3f : 1.0f));
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    // The bar is always there, dim, so the user knows the window can be moved. The corner handle
+    // shows only for the corner the hand is at, which is how the picture keeps a clean frame.
+    const bool moving = mGrab == Grab::Move;
+    PlacementMatrix(mViews[eye], PlanePose(0.0f, BarDrop()), BarWidth(), BarHeight(), mvp);
+    glUseProgram(mBarProgram);
+    glUniformMatrix4fv(mBarMvpLoc, 1, GL_FALSE, mvp);
+    glUniform1f(mBarAspectLoc, BarWidth() / BarHeight());
+    glUniform1f(mBarGlowLoc, moving ? 0.95f : (mBarHover ? 0.7f : 0.35f));
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    if (mCornerHover >= 0) {
+        // One handle is drawn, and the quad is mirrored onto the corner the hand is at. A negative
+        // side flips the shape with it.
+        const float handle = CornerSide();
+        const float signX = (mCornerHover & 1) != 0 ? 1.0f : -1.0f;
+        const float signY = (mCornerHover & 2) != 0 ? 1.0f : -1.0f;
+        PlacementMatrix(mViews[eye], PlanePose(signX * 0.5f * mWindowWidth, signY * 0.5f * mWindowHeight),
+                        signX * handle, signY * handle, mvp);
+        glUseProgram(mCornerProgram);
+        glUniformMatrix4fv(mCornerMvpLoc, 1, GL_FALSE, mvp);
+        glUniform1f(mCornerGlowLoc, mGrab == Grab::Resize ? 0.95f : 0.7f);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
 
     if (sCursorValid) {
         const float cursor = CursorSide();
@@ -1500,6 +1894,14 @@ void GfxWindowBackendOpenXR::Teardown() {
     if (mCursorProgram != 0) {
         glDeleteProgram(mCursorProgram);
         mCursorProgram = 0;
+    }
+    if (mBarProgram != 0) {
+        glDeleteProgram(mBarProgram);
+        mBarProgram = 0;
+    }
+    if (mCornerProgram != 0) {
+        glDeleteProgram(mCornerProgram);
+        mCornerProgram = 0;
     }
     if (mVao != 0) {
         glDeleteVertexArrays(1, &mVao);
