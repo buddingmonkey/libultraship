@@ -1,6 +1,6 @@
 #pragma once
 
-#ifdef __ANDROID__
+#ifdef ENABLE_DEBUG_TOOLS
 
 namespace Fast::DebugCapture {
 

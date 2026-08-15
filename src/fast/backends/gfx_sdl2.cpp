@@ -45,7 +45,7 @@
 #include <SDL_syswm.h>
 #endif
 
-#ifdef __ANDROID__
+#ifdef ENABLE_DEBUG_TOOLS
 #include "fast/backends/gfx_debug_capture.h"
 #endif
 
@@ -758,7 +758,7 @@ void GfxWindowBackendSDL2::SyncFramerateWithTime() const {
 }
 
 void GfxWindowBackendSDL2::SwapBuffersBegin() {
-#ifdef __ANDROID__
+#ifdef ENABLE_DEBUG_TOOLS
     if (DebugCapture::Pending()) {
         int width = 0;
         int height = 0;

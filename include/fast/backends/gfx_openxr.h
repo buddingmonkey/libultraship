@@ -16,7 +16,6 @@
 // gfx_sdl.h names SDL types without including SDL itself.
 #include <SDL2/SDL.h>
 #include "gfx_sdl.h"
-#include "gfx_xr_pointer.h"
 #include "gfx_xr_view.h"
 
 namespace Fast {

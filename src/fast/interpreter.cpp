@@ -1647,8 +1647,8 @@ float Interpreter::XrVisibleDepth(struct LoadedVertex* const vertices[3]) const 
         for (int plane = 0; plane < 5; plane++) {
             const int axis = plane >> 1;
             const float sign = (plane & 1) != 0 ? -1.0f : 1.0f;
-            const float (*in)[4] = poly[plane & 1];
-            float (*out)[4] = poly[(plane & 1) ^ 1];
+            const float(*in)[4] = poly[plane & 1];
+            float(*out)[4] = poly[(plane & 1) ^ 1];
             int kept = 0;
             for (int i = 0; i < count; i++) {
                 const float* a = in[i];
@@ -4850,11 +4850,10 @@ static constexpr UcodeHandler rdpHandlers = {
 
 static constexpr UcodeHandler otrHandlers = {
     { OTR_G_SETTIMG_OTR_HASH,
-      { "G_SETTIMG_OTR_HASH", gfx_set_timg_otr_hash_handler_custom } },                // G_SETTIMG_OTR_HASH (0x20)
-    { OTR_G_SETFB, { "G_SETFB", gfx_set_fb_handler_custom } },                         // G_SETFB (0x21)
-    { RDP_G_XR_FLATPROJ, { "G_XR_FLATPROJ", gfx_xr_flat_projection_handler_custom } }, // G_XR_FLATPROJ (0x4b)
-    { OTR_G_RESETFB, { "G_RESETFB", gfx_reset_fb_handler_custom } },                   // G_RESETFB (0x22)
-    { OTR_G_SETTIMG_FB, { "G_SETTIMG_FB", gfx_set_timg_fb_handler_custom } },          // G_SETTIMG_FB (0x23)
+      { "G_SETTIMG_OTR_HASH", gfx_set_timg_otr_hash_handler_custom } },       // G_SETTIMG_OTR_HASH (0x20)
+    { OTR_G_SETFB, { "G_SETFB", gfx_set_fb_handler_custom } },                // G_SETFB (0x21)
+    { OTR_G_RESETFB, { "G_RESETFB", gfx_reset_fb_handler_custom } },          // G_RESETFB (0x22)
+    { OTR_G_SETTIMG_FB, { "G_SETTIMG_FB", gfx_set_timg_fb_handler_custom } }, // G_SETTIMG_FB (0x23)
     { OTR_G_VTX_OTR_FILEPATH,
       { "G_VTX_OTR_FILEPATH", gfx_vtx_otr_filepath_handler_custom } }, // G_VTX_OTR_FILEPATH (0x24)
     { OTR_G_SETTIMG_OTR_FILEPATH,
@@ -4888,6 +4887,7 @@ static constexpr UcodeHandler otrHandlers = {
     { RDP_G_LOADBLOCK_WIDE, { "G_LOADBLOCK_WIDE", gfx_load_block_wide_handler_rdp } }, // RDP_G_LOADBLOCK_WIDE (-15)
     { RDP_G_VTX_WIDE, { "G_VTX_WIDE", gfx_vtx_handler_f3dex2 } },                      // RDP_G_VTX_WIDE (-16)
     { RDP_G_TRI1_WIDE, { "G_TRI1_WIDE", gfx_tri1_handler_f3dex2 } },                   // RDP_G_TRI1_WIDE (-17)
+    { RDP_G_XR_FLATPROJ, { "G_XR_FLATPROJ", gfx_xr_flat_projection_handler_custom } }, // RDP_G_XR_FLATPROJ (0x4b)
 };
 
 static constexpr UcodeHandler f3dex2Handlers = {

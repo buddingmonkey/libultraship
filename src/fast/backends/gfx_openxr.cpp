@@ -17,7 +17,9 @@
 #include <SDL2/SDL.h>
 #include <spdlog/spdlog.h>
 
+#ifdef ENABLE_DEBUG_TOOLS
 #include "fast/backends/gfx_debug_capture.h"
+#endif
 #include "ship/Context.h"
 #include "ship/window/MouseStateManager.h"
 #include "ship/window/Window.h"
@@ -232,7 +234,8 @@ bool GfxWindowBackendOpenXR::StartSession() {
     // LOCAL on Android XR follows the head position, so nothing put in it stands still in the
     // room. UNBOUNDED is the space that does.
     XrReferenceSpaceCreateInfo spaceInfo{ XR_TYPE_REFERENCE_SPACE_CREATE_INFO };
-    spaceInfo.referenceSpaceType = unbounded ? XR_REFERENCE_SPACE_TYPE_UNBOUNDED_ANDROID : XR_REFERENCE_SPACE_TYPE_LOCAL;
+    spaceInfo.referenceSpaceType =
+        unbounded ? XR_REFERENCE_SPACE_TYPE_UNBOUNDED_ANDROID : XR_REFERENCE_SPACE_TYPE_LOCAL;
     spaceInfo.poseInReferenceSpace.orientation.w = 1.0f;
     if (unbounded && XR_FAILED(xrCreateReferenceSpace(mSession, &spaceInfo, &mSpace))) {
         spaceInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
@@ -243,9 +246,8 @@ bool GfxWindowBackendOpenXR::StartSession() {
     }
     mSpaceType = spaceInfo.referenceSpaceType;
 
-    if (trackables &&
-        XR_FAILED(xrGetInstanceProcAddr(mInstance, "xrCreateAnchorSpaceANDROID",
-                                        (PFN_xrVoidFunction*)&mCreateAnchorSpace))) {
+    if (trackables && XR_FAILED(xrGetInstanceProcAddr(mInstance, "xrCreateAnchorSpaceANDROID",
+                                                      (PFN_xrVoidFunction*)&mCreateAnchorSpace))) {
         mCreateAnchorSpace = nullptr;
     }
     __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "reference space %s",
@@ -563,16 +565,6 @@ static void ToggleMenu() {
     }
     menu->ToggleVisibility();
     context->GetWindow()->GetMouseStateManager()->UpdateMouseCapture();
-}
-
-bool GetXrPointer(float* u, float* v, bool* down) {
-    if (!sPointerValid) {
-        return false;
-    }
-    *u = sPointerU;
-    *v = sPointerV;
-    *down = sPointerDown;
-    return true;
 }
 
 static bool sViewGeometryValid = false;
@@ -1103,14 +1095,15 @@ static GLuint LinkProgram(GLuint vertex, const char* fragmentSource) {
 }
 
 bool GfxWindowBackendOpenXR::StartPlacementPass() {
-    static const char* VERTEX = "#version 300 es\n"
-                                "uniform mat4 uMvp;\n"
-                                "out vec2 vUv;\n"
-                                "void main() {\n"
-                                "    vec2 c = vec2((gl_VertexID & 1) == 1 ? 0.5 : -0.5, (gl_VertexID & 2) == 2 ? 0.5 : -0.5);\n"
-                                "    vUv = c + 0.5;\n"
-                                "    gl_Position = uMvp * vec4(c, 0.0, 1.0);\n"
-                                "}\n";
+    static const char* VERTEX =
+        "#version 300 es\n"
+        "uniform mat4 uMvp;\n"
+        "out vec2 vUv;\n"
+        "void main() {\n"
+        "    vec2 c = vec2((gl_VertexID & 1) == 1 ? 0.5 : -0.5, (gl_VertexID & 2) == 2 ? 0.5 : -0.5);\n"
+        "    vUv = c + 0.5;\n"
+        "    gl_Position = uMvp * vec4(c, 0.0, 1.0);\n"
+        "}\n";
     static const char* FRAGMENT = "#version 300 es\n"
                                   "precision highp float;\n"
                                   "uniform sampler2D uTex;\n"
@@ -1221,19 +1214,31 @@ static void RotationFromQuaternion(const XrQuaternionf& q, float r[9]) {
 // The window rectangle at the anchor pose, seen from the eye pose, through the eye's frustum.
 static void PlacementMatrix(const XrView& eye, const XrPosef& anchor, float width, float height, float mvp[16]) {
     float r[9];
-    RotationFromQuaternion(anchor.orientation, r);
-    const float model[16] = { r[0] * width,  r[1] * width,  r[2] * width,  0.0f, //
-                              r[3] * height, r[4] * height, r[5] * height, 0.0f, //
-                              r[6],          r[7],          r[8],          0.0f, //
-                              anchor.position.x, anchor.position.y, anchor.position.z, 1.0f };
 
+    // Columns 0 and 1 carry the rectangle's own size, so the unit quad comes out the window.
+    RotationFromQuaternion(anchor.orientation, r);
+    float model[16] = {};
+    for (int axis = 0; axis < 3; axis++) {
+        model[axis] = r[axis] * width;
+        model[4 + axis] = r[3 + axis] * height;
+        model[8 + axis] = r[6 + axis];
+    }
+    model[12] = anchor.position.x;
+    model[13] = anchor.position.y;
+    model[14] = anchor.position.z;
+    model[15] = 1.0f;
+
+    // The inverse of the eye pose, which for a rotation is its transpose.
     RotationFromQuaternion(eye.pose.orientation, r);
     const XrVector3f& p = eye.pose.position;
-    const float view[16] = { r[0], r[3], r[6], 0.0f, //
-                             r[1], r[4], r[7], 0.0f, //
-                             r[2], r[5], r[8], 0.0f, //
-                             -(r[0] * p.x + r[1] * p.y + r[2] * p.z), -(r[3] * p.x + r[4] * p.y + r[5] * p.z),
-                             -(r[6] * p.x + r[7] * p.y + r[8] * p.z), 1.0f };
+    float view[16] = {};
+    for (int axis = 0; axis < 3; axis++) {
+        view[axis * 4] = r[axis];
+        view[axis * 4 + 1] = r[3 + axis];
+        view[axis * 4 + 2] = r[6 + axis];
+        view[12 + axis] = -(r[axis * 3] * p.x + r[axis * 3 + 1] * p.y + r[axis * 3 + 2] * p.z);
+    }
+    view[15] = 1.0f;
 
     const float tl = tanf(eye.fov.angleLeft);
     const float tr = tanf(eye.fov.angleRight);
@@ -1344,12 +1349,14 @@ void GfxWindowBackendOpenXR::DrawEye(uint32_t eye, uint32_t sourceView) {
 
         DrawOverlays(eye);
 
+#ifdef ENABLE_DEBUG_TOOLS
         if (DebugCapture::Pending()) {
             DebugCapture::WriteBoundFramebuffer(eye == 0 ? "left" : "right", mSwapchainWidth, mSwapchainHeight);
             if (eye + 1 >= VIEW_COUNT) {
                 DebugCapture::Finish();
             }
         }
+#endif
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 

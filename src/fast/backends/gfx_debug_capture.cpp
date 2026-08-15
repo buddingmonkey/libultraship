@@ -1,4 +1,4 @@
-#ifdef __ANDROID__
+#ifdef ENABLE_DEBUG_TOOLS
 
 #include "fast/backends/gfx_debug_capture.h"
 

@@ -29,6 +29,10 @@ if (NOT ENABLE_OPENXR)
     list(FILTER Source_Files__Graphic EXCLUDE REGEX "gfx_openxr")
 endif()
 
+if (NOT ENABLE_DEBUG_TOOLS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Android")
+    list(FILTER Source_Files__Graphic EXCLUDE REGEX "gfx_debug_capture")
+endif()
+
 if (NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
     list(FILTER Source_Files__Graphic EXCLUDE REGEX "graphic/Fast3D/backends/gfx_dxgi*")
     list(FILTER Source_Files__Graphic EXCLUDE REGEX "graphic/Fast3D/backends/gfx_direct3d*")

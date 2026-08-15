@@ -446,9 +446,11 @@ class Interpreter {
     // Swaps the game's perspective for an off-axis frustum from the tracked eye to a window fixed
     // in the room. The game's own view stays where it is; only the apex of the frustum moves.
     void ApplyXrProjection();
+#ifdef ENABLE_OPENXR
     // Depth from the viewpoint to the nearest part of the triangle that reaches the screen. A
     // corner that misses the screen must not count: the glass would sit at it for nothing.
     float XrVisibleDepth(struct LoadedVertex* const vertices[3]) const;
+#endif
     void GfxSpPopMatrix(uint32_t count);
     void GfxSpVertex(size_t numVertices, size_t destIndex, const F3DVtx* vertices);
     void GfxSpModifyVertex(uint16_t vtxIdx, uint8_t where, uint32_t val);
