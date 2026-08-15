@@ -65,6 +65,11 @@ static constexpr float MENU_BUTTON_ZONE = 3.0f;
 // The cursor, in window heights. The rest of the rectangle holds the shadow.
 static constexpr float CURSOR_SIDE = 0.075f;
 
+// Radians of turn in a new LOCAL origin below which it reads as the system keeping the space near
+// the user rather than the user asking for a recentre. A gesture made while facing the old front
+// falls under it, and costs nothing: the window is already there.
+static constexpr float RECENTRE_YAW_MIN = 0.035f;
+
 static float sWindowDistance = WINDOW_DISTANCE_DEFAULT;
 
 static bool Failed(XrInstance instance, XrResult result, const char* what) {
@@ -77,6 +82,10 @@ static bool Failed(XrInstance instance, XrResult result, const char* what) {
     }
     SPDLOG_ERROR("OpenXR: {} failed with {}", what, name);
     return true;
+}
+
+static float YawOf(const XrQuaternionf& q) {
+    return atan2f(2.0f * (q.w * q.y + q.x * q.z), 1.0f - 2.0f * (q.y * q.y + q.z * q.z));
 }
 
 static bool HasExtension(const std::vector<XrExtensionProperties>& extensions, const char* name) {
@@ -245,6 +254,17 @@ bool GfxWindowBackendOpenXR::StartSession() {
         return false;
     }
     mSpaceType = spaceInfo.referenceSpaceType;
+
+    // The recentre gesture re-origins LOCAL, which the window does not hang in. PollLocalSpace
+    // locates this one every frame, and that is what makes the runtime announce the gesture.
+    if (mSpaceType != XR_REFERENCE_SPACE_TYPE_LOCAL) {
+        XrReferenceSpaceCreateInfo localInfo{ XR_TYPE_REFERENCE_SPACE_CREATE_INFO };
+        localInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+        localInfo.poseInReferenceSpace.orientation.w = 1.0f;
+        if (XR_FAILED(xrCreateReferenceSpace(mSession, &localInfo, &mLocalSpace))) {
+            mLocalSpace = XR_NULL_HANDLE;
+        }
+    }
 
     if (trackables && XR_FAILED(xrGetInstanceProcAddr(mInstance, "xrCreateAnchorSpaceANDROID",
                                                       (PFN_xrVoidFunction*)&mCreateAnchorSpace))) {
@@ -797,14 +817,7 @@ void GfxWindowBackendOpenXR::PollEvents() {
         } else if (event.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) {
             mActive = false;
         } else if (event.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
-            // Only a change of the space the window hangs in moves the window. Android XR also
-            // announces every lazy-follow recenter of LOCAL, which is no reason to re-front.
-            // A recenter is the user asking for the content at their new front; honour it even
-            // though the anchor itself would ride out the re-origin.
-            const auto& change = *(const XrEventDataReferenceSpaceChangePending*)&event;
-            if (change.referenceSpaceType == mSpaceType) {
-                sRecentreWanted = true;
-            }
+            HandleReferenceSpaceChange(*(const XrEventDataReferenceSpaceChangePending*)&event);
         } else if (event.type == XR_TYPE_EVENT_DATA_DISPLAY_REFRESH_RATE_CHANGED_FB) {
             // The runtime can refuse or later drop the rate the game asked for, and the sub-frame
             // count follows whatever it reports here.
@@ -812,6 +825,40 @@ void GfxWindowBackendOpenXR::PollEvents() {
             __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "display now runs at %.0f Hz", mRefreshRate);
         }
     }
+}
+
+// The recentre gesture re-origins LOCAL, not the space the window hangs in. Android XR also
+// re-origins LOCAL by itself to keep it near the user, and the window must not chase that; only
+// the gesture turns the origin to face where the user faces.
+void GfxWindowBackendOpenXR::HandleReferenceSpaceChange(const XrEventDataReferenceSpaceChangePending& change) {
+    // Without an anchor the window pose is held in the coordinates of its own space, so a re-origin
+    // of that space carries the window away with it. An anchor holds the window through one.
+    bool wanted = change.referenceSpaceType == mSpaceType && mAnchorSpace == XR_NULL_HANDLE;
+    float turn = 0.0f;
+    if (change.referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL && change.poseValid == XR_TRUE) {
+        turn = YawOf(change.poseInPreviousSpace.orientation);
+        wanted = wanted || fabsf(turn) > RECENTRE_YAW_MIN;
+    }
+    if (!wanted) {
+        return;
+    }
+
+    sRecentreWanted = true;
+    // The new origin only takes effect for a locate at or after this time, so a recentre run any
+    // earlier would place the window with poses read in the old one.
+    mRecentreAfter = change.changeTime;
+    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "space %d turned %.0f degrees, window re-fronted",
+                        (int)change.referenceSpaceType, turn * 180.0f / (float)M_PI);
+}
+
+// Android XR announces a re-origin of a space only while the application locates that space, so
+// this call is what carries the recentre gesture. Nothing reads the result.
+void GfxWindowBackendOpenXR::PollLocalSpace() {
+    if (mLocalSpace == XR_NULL_HANDLE) {
+        return;
+    }
+    XrSpaceLocation location{ XR_TYPE_SPACE_LOCATION };
+    xrLocateSpace(mLocalSpace, mSpace, mDisplayTime, &location);
 }
 
 void GfxWindowBackendOpenXR::HandleStateChange(const XrEventDataSessionStateChanged& changed) {
@@ -860,7 +907,7 @@ void GfxWindowBackendOpenXR::Recentre() {
     const XrVector3f& right = mViews[1].pose.position;
 
     // Yaw alone. A window that took the head's pitch and roll would hang askew in the room.
-    mAnchorYaw = atan2f(2.0f * (q.w * q.y + q.x * q.z), 1.0f - 2.0f * (q.y * q.y + q.z * q.z));
+    mAnchorYaw = YawOf(q);
     mViewpoint = { 0.5f * (left.x + right.x), 0.5f * (left.y + right.y), 0.5f * (left.z + right.z) };
     mAnchorPose.orientation = { 0.0f, sinf(0.5f * mAnchorYaw), 0.0f, cosf(0.5f * mAnchorYaw) };
     mAnchorPose.position = { mViewpoint.x - sinf(mAnchorYaw) * mWindowDistance, mViewpoint.y,
@@ -999,7 +1046,8 @@ bool GfxWindowBackendOpenXR::OpenFrame() {
     mShouldRender = frameState.shouldRender == XR_TRUE;
 
     LocateViews();
-    if (mViewsValid && (sRecentreWanted || !mAnchorValid)) {
+    PollLocalSpace();
+    if (mViewsValid && (!mAnchorValid || (sRecentreWanted && mDisplayTime >= mRecentreAfter))) {
         Recentre();
     }
 
@@ -1011,8 +1059,7 @@ bool GfxWindowBackendOpenXR::OpenFrame() {
             XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
         if (XR_SUCCEEDED(xrLocateSpace(mAnchorSpace, mSpace, mDisplayTime, &anchor)) &&
             (anchor.locationFlags & needed) == needed) {
-            const XrQuaternionf& q = anchor.pose.orientation;
-            mAnchorYaw = atan2f(2.0f * (q.w * q.y + q.x * q.z), 1.0f - 2.0f * (q.y * q.y + q.z * q.z));
+            mAnchorYaw = YawOf(anchor.pose.orientation);
             mAnchorPose = anchor.pose;
             mViewpoint = { anchor.pose.position.x + sinf(mAnchorYaw) * mWindowDistance, anchor.pose.position.y,
                            anchor.pose.position.z + cosf(mAnchorYaw) * mWindowDistance };
@@ -1463,6 +1510,10 @@ void GfxWindowBackendOpenXR::Teardown() {
         mAnchorSpace = XR_NULL_HANDLE;
     }
     mCreateAnchorSpace = nullptr;
+    if (mLocalSpace != XR_NULL_HANDLE) {
+        xrDestroySpace(mLocalSpace);
+        mLocalSpace = XR_NULL_HANDLE;
+    }
     if (mSpace != XR_NULL_HANDLE) {
         xrDestroySpace(mSpace);
         mSpace = XR_NULL_HANDLE;

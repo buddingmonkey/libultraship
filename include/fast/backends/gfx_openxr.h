@@ -48,6 +48,8 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     void StartRefreshRates();
     void PollEvents();
     void HandleStateChange(const XrEventDataSessionStateChanged& changed);
+    void HandleReferenceSpaceChange(const XrEventDataReferenceSpaceChangePending& change);
+    void PollLocalSpace();
     void PumpPointer(XrTime displayTime);
     bool OpenFrame();
     void LocateViews();
@@ -71,6 +73,7 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     XrSystemId mSystemId = XR_NULL_SYSTEM_ID;
     XrSession mSession = XR_NULL_HANDLE;
     XrSpace mSpace = XR_NULL_HANDLE;
+    XrSpace mLocalSpace = XR_NULL_HANDLE;
     XrReferenceSpaceType mSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
     XrSpace mAnchorSpace = XR_NULL_HANDLE;
     PFN_xrCreateAnchorSpaceANDROID mCreateAnchorSpace = nullptr;
@@ -100,6 +103,7 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     XrView mViews[VIEW_COUNT] = {};
     bool mViewsValid = false;
     XrTime mDisplayTime = 0;
+    XrTime mRecentreAfter = 0;
     bool mFrameOpen = false;
     bool mShouldRender = false;
     uint32_t mViewCount = 1;
