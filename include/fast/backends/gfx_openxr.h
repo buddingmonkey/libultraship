@@ -48,7 +48,12 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
 
     bool StartSession();
     bool StartActions(bool handInteraction);
+    bool StartPadActions();
+    void PumpPad();
+    void ClearPointer();
+    void StartPassthrough();
     void StartRefreshRates();
+    void HoldRefreshRate();
     void PollEvents();
     void HandleStateChange(const XrEventDataSessionStateChanged& changed);
     void HandleReferenceSpaceChange(const XrEventDataReferenceSpaceChangePending& change);
@@ -165,10 +170,24 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     PFN_xrRequestDisplayRefreshRateFB mRequestRefreshRate = nullptr;
     std::vector<float> mRefreshRates;
     float mRefreshRate = 0.0f;
+    float mWantedRate = 0.0f;
+    int mRateRetries = 0;
+
+    XrPassthroughFB mPassthrough = XR_NULL_HANDLE;
+    XrPassthroughLayerFB mPassthroughLayer = XR_NULL_HANDLE;
+    PFN_xrDestroyPassthroughFB mDestroyPassthrough = nullptr;
+    PFN_xrDestroyPassthroughLayerFB mDestroyPassthroughLayer = nullptr;
 
     XrActionSet mActionSet = XR_NULL_HANDLE;
     XrAction mAimAction = XR_NULL_HANDLE;
     XrAction mSelectAction = XR_NULL_HANDLE;
+    XrAction mStickAction = XR_NULL_HANDLE;
+    XrAction mTriggerAction = XR_NULL_HANDLE;
+    XrAction mSqueezeAction = XR_NULL_HANDLE;
+    XrAction mFaceLowAction = XR_NULL_HANDLE;  // A on the right hand, X on the left
+    XrAction mFaceHighAction = XR_NULL_HANDLE; // B on the right hand, Y on the left
+    XrAction mMenuAction = XR_NULL_HANDLE;
+    XrAction mStickClickAction = XR_NULL_HANDLE;
     XrSpace mAimSpace[2] = { XR_NULL_HANDLE, XR_NULL_HANDLE };
     XrPath mHandPath[2] = { XR_NULL_PATH, XR_NULL_PATH };
     jobject mActivity = nullptr;
