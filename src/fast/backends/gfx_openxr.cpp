@@ -35,7 +35,7 @@ namespace Fast {
 static constexpr float WINDOW_DISTANCE_DEFAULT = 0.5f;
 static constexpr float WINDOW_DISTANCE_MIN = 0.5f;
 static constexpr float WINDOW_DISTANCE_MAX = 4.0f;
-static constexpr float WINDOW_WIDTH_METRES = 1.6f;
+static constexpr float WINDOW_WIDTH_METERS = 1.6f;
 
 // What the corner handles can do to the size, as a multiple of the size the game's field of view
 // gives the window at its range.
@@ -95,9 +95,9 @@ static constexpr float CORNER_SIDE = 0.16f;
 static constexpr float CORNER_ZONE = 0.11f;
 
 // Radians of turn in a new LOCAL origin below which it reads as the system keeping the space near
-// the user rather than the user asking for a recentre. A gesture made while facing the old front
+// the user rather than the user asking for a recenter. A gesture made while facing the old front
 // falls under it, and costs nothing: the window is already there.
-static constexpr float RECENTRE_YAW_MIN = 0.035f;
+static constexpr float RECENTER_YAW_MIN = 0.035f;
 
 static float sWindowDistance = WINDOW_DISTANCE_DEFAULT;
 static float sWindowScale = 1.0f;
@@ -294,7 +294,7 @@ bool GfxWindowBackendOpenXR::StartSession() {
     }
     mSpaceType = spaceInfo.referenceSpaceType;
 
-    // The recentre gesture re-origins LOCAL, which the window does not hang in. PollLocalSpace
+    // The recenter gesture re-origins LOCAL, which the window does not hang in. PollLocalSpace
     // locates this one every frame, and that is what makes the runtime announce the gesture.
     if (mSpaceType != XR_REFERENCE_SPACE_TYPE_LOCAL) {
         XrReferenceSpaceCreateInfo localInfo{ XR_TYPE_REFERENCE_SPACE_CREATE_INFO };
@@ -344,7 +344,7 @@ bool GfxWindowBackendOpenXR::StartSession() {
                "xrEnumerateSwapchainFormats")) {
         return false;
     }
-    // The game draws display-referred colour. A linear swapchain makes the runtime encode it to
+    // The game draws display-referred color. A linear swapchain makes the runtime encode it to
     // sRGB on the way to the display; an sRGB one makes the blit encode it. Either washes the
     // picture out. The fix is an sRGB swapchain, which the runtime reads correctly, with the write
     // conversion turned off so the blit copies the bytes as they are.
@@ -436,8 +436,8 @@ bool GfxWindowBackendOpenXR::StartSession() {
     mWindowRadius = sWindowDistance;
     mWindowScale = sWindowScale;
     mWindowDistance = mWindowRadius * mWindowScale;
-    mWindowWidth = WINDOW_WIDTH_METRES;
-    mWindowHeight = WINDOW_WIDTH_METRES * (float)mSwapchainHeight / (float)mSwapchainWidth;
+    mWindowWidth = WINDOW_WIDTH_METERS;
+    mWindowHeight = WINDOW_WIDTH_METERS * (float)mSwapchainHeight / (float)mSwapchainWidth;
 
     for (XrView& view : mViews) {
         view = { XR_TYPE_VIEW };
@@ -622,7 +622,7 @@ static float sPointerU = 0.0f;
 static float sPointerV = 0.0f;
 static bool sMenuHover = false;
 static bool sMenuHeld = false;
-// Where the cursor is drawn, in metres from the middle of the window, on the plane it hangs in.
+// Where the cursor is drawn, in meters from the middle of the window, on the plane it hangs in.
 static bool sCursorValid = false;
 static float sCursorX = 0.0f;
 static float sCursorY = 0.0f;
@@ -647,7 +647,7 @@ static float sViewTanHalfHeight = 0.0f;
 static float sWindowAngularWidth = 0.0f;
 static bool sFlatProjection = false;
 static bool sStereo = true;
-static bool sRecentreWanted = true;
+static bool sRecenterWanted = true;
 static float sSceneNear = std::numeric_limits<float>::max();
 static float sGlassDepth = WINDOW_DEPTH_MAX;
 
@@ -670,8 +670,8 @@ void SetXrSceneNear(float units) {
     }
 }
 
-void RecentreXrWindow() {
-    sRecentreWanted = true;
+void RecenterXrWindow() {
+    sRecenterWanted = true;
 }
 
 void SetXrStereo(bool enabled) {
@@ -682,8 +682,8 @@ void SetXrFlatProjection(bool flat) {
     sFlatProjection = flat;
 }
 
-void SetXrWindowDistance(float metres) {
-    sWindowDistance = Clamp(metres, WINDOW_DISTANCE_MIN, WINDOW_DISTANCE_MAX);
+void SetXrWindowDistance(float meters) {
+    sWindowDistance = Clamp(meters, WINDOW_DISTANCE_MIN, WINDOW_DISTANCE_MAX);
 }
 
 float GetXrWindowDistance() {
@@ -708,7 +708,7 @@ XrVector3f GfxWindowBackendOpenXR::HeadPosition() const {
     return { 0.5f * (left.x + right.x), 0.5f * (left.y + right.y), 0.5f * (left.z + right.z) };
 }
 
-// Where an aim ray meets the plane the window hangs in, in metres from the middle of it. The button,
+// Where an aim ray meets the plane the window hangs in, in meters from the middle of it. The button,
 // the move bar and the corner handle are all on that plane, so one intersection answers for them
 // all.
 bool GfxWindowBackendOpenXR::PlaneHit(const XrPosef& pose, float* planeX, float* planeY) const {
@@ -826,7 +826,7 @@ bool GfxWindowBackendOpenXR::UpdateGrab(XrTime displayTime) {
     }
 
     if (mGrab == Grab::Move) {
-        // The window goes where the hand goes, one metre for one metre. The user thus keeps hold of
+        // The window goes where the hand goes, one meter for one meter. The user thus keeps hold of
         // the part of the bar they took, and the window does not jump at the moment of the grab.
         const XrVector3f moved = Subtract(location.pose.position, mGrabHandPosition);
         const XrVector3f from = { mGrabWindowPosition.x + moved.x - mPlacementHead.x,
@@ -1045,7 +1045,7 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
     }
 
     // The pad reads SDL's touch device list, which SDL_PushEvent cannot reach, so the pinch goes
-    // in there directly. ImGui reads mouse events, which is what SDL synthesises from a touch on a
+    // in there directly. ImGui reads mouse events, which is what SDL synthesizes from a touch on a
     // phone, so the menu is driven the same way here.
     const int x = (int)(sPointerU * (float)mGameWidth);
     const int y = (int)(sPointerV * (float)mGameHeight);
@@ -1101,7 +1101,7 @@ void GfxWindowBackendOpenXR::PollEvents() {
     }
 }
 
-// The recentre gesture re-origins LOCAL, not the space the window hangs in. Android XR also
+// The recenter gesture re-origins LOCAL, not the space the window hangs in. Android XR also
 // re-origins LOCAL by itself to keep it near the user, and the window must not chase that; only
 // the gesture turns the origin to face where the user faces.
 void GfxWindowBackendOpenXR::HandleReferenceSpaceChange(const XrEventDataReferenceSpaceChangePending& change) {
@@ -1111,22 +1111,22 @@ void GfxWindowBackendOpenXR::HandleReferenceSpaceChange(const XrEventDataReferen
     float turn = 0.0f;
     if (change.referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL && change.poseValid == XR_TRUE) {
         turn = YawOf(change.poseInPreviousSpace.orientation);
-        wanted = wanted || fabsf(turn) > RECENTRE_YAW_MIN;
+        wanted = wanted || fabsf(turn) > RECENTER_YAW_MIN;
     }
     if (!wanted) {
         return;
     }
 
-    sRecentreWanted = true;
-    // The new origin only takes effect for a locate at or after this time, so a recentre run any
+    sRecenterWanted = true;
+    // The new origin only takes effect for a locate at or after this time, so a recenter run any
     // earlier would place the window with poses read in the old one.
-    mRecentreAfter = change.changeTime;
+    mRecenterAfter = change.changeTime;
     __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "space %d turned %.0f degrees, window re-fronted",
                         (int)change.referenceSpaceType, turn * 180.0f / (float)M_PI);
 }
 
 // Android XR announces a re-origin of a space only while the application locates that space, so
-// this call is what carries the recentre gesture. Nothing reads the result.
+// this call is what carries the recenter gesture. Nothing reads the result.
 void GfxWindowBackendOpenXR::PollLocalSpace() {
     if (mLocalSpace == XR_NULL_HANDLE) {
         return;
@@ -1239,12 +1239,12 @@ void GfxWindowBackendOpenXR::AnchorHere() {
 // Puts the window where the user is looking now, upright and level. Nothing else ever placed it:
 // it used to hang off the origin of the reference space, which is wherever the headset happened to
 // be when the session opened.
-void GfxWindowBackendOpenXR::Recentre() {
+void GfxWindowBackendOpenXR::Recenter() {
     // The head pose comes from the views already located this frame. Locating VIEW space instead
     // reports no valid pose on Galaxy XR while the headset is worn, which silently disabled every
-    // recentre.
+    // recenter.
     const float yaw = YawOf(mViews[0].pose.orientation);
-    // A recentre wins over a drag: it is the way back from a window put where no hand can reach it.
+    // A recenter wins over a drag: it is the way back from a window put where no hand can reach it.
     mGrab = Grab::None;
     mBarHover = false;
     mCornerHover = -1;
@@ -1252,7 +1252,7 @@ void GfxWindowBackendOpenXR::Recentre() {
     mWindowDir = { -sinf(yaw), 0.0f, -cosf(yaw) };
     mWindowRadius = sWindowDistance;
     mWindowScale = sWindowScale;
-    sRecentreWanted = false;
+    sRecenterWanted = false;
     PlaceWindow();
     AnchorHere();
 
@@ -1299,7 +1299,7 @@ void GfxWindowBackendOpenXR::ApplySettings() {
         AnchorHere();
     }
     __android_log_print(ANDROID_LOG_INFO, "LighthouseXR",
-                        "window %.2f x %.2f m at %.2f m, %.1f degrees wide, up to %.0f units per metre", mWindowWidth,
+                        "window %.2f x %.2f m at %.2f m, %.1f degrees wide, up to %.0f units per meter", mWindowWidth,
                         mWindowHeight, mWindowRadius, sWindowAngularWidth * 180.0f / (float)M_PI,
                         WINDOW_DEPTH_MAX / mWindowDistance);
 }
@@ -1323,7 +1323,7 @@ float GfxWindowBackendOpenXR::MenuRise() const {
     return mWindowHeight * (0.5f + MENU_BUTTON_GAP + MENU_BUTTON_SIDE * 0.5f);
 }
 
-// A pose on the window plane, that many metres right of and above the middle of the window.
+// A pose on the window plane, that many meters right of and above the middle of the window.
 XrPosef GfxWindowBackendOpenXR::PlanePose(float x, float y) const {
     const XrVector3f right = RotateByQuaternion(mAnchorPose.orientation, { 1.0f, 0.0f, 0.0f });
     const XrVector3f up = RotateByQuaternion(mAnchorPose.orientation, { 0.0f, 1.0f, 0.0f });
@@ -1363,8 +1363,8 @@ bool GfxWindowBackendOpenXR::OpenFrame() {
 
     LocateViews();
     PollLocalSpace();
-    if (mViewsValid && (!mAnchorValid || (sRecentreWanted && mDisplayTime >= mRecentreAfter))) {
-        Recentre();
+    if (mViewsValid && (!mAnchorValid || (sRecenterWanted && mDisplayTime >= mRecenterAfter))) {
+        Recenter();
     } else if (mAnchorValid && mGrab == Grab::None) {
         ApplySettings();
     }
@@ -1413,7 +1413,7 @@ void GfxWindowBackendOpenXR::BeginRenderView(uint32_t view) {
     // The window plane is a copy of the game's own screen, so the head offset converts with the
     // one scale that puts the glass sGlassDepth from the viewpoint. LOCAL space starts at the
     // head, and the window hangs straight ahead of it, so the eye pose is already the offset.
-    const float unitsPerMetre = sGlassDepth / mWindowDistance;
+    const float unitsPerMeter = sGlassDepth / mWindowDistance;
     const XrVector3f& left = mViews[0].pose.position;
     const XrVector3f& right = mViews[1].pose.position;
     // One image for both eyes is drawn from between them, not from either one.
@@ -1422,9 +1422,9 @@ void GfxWindowBackendOpenXR::BeginRenderView(uint32_t view) {
     const XrVector3f world =
         mono ? XrVector3f{ 0.5f * (left.x + right.x), 0.5f * (left.y + right.y), 0.5f * (left.z + right.z) } : eye;
     const XrVector3f offset = ToWindowAxes(world);
-    sViewGeometry.eyeOffset[0] = offset.x * unitsPerMetre;
-    sViewGeometry.eyeOffset[1] = offset.y * unitsPerMetre;
-    sViewGeometry.eyeOffset[2] = offset.z * unitsPerMetre;
+    sViewGeometry.eyeOffset[0] = offset.x * unitsPerMeter;
+    sViewGeometry.eyeOffset[1] = offset.y * unitsPerMeter;
+    sViewGeometry.eyeOffset[2] = offset.z * unitsPerMeter;
     sViewGeometry.windowDistance = sGlassDepth;
     sViewGeometryValid = true;
 }
@@ -1483,7 +1483,7 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
                                   "void main() { oColor = vec4(texture(uTex, vUv).rgb, 1.0); }\n";
     // Three bars in a rounded square, drawn from the distance to each shape so the edges stay clean
     // at any range. SIDE is 1 / MENU_BUTTON_REACH: the rest of the rectangle keeps its alpha at
-    // zero and is the part of the target the user cannot see. The colour comes out multiplied by
+    // zero and is the part of the target the user cannot see. The color comes out multiplied by
     // the alpha, as the layer and the blend both read it.
     static const char* MENU_FRAGMENT =
         "#version 300 es\n"
@@ -1557,7 +1557,7 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
                                       "    oColor = vec4(vec3(alpha), alpha);\n"
                                       "}\n";
     // A quarter turn of a thick round-capped stroke, outside one corner of the picture. The quad is
-    // centred on that corner and the picture lies towards negative x and y, so the handle never
+    // centerd on that corner and the picture lies towards negative x and y, so the handle never
     // covers the game. Beyond the quarter the arc ends in its caps, which is what rounds the ends.
     static const char* CORNER_FRAGMENT =
         "#version 300 es\n"
@@ -1823,7 +1823,7 @@ void GfxWindowBackendOpenXR::EndRenderFrame() {
             projectionViews[eye].subImage.imageArrayIndex = 0;
         }
         // Everything drawn over the picture blends into the same image, and a blend that keeps the
-        // alpha right can only work on colour already multiplied by it. The layer reads it the same way.
+        // alpha right can only work on color already multiplied by it. The layer reads it the same way.
         projection.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
         projection.space = mSpace;
         projection.viewCount = VIEW_COUNT;

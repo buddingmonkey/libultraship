@@ -1581,7 +1581,7 @@ void Interpreter::ApplyXrProjection() {
     SetXrViewTangents(tanHalfWidth * mCurDimensions.aspect_ratio * 0.75f, tanHalfHeight);
 
     // The window keeps the size the game's own frustum gives it at the viewpoint, so the framing
-    // does not change; the head only moves the apex of the frustum away from the centre.
+    // does not change; the head only moves the apex of the frustum away from the center.
     const float halfWidth = view.windowDistance * tanHalfWidth;
     const float halfHeight = view.windowDistance * tanHalfHeight;
     const float eyeX = view.eyeOffset[0];

@@ -24,13 +24,13 @@ void SetXrSceneNear(float units);
 // game's own projection.
 void SetXrViewTangents(float tanHalfWidth, float tanHalfHeight);
 
-// How far the window hangs from the viewer, in metres. The window keeps the angular size the
+// How far the window hangs from the viewer, in meters. The window keeps the angular size the
 // game's field of view gives it, so this does not change the framing: it scales the whole diorama
 // towards the viewer, and a smaller world at a shorter range has more depth in it. Parallax on the
 // glass never exceeds one eye separation whatever the distance, so no setting here can make the
 // eyes diverge. The move bar writes the same number, so read it back before writing it again: the
 // one that moved last owns the range.
-void SetXrWindowDistance(float metres);
+void SetXrWindowDistance(float meters);
 float GetXrWindowDistance();
 
 // How large the window is drawn, as a multiple of the size the game's field of view gives it at
@@ -40,7 +40,7 @@ void SetXrWindowScale(float scale);
 float GetXrWindowScale();
 
 // Puts the window in front of the viewer, where they are looking now.
-void RecentreXrWindow();
+void RecenterXrWindow();
 
 // Draws one image for both eyes instead of one per eye. There is no parallax then, but the frame
 // costs half as much and only one layer reaches the compositor.

@@ -66,7 +66,7 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     void LocateViews();
     void PlaceWindow();
     void AnchorHere();
-    void Recentre();
+    void Recenter();
     XrVector3f ToWindowAxes(const XrVector3f& point) const;
     void MoveGlass();
     void ApplySettings();
@@ -127,7 +127,7 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     XrView mViews[VIEW_COUNT] = {};
     bool mViewsValid = false;
     XrTime mDisplayTime = 0;
-    XrTime mRecentreAfter = 0;
+    XrTime mRecenterAfter = 0;
     bool mFrameOpen = false;
     bool mShouldRender = false;
     uint32_t mViewCount = 1;
