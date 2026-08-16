@@ -46,6 +46,10 @@ void RecenterXrWindow();
 // costs half as much and only one layer reaches the compositor.
 void SetXrStereo(bool enabled);
 
+// Which eye's pass is rendering now: 0 for the first or only view, 1 for the second. The whole
+// display list runs once per eye, so a capture that must differ per eye keys off this.
+int GetXrViewIndex();
+
 // Holds the next draws on the glass. A HUD element is placed in front of the camera by the game
 // and is not part of the world behind the window, so it must not take the off-axis frustum: with
 // this set the game's own projection stands, both eyes draw the same picture, and the element

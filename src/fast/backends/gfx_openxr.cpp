@@ -647,6 +647,7 @@ static float sViewTanHalfHeight = 0.0f;
 static float sWindowAngularWidth = 0.0f;
 static bool sFlatProjection = false;
 static bool sStereo = true;
+static int sCurrentViewIndex = 0;
 static bool sRecenterWanted = true;
 static float sSceneNear = std::numeric_limits<float>::max();
 static float sGlassDepth = WINDOW_DEPTH_MAX;
@@ -676,6 +677,10 @@ void RecenterXrWindow() {
 
 void SetXrStereo(bool enabled) {
     sStereo = enabled;
+}
+
+int GetXrViewIndex() {
+    return sCurrentViewIndex;
 }
 
 void SetXrFlatProjection(bool flat) {
@@ -1405,6 +1410,7 @@ uint32_t GfxWindowBackendOpenXR::BeginRenderFrame() {
 
 void GfxWindowBackendOpenXR::BeginRenderView(uint32_t view) {
     mCurrentView = view;
+    sCurrentViewIndex = (int)view;
     sViewGeometryValid = false;
     if (!mFrameOpen || !mViewsValid || !mAnchorValid || view >= VIEW_COUNT) {
         return;

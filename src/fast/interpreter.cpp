@@ -1275,7 +1275,7 @@ void Interpreter::ImportTexture(int i, int tile, bool importReplacement) {
         auto fbIt = mFbTextures.find((uintptr_t)origAddr);
         if (fbIt != mFbTextures.end()) {
             Flush();
-            mRapi->SelectTextureFb(fbIt->second);
+            mRapi->SelectTextureFb(StereoFbForCurrentView(fbIt->second));
             mRdp->textures_changed[i] = false;
             return;
         }
@@ -5114,6 +5114,23 @@ void Interpreter::UnregisterFbTexture(const void* cpuAddr) {
     mFbTextures.erase((uintptr_t)cpuAddr);
 }
 
+void Interpreter::RegisterStereoFbPair(int fbId, int rightFbId) {
+    mStereoFbRight[fbId] = rightFbId;
+}
+
+// The right eye's pass reads and writes its own half of a stereo framebuffer pair.
+int Interpreter::StereoFbForCurrentView(int fbId) {
+#ifdef ENABLE_OPENXR
+    if (GetXrViewIndex() == 1) {
+        auto it = mStereoFbRight.find(fbId);
+        if (it != mStereoFbRight.end()) {
+            return it->second;
+        }
+    }
+#endif
+    return fbId;
+}
+
 void Interpreter::GetDimensions(uint32_t* width, uint32_t* height, int32_t* posX, int32_t* posY) {
     mWapi->GetDimensions(width, height, posX, posY);
 }
@@ -5407,6 +5424,8 @@ void Interpreter::CopyFrameBuffer(int fb_dst_id, int fb_src_id, bool copyOnce, b
         return;
     }
 
+    fb_dst_id = StereoFbForCurrentView(fb_dst_id);
+
     if (fb_src_id == 0 && mRendersToFb) {
         // read from the framebuffer we've been rendering to
         fb_src_id = mGameFb;
@@ -5660,6 +5679,10 @@ extern "C" void gfx_shader_cache_clear() {
     instance->mPrevCombiner = Fast::mInstance.lock().get()->mColorCombinerPool.end();
     instance->mRenderingState.mShaderProgram = nullptr;
     instance->mRapi->ClearShaderCache();
+}
+
+extern "C" void gfx_register_stereo_fb_pair(int fbId, int rightFbId) {
+    Fast::mInstance.lock().get()->RegisterStereoFbPair(fbId, rightFbId);
 }
 
 extern "C" void gfx_register_fb_texture(const void* cpuAddr, int fbId) {
