@@ -35,7 +35,9 @@ namespace Fast {
 static constexpr float WINDOW_DISTANCE_DEFAULT = 0.5f;
 static constexpr float WINDOW_DISTANCE_MIN = 0.5f;
 static constexpr float WINDOW_DISTANCE_MAX = 4.0f;
-static constexpr float WINDOW_WIDTH_METERS = 1.6f;
+// The half-angle the window covers across, before the game has loaded a projection to ask for its
+// own. About 61 degrees, which is what Banjo-Kazooie asks for once it runs.
+static constexpr float WINDOW_TAN_HALF_WIDTH_DEFAULT = 0.59f;
 
 // What the corner handles can do to the size, as a multiple of the size the game's field of view
 // gives the window at its range.
@@ -463,12 +465,10 @@ bool GfxWindowBackendOpenXR::StartSession() {
         return false;
     }
 
-    // Until the first frame says what the game's field of view needs, the window keeps a plain size.
     mWindowRadius = sWindowDistance;
     mWindowScale = sWindowScale;
     mWindowDistance = mWindowRadius * mWindowScale;
-    mWindowWidth = WINDOW_WIDTH_METERS;
-    mWindowHeight = WINDOW_WIDTH_METERS * (float)mSwapchainHeight / (float)mSwapchainWidth;
+    SizeWindow();
 
     for (XrView& view : mViews) {
         view = { XR_TYPE_VIEW };
@@ -1451,15 +1451,31 @@ void GfxWindowBackendOpenXR::LocateViews() {
 // and stands upright through the middle of the range, so it can go up and down with no tilt at all.
 // It bends in only near the ends, where an upright panel is read at too flat an angle. The bend
 // stops short of straight up, because the yaw of a window that faces the user has no answer there.
+// The window is as wide as the field of view it shows, so that the mapping is a similarity. That
+// field of view is the game's, once the game has loaded a projection to ask for one. Before then —
+// the extractor, the ROM prompt, the menu over them — nothing has asked, and the window takes the
+// shape of the picture at a plain angle. It cannot take the shape of the swapchain: an eye image is
+// about as tall as it is wide, and a landscape picture drawn on a rectangle that shape is squeezed
+// to about half its width.
+void GfxWindowBackendOpenXR::SizeWindow() {
+    mWindowSized = sViewTanHalfWidth > 0.0f && sViewTanHalfHeight > 0.0f;
+
+    float tanHalfWidth = sViewTanHalfWidth;
+    float tanHalfHeight = sViewTanHalfHeight;
+    if (!mWindowSized) {
+        tanHalfWidth = WINDOW_TAN_HALF_WIDTH_DEFAULT;
+        tanHalfHeight = mGameWidth > 0 ? tanHalfWidth * (float)mGameHeight / (float)mGameWidth : tanHalfWidth;
+    }
+
+    mWindowWidth = 2.0f * mWindowDistance * tanHalfWidth;
+    mWindowHeight = 2.0f * mWindowDistance * tanHalfHeight;
+}
+
 void GfxWindowBackendOpenXR::PlaceWindow() {
     mWindowRadius = Clamp(mWindowRadius, WINDOW_DISTANCE_MIN, WINDOW_DISTANCE_MAX);
     mWindowScale = Clamp(mWindowScale, WINDOW_SCALE_MIN, WINDOW_SCALE_MAX);
     mWindowDistance = mWindowRadius * mWindowScale;
-    if (sViewTanHalfWidth > 0.0f && sViewTanHalfHeight > 0.0f) {
-        mWindowSized = true;
-        mWindowWidth = 2.0f * mWindowDistance * sViewTanHalfWidth;
-        mWindowHeight = 2.0f * mWindowDistance * sViewTanHalfHeight;
-    }
+    SizeWindow();
     sWindowAngularWidth = 2.0f * atanf(0.5f * mWindowWidth / mWindowRadius);
 
     const float across = sqrtf(mWindowDir.x * mWindowDir.x + mWindowDir.z * mWindowDir.z);
@@ -1529,9 +1545,12 @@ void GfxWindowBackendOpenXR::Recenter() {
     PlaceWindow();
     AnchorHere();
 
-    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "window placed at %.2f %.2f %.2f facing %.0f degrees%s",
+    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR",
+                        "window placed at %.2f %.2f %.2f facing %.0f degrees%s, %.2f x %.2f m at %.2f m, %s",
                         mAnchorPose.position.x, mAnchorPose.position.y, mAnchorPose.position.z,
-                        yaw * 180.0f / (float)M_PI, mAnchorSpace != XR_NULL_HANDLE ? " on an anchor" : "");
+                        yaw * 180.0f / (float)M_PI, mAnchorSpace != XR_NULL_HANDLE ? " on an anchor" : "", mWindowWidth,
+                        mWindowHeight, mWindowRadius,
+                        mWindowSized ? "the game's own field of view" : "the shape of the picture");
 }
 
 // A point measured from the viewpoint the window was placed for, in the window's own axes.

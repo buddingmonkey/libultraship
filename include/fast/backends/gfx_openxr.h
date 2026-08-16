@@ -69,6 +69,7 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     void PumpPointer(XrTime displayTime);
     bool OpenFrame();
     void LocateViews();
+    void SizeWindow();
     void PlaceWindow();
     void AnchorHere();
     void Recenter();
