@@ -19,6 +19,7 @@
 
 #ifdef ENABLE_DEBUG_TOOLS
 #include "fast/backends/gfx_debug_capture.h"
+#include "fast/backends/gfx_debug_pointer.h"
 #endif
 #include "ship/Context.h"
 #include "ship/window/MouseStateManager.h"
@@ -1290,6 +1291,23 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         }
     }
 
+#ifdef ENABLE_DEBUG_TOOLS
+    // A pointer put on the window from the host, so a prompt can be answered with no hand in the
+    // headset. It takes the place of a hand on the picture and leaves the handles alone.
+    float debugU = 0.0f;
+    float debugV = 0.0f;
+    bool debugDown = false;
+    if (DebugPointer::Poll(&debugU, &debugV, &debugDown)) {
+        hit = true;
+        down = debugDown;
+        u = debugU;
+        v = debugV;
+        cursor = true;
+        cursorX = (u - 0.5f) * mWindowWidth;
+        cursorY = (0.5f - v) * mWindowHeight;
+    }
+#endif
+
     const bool wasDown = sPointerDown;
     mBarHover = barHit;
     mCornerHover = cornerHit;
@@ -1688,6 +1706,11 @@ bool GfxWindowBackendOpenXR::OpenFrame() {
     if (!mActive) {
         return false;
     }
+#ifdef ENABLE_DEBUG_TOOLS
+    // The frame writes the picture and then one image an eye, so the request has to be taken up
+    // here rather than by whichever of them asks first.
+    DebugCapture::Arm();
+#endif
 
     PollEvents();
     if (!mRunning) {
@@ -2244,6 +2267,14 @@ void GfxWindowBackendOpenXR::SwapBuffersBegin() {
         }
         mViewCount = 1;
     }
+
+#ifdef ENABLE_DEBUG_TOOLS
+    // The picture as the game drew it, in the coordinates the debug pointer is aimed in.
+    if (mCurrentView == 0 && DebugCapture::Pending()) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        DebugCapture::WriteBoundFramebuffer("panel", mGameWidth, mGameHeight);
+    }
+#endif
 
     if (mShouldRender) {
         PresentView(mCurrentView);

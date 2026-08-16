@@ -22,19 +22,19 @@ static std::string RequestPath() {
     return Ship::Context::GetPathRelativeToAppDirectory("capture-request");
 }
 
-bool Pending() {
+void Arm() {
     static int framesUntilPoll = 0;
 
-    if (sPending) {
-        return true;
-    }
-    if (--framesUntilPoll > 0) {
-        return false;
+    if (sPending || --framesUntilPoll > 0) {
+        return;
     }
     framesUntilPoll = 15;
 
     std::error_code ec;
     sPending = std::filesystem::exists(RequestPath(), ec);
+}
+
+bool Pending() {
     return sPending;
 }
 
