@@ -141,7 +141,6 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
 
     float mWindowWidth = 0.0f;
     float mWindowHeight = 0.0f;
-    float mWindowDistance = 0.0f;
     float mWindowRadius = 0.0f;
     float mWindowScale = 1.0f;
     XrVector3f mPlacementHead = {};
