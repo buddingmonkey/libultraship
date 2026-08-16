@@ -39,6 +39,11 @@ static constexpr float WINDOW_DISTANCE_MAX = 4.0f;
 // own. About 61 degrees, which is what Banjo-Kazooie asks for once it runs.
 static constexpr float WINDOW_TAN_HALF_WIDTH_DEFAULT = 0.59f;
 
+// How much of the window's own width the game draws, in steps, and what it draws over the width the
+// window covers in the view.
+static constexpr float RENDER_STEPS = 16.0f;
+static constexpr float RENDER_HEADROOM = 1.2f;
+
 // What the corner handles can do to the size, as a multiple of the size the game's field of view
 // gives the window at its range.
 static constexpr float WINDOW_SCALE_MIN = 0.5f;
@@ -446,20 +451,12 @@ bool GfxWindowBackendOpenXR::StartSession() {
             glBindFramebuffer(GL_FRAMEBUFFER, mImageFbos[view][i]);
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mImages[view][i].image, 0);
         }
-
-        glGenTextures(1, &mGameTex[view]);
-        glBindTexture(GL_TEXTURE_2D, mGameTex[view]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, mGameWidth, mGameHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glGenFramebuffers(1, &mGameFbo[view]);
-        glBindFramebuffer(GL_FRAMEBUFFER, mGameFbo[view]);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mGameTex[view], 0);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
+
+    // The frame the game gives back until the first head pose says how much of the view the window
+    // covers. SizeRender shrinks it as soon as it can.
+    CreateGameTargets(mGameWidth, mGameHeight);
 
     if (!StartPlacementPass()) {
         return false;
@@ -486,6 +483,32 @@ bool GfxWindowBackendOpenXR::StartSession() {
                         "session up: %u images %ux%u per eye, format 0x%04x, blend %d, srgb ctl %d", imageCount,
                         mSwapchainWidth, mSwapchainHeight, (unsigned)format, (int)mBlendMode, (int)mSrgbWriteControl);
     return true;
+}
+
+void GfxWindowBackendOpenXR::CreateGameTargets(uint32_t width, uint32_t height) {
+    mTexWidth = width < 1 ? 1 : width;
+    mTexHeight = height < 1 ? 1 : height;
+
+    for (uint32_t view = 0; view < VIEW_COUNT; view++) {
+        if (mGameFbo[view] != 0) {
+            glDeleteFramebuffers(1, &mGameFbo[view]);
+        }
+        if (mGameTex[view] != 0) {
+            glDeleteTextures(1, &mGameTex[view]);
+        }
+        glGenTextures(1, &mGameTex[view]);
+        glBindTexture(GL_TEXTURE_2D, mGameTex[view]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, mTexWidth, mTexHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenFramebuffers(1, &mGameFbo[view]);
+        glBindFramebuffer(GL_FRAMEBUFFER, mGameFbo[view]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mGameTex[view], 0);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 void GfxWindowBackendOpenXR::StartPassthrough() {
@@ -869,6 +892,7 @@ static XrViewGeometry sViewGeometry = {};
 static float sViewTanHalfWidth = 0.0f;
 static float sViewTanHalfHeight = 0.0f;
 static float sWindowAngularWidth = 0.0f;
+static float sRenderScale = 1.0f;
 static bool sFlatProjection = false;
 static bool sStereo = true;
 static float sEdgeSoftness = 0.36f;
@@ -939,6 +963,10 @@ float GetXrWindowScale() {
 
 float GetXrWindowAngularWidth() {
     return sWindowAngularWidth;
+}
+
+float GetXrRenderScale() {
+    return sRenderScale;
 }
 
 XrVector3f GfxWindowBackendOpenXR::HeadPosition() const {
@@ -1457,6 +1485,36 @@ void GfxWindowBackendOpenXR::LocateViews() {
 // shape of the picture at a plain angle. It cannot take the shape of the swapchain: an eye image is
 // about as tall as it is wide, and a landscape picture drawn on a rectangle that shape is squeezed
 // to about half its width.
+// The game is drawn once per eye and then sampled onto a window that covers part of the view, so
+// every pixel it draws past what that window covers is thrown away. The waste is small where the
+// headset hands the app a panel the size of one eye and large where it hands it the whole binocular
+// panel: Quest gives the game 4128 pixels across for a window that covers about a thousand of them,
+// which is sixteen times the pixels and the same multiple of the shading.
+//
+// The step is coarse so that a hand on a corner handle does not rebuild the targets every frame,
+// and the headroom is for a head that leans in towards the window, which widens it in the view.
+void GfxWindowBackendOpenXR::SizeRender() {
+    if (!mViewsValid || mSwapchainWidth == 0 || mGameWidth == 0 || sWindowAngularWidth <= 0.0f) {
+        return;
+    }
+    const float eyeAngle = mViews[0].fov.angleRight - mViews[0].fov.angleLeft;
+    if (eyeAngle <= 0.0f) {
+        return;
+    }
+
+    const float covered = (float)mSwapchainWidth * sWindowAngularWidth / eyeAngle;
+    const float wanted = Clamp(roundf(covered * RENDER_HEADROOM / (float)mGameWidth * RENDER_STEPS) / RENDER_STEPS,
+                               1.0f / RENDER_STEPS, 1.0f);
+    if (wanted == sRenderScale) {
+        return;
+    }
+
+    sRenderScale = wanted;
+    CreateGameTargets((uint32_t)lroundf((float)mGameWidth * wanted), (uint32_t)lroundf((float)mGameHeight * wanted));
+    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "the game draws %ux%u for a window %.0f pixels across",
+                        mTexWidth, mTexHeight, covered);
+}
+
 void GfxWindowBackendOpenXR::SizeWindow() {
     mWindowSized = sViewTanHalfWidth > 0.0f && sViewTanHalfHeight > 0.0f;
 
@@ -1683,6 +1741,7 @@ bool GfxWindowBackendOpenXR::OpenFrame() {
     }
 
     PumpPointer(mDisplayTime);
+    SizeRender();
 
     // Without a head pose there is no off-axis frustum to build, so the frame falls back to one
     // image that both eyes read, which is what 2.1 presented.
@@ -1995,7 +2054,7 @@ static void PlacementMatrix(const XrView& eye, const XrPosef& anchor, float widt
 void GfxWindowBackendOpenXR::PresentView(uint32_t view) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mGameFbo[view]);
-    glBlitFramebuffer(0, 0, mGameWidth, mGameHeight, 0, 0, mGameWidth, mGameHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBlitFramebuffer(0, 0, mGameWidth, mGameHeight, 0, 0, mTexWidth, mTexHeight, GL_COLOR_BUFFER_BIT, GL_LINEAR);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 

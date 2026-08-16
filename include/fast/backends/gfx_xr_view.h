@@ -74,6 +74,13 @@ void SetXrFlatProjection(bool flat);
 // Radians the window covers, for a caller that scales a menu drawn on it. Zero without a session.
 float GetXrWindowAngularWidth();
 
+// What fraction of the window's own width the game has to draw for one game pixel to be about one
+// eye pixel. The frame is drawn once per eye and then sampled onto a window that covers part of the
+// view, so every pixel beyond that is thrown away. It matters most where the headset hands the app
+// its whole binocular panel: the window then covers about a quarter of the width the game is given,
+// which is sixteen times the pixels. 1 without a session, and never above 1.
+float GetXrRenderScale();
+
 // The headset's own controllers. Horizon OS routes a Touch controller through OpenXR alone, so
 // Android reports no input device for one and SDL never sees it. The state is read from the action
 // set each frame and left in the runtime's own units: sticks and triggers from 0 to 1, buttons as

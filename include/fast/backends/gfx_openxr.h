@@ -70,6 +70,8 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     bool OpenFrame();
     void LocateViews();
     void SizeWindow();
+    void SizeRender();
+    void CreateGameTargets(uint32_t width, uint32_t height);
     void PlaceWindow();
     void AnchorHere();
     void Recenter();
@@ -113,6 +115,8 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
 
     uint32_t mGameWidth = 0;
     uint32_t mGameHeight = 0;
+    uint32_t mTexWidth = 0;
+    uint32_t mTexHeight = 0;
     uint32_t mGameTex[VIEW_COUNT] = { 0, 0 };
     uint32_t mGameFbo[VIEW_COUNT] = { 0, 0 };
     uint32_t mProgram = 0;
