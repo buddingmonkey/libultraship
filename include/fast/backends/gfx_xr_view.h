@@ -46,6 +46,19 @@ void RecenterXrWindow();
 // costs half as much and only one layer reaches the compositor.
 void SetXrStereo(bool enabled);
 
+// How far the picture fades out at its edge, against the width the backend holds. Each eye looks
+// through the window at its own angle, so the edge cuts a different sliver of the world out of each
+// one. A hard cut is two edges the eyes cannot fuse; a ramp gives them nothing sharp to disagree
+// about. Zero leaves a hard edge, with the rounded corners still clean.
+void SetXrEdgeSoftness(float softness);
+
+// How much of the eye separation each eye gives up at its own side edge, from none to all of it.
+// At a side edge one eye sees a sliver of the world the other cannot, which is what a window does
+// and no mask can remove. The crop puts crossed parallax on the edge, so the frame floats towards
+// the viewer and the sliver reads as ordinary occlusion behind a near edge instead of as one eye
+// covered. It costs that much width off one side of each eye. Nothing happens without stereo.
+void SetXrEdgeFloat(float fraction);
+
 // Which eye's pass is rendering now: 0 for the first or only view, 1 for the second. The whole
 // display list runs once per eye, so a capture that must differ per eye keys off this.
 int GetXrViewIndex();

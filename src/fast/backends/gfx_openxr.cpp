@@ -94,6 +94,27 @@ static constexpr float MOVE_BAR_REACH = 2.6f;
 static constexpr float CORNER_SIDE = 0.16f;
 static constexpr float CORNER_ZONE = 0.11f;
 
+// The handle's arc turns about a center this far inside the corner, in corner sides: the RADIUS
+// less the GAP of the shader below. The picture rounds onto the same center, so the arc the handle
+// draws follows the corner it takes hold of, a constant gap outside it.
+static constexpr float CORNER_ARC_CENTER = 0.155f;
+
+// How far in from its edge the picture fades out, in window heights, before the softness setting,
+// and the most that setting can multiply it by.
+static constexpr float WINDOW_FEATHER = 0.012f;
+static constexpr float EDGE_SOFTNESS_MAX = 3.0f;
+
+// Each eye looks through the window at its own angle, so at a side edge one eye sees a sliver of
+// the world the other cannot. That is what a real window does, and no mask removes it. What makes
+// it hard to look at is that the edge stands at the depth of the nearest thing behind it, so it is
+// not clearly in front of what it cuts. The cure is the floating window of stereo film: each eye
+// gives up its own side edge, which puts crossed parallax on it and floats the frame towards the
+// viewer. The sliver is then plainly behind a near edge, which the eyes read as ordinary occlusion.
+//
+// The crop is this fraction of the eye separation, so it holds its depth whoever wears the headset.
+// One puts the frame at half the range of the glass, which is far more than film ever uses.
+static constexpr float EDGE_FLOAT_MAX = 1.0f;
+
 // Radians of turn in a new LOCAL origin below which it reads as the system keeping the space near
 // the user rather than the user asking for a recenter. A gesture made while facing the old front
 // falls under it, and costs nothing: the window is already there.
@@ -647,6 +668,8 @@ static float sViewTanHalfHeight = 0.0f;
 static float sWindowAngularWidth = 0.0f;
 static bool sFlatProjection = false;
 static bool sStereo = true;
+static float sEdgeSoftness = 0.36f;
+static float sEdgeFloat = 0.15f;
 static int sCurrentViewIndex = 0;
 static bool sRecenterWanted = true;
 static float sSceneNear = std::numeric_limits<float>::max();
@@ -677,6 +700,14 @@ void RecenterXrWindow() {
 
 void SetXrStereo(bool enabled) {
     sStereo = enabled;
+}
+
+void SetXrEdgeSoftness(float softness) {
+    sEdgeSoftness = Clamp(softness, 0.0f, EDGE_SOFTNESS_MAX);
+}
+
+void SetXrEdgeFloat(float fraction) {
+    sEdgeFloat = Clamp(fraction, 0.0f, EDGE_FLOAT_MAX);
 }
 
 int GetXrViewIndex() {
@@ -757,19 +788,36 @@ float GfxWindowBackendOpenXR::CornerSide() const {
     return mWindowHeight * CORNER_SIDE;
 }
 
+float GfxWindowBackendOpenXR::WindowCorner() const {
+    return mWindowHeight * CORNER_SIDE * CORNER_ARC_CENTER;
+}
+
+// The side edge one eye gives up, in window heights, which is what the shader measures in.
+float GfxWindowBackendOpenXR::EdgeFloat() const {
+    if (mViewCount != VIEW_COUNT || !mViewsValid || mWindowHeight <= 0.0f) {
+        return 0.0f;
+    }
+    const float separation = Length(Subtract(mViews[1].pose.position, mViews[0].pose.position));
+    return sEdgeFloat * separation / mWindowHeight;
+}
+
 bool GfxWindowBackendOpenXR::OnBar(float planeX, float planeY) const {
     return fabsf(planeX) <= 0.625f * BarWidth() && fabsf(planeY - BarDrop()) <= 0.5f * BarHeight() * MOVE_BAR_REACH;
 }
 
-// The corner outside the picture, never the picture inside it. Bit 0 is the right side, bit 1 the top.
+// The corner outside the picture, never the picture inside it. The picture is a rounded rectangle,
+// so the handle takes the corner the rounding left. Bit 0 is the right side, bit 1 the top.
 int GfxWindowBackendOpenXR::OnCorner(float planeX, float planeY) const {
     const float zone = mWindowHeight * CORNER_ZONE;
     const float halfWidth = 0.5f * mWindowWidth;
     const float halfHeight = 0.5f * mWindowHeight;
     const float x = fabsf(planeX);
     const float y = fabsf(planeY);
+    const float radius = WindowCorner();
+    const float outX = fmaxf(x - halfWidth + radius, 0.0f);
+    const float outY = fmaxf(y - halfHeight + radius, 0.0f);
     if (x <= halfWidth - zone || x >= halfWidth + zone || y <= halfHeight - zone || y >= halfHeight + zone ||
-        (x <= halfWidth && y <= halfHeight)) {
+        outX * outX + outY * outY <= radius * radius) {
         return -1;
     }
     return (planeX > 0.0f ? 1 : 0) | (planeY > 0.0f ? 2 : 0);
@@ -1481,12 +1529,29 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
         "    vUv = c + 0.5;\n"
         "    gl_Position = uMvp * vec4(c, 0.0, 1.0);\n"
         "}\n";
+    // The picture is a rounded rectangle that can fade out at its edge. The shape is measured in
+    // window heights, so the rounding and the fade hold their size on the glass whatever the window
+    // does. uShift takes this eye's own side edge in and leaves the other, which floats the frame:
+    // the same crop off each eye keeps the picture one width and moves only which side gives it up.
+    // The ramp is never narrower than a pixel, so the rounding stays clean with the fade at zero.
+    // The color comes out multiplied by the alpha, as the layer reads it that way.
     static const char* FRAGMENT = "#version 300 es\n"
                                   "precision highp float;\n"
                                   "uniform sampler2D uTex;\n"
+                                  "uniform float uAspect;\n"
+                                  "uniform float uRadius;\n"
+                                  "uniform float uFeather;\n"
+                                  "uniform float uShift;\n"
                                   "in vec2 vUv;\n"
                                   "out vec4 oColor;\n"
-                                  "void main() { oColor = vec4(texture(uTex, vUv).rgb, 1.0); }\n";
+                                  "void main() {\n"
+                                  "    vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0) - vec2(0.5 * uShift, 0.0);\n"
+                                  "    vec2 corner = vec2(0.5 * uAspect - 0.5 * abs(uShift), 0.5);\n"
+                                  "    vec2 d = abs(p) - corner + uRadius;\n"
+                                  "    float sd = length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - uRadius;\n"
+                                  "    float a = smoothstep(0.0, max(uFeather, fwidth(sd)), -sd);\n"
+                                  "    oColor = vec4(texture(uTex, vUv).rgb * a, a);\n"
+                                  "}\n";
     // Three bars in a rounded square, drawn from the distance to each shape so the edges stay clean
     // at any range. SIDE is 1 / MENU_BUTTON_REACH: the rest of the rectangle keeps its alpha at
     // zero and is the part of the target the user cannot see. The color comes out multiplied by
@@ -1596,6 +1661,10 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
         return false;
     }
     mMvpLoc = glGetUniformLocation(mProgram, "uMvp");
+    mAspectLoc = glGetUniformLocation(mProgram, "uAspect");
+    mRadiusLoc = glGetUniformLocation(mProgram, "uRadius");
+    mFeatherLoc = glGetUniformLocation(mProgram, "uFeather");
+    mShiftLoc = glGetUniformLocation(mProgram, "uShift");
     glUseProgram(mProgram);
     glUniform1i(glGetUniformLocation(mProgram, "uTex"), 0);
     glUseProgram(0);
@@ -1786,6 +1855,12 @@ void GfxWindowBackendOpenXR::DrawEye(uint32_t eye, uint32_t sourceView) {
         PlacementMatrix(mViews[eye], mAnchorPose, mWindowWidth, mWindowHeight, mvp);
         glUseProgram(mProgram);
         glUniformMatrix4fv(mMvpLoc, 1, GL_FALSE, mvp);
+        glUniform1f(mAspectLoc, mWindowHeight > 0.0f ? mWindowWidth / mWindowHeight : 1.0f);
+        glUniform1f(mRadiusLoc, CORNER_SIDE * CORNER_ARC_CENTER);
+        glUniform1f(mFeatherLoc, WINDOW_FEATHER * sEdgeSoftness);
+        // The left eye gives up the left edge and the right eye the right one. One image for both
+        // eyes has no parallax to correct, so it gives up nothing.
+        glUniform1f(mShiftLoc, eye == 0 ? EdgeFloat() : -EdgeFloat());
         glBindVertexArray(mVao);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, mGameTex[sourceView]);

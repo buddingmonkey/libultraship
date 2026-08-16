@@ -79,6 +79,8 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     float BarHeight() const;
     float BarDrop() const;
     float CornerSide() const;
+    float WindowCorner() const;
+    float EdgeFloat() const;
     XrPosef PlanePose(float x, float y) const;
     void PresentView(uint32_t view);
     void DrawOverlays(uint32_t eye);
@@ -114,6 +116,10 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     uint32_t mCornerProgram = 0;
     uint32_t mVao = 0;
     int32_t mMvpLoc = -1;
+    int32_t mAspectLoc = -1;
+    int32_t mRadiusLoc = -1;
+    int32_t mFeatherLoc = -1;
+    int32_t mShiftLoc = -1;
     int32_t mMenuMvpLoc = -1;
     int32_t mMenuGlowLoc = -1;
     int32_t mCursorMvpLoc = -1;
