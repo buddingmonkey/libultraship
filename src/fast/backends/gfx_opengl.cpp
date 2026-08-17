@@ -948,6 +948,10 @@ void GfxRenderingAPIOGL::SelectTextureFb(int fb_id) {
     if (texId >= textures.size()) {
         textures.resize((size_t)texId + 1);
     }
+    // The color buffer never goes through UploadTexture, so give it the size the three-point
+    // filter reads. Zero there samples one texel and paints the whole surface with it.
+    textures[texId].width = mFrameBuffers[fb_id].width;
+    textures[texId].height = mFrameBuffers[fb_id].height;
     SelectTexture(tile, texId);
 }
 
