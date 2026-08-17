@@ -141,6 +141,7 @@ void Interpreter::Flush() {
         mRapi->DrawTriangles(mBufVbo, mBufVboLen, mBufVboNumTris);
         mBufVboLen = 0;
         mBufVboNumTris = 0;
+        mDrawCallCount++;
     }
 }
 
