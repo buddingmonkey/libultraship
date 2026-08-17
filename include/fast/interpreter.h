@@ -566,6 +566,10 @@ class Interpreter {
     std::map<int, FBInfo>::iterator mActiveFrameBuffer;
     std::map<int, FBInfo> mFrameBuffers;
 
+    // Whether the draws that follow count toward how near the scene comes to the viewer. A pass
+    // that sits in front of what it decorates turns it off, so the window does not lurch forward.
+    bool mXrSceneDepth = true;
+
     // Set while the off-axis frustum of a headset stands in for the game's projection, with the
     // two numbers that turn a clip w back into a depth from the viewpoint.
     bool mXrProjection{};

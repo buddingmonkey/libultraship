@@ -2018,7 +2018,7 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
 #ifdef ENABLE_OPENXR
     // A rectangle carries screen coordinates, not a place in the world, so it is not something the
     // window has to stay in front of.
-    if (mXrProjection && !is_rect && !mFbActive) {
+    if (mXrProjection && mXrSceneDepth && !is_rect && !mFbActive) {
         SetXrSceneNear(XrVisibleDepth(v_arr));
     }
 #endif
@@ -4344,6 +4344,13 @@ bool gfx_xr_flat_projection_handler_custom(F3DGfx** cmd0) {
     return false;
 }
 
+bool gfx_xr_scene_depth_handler_custom(F3DGfx** cmd0) {
+#ifdef ENABLE_OPENXR
+    mInstance.lock()->mXrSceneDepth = (*cmd0)->words.w1 != 0;
+#endif
+    return false;
+}
+
 bool gfx_reset_fb_handler_custom(F3DGfx** cmd0) {
     Interpreter* gfx = mInstance.lock().get();
     gfx->Flush();
@@ -4935,7 +4942,8 @@ static constexpr UcodeHandler otrHandlers = {
     { RDP_G_LOADBLOCK_WIDE, { "G_LOADBLOCK_WIDE", gfx_load_block_wide_handler_rdp } }, // RDP_G_LOADBLOCK_WIDE (-15)
     { RDP_G_VTX_WIDE, { "G_VTX_WIDE", gfx_vtx_handler_f3dex2 } },                      // RDP_G_VTX_WIDE (-16)
     { RDP_G_TRI1_WIDE, { "G_TRI1_WIDE", gfx_tri1_handler_f3dex2 } },                   // RDP_G_TRI1_WIDE (-17)
-    { RDP_G_XR_FLATPROJ, { "G_XR_FLATPROJ", gfx_xr_flat_projection_handler_custom } }, // RDP_G_XR_FLATPROJ (0x4b)
+    { RDP_G_XR_FLATPROJ, { "G_XR_FLATPROJ", gfx_xr_flat_projection_handler_custom } },  // RDP_G_XR_FLATPROJ (0x4b)
+    { RDP_G_XR_SCENEDEPTH, { "G_XR_SCENEDEPTH", gfx_xr_scene_depth_handler_custom } }, // RDP_G_XR_SCENEDEPTH (0x4c)
 };
 
 static constexpr UcodeHandler f3dex2Handlers = {
@@ -5359,6 +5367,7 @@ void Interpreter::RunGuiOnly() {
 
 void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_replacements) {
     SpReset();
+    mXrSceneDepth = true;
 
     mGetPixelDepthPending.clear();
     mGetPixelDepthCached.clear();
