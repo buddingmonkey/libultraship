@@ -887,7 +887,6 @@ static float Length(const XrVector3f& v) {
     return sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
 }
 
-static bool sPointerValid = false;
 static bool sPointerDown = false;
 static float sPointerU = 0.0f;
 static float sPointerV = 0.0f;
@@ -1435,11 +1434,8 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
     }
 
     if (hit) {
-        sPointerValid = true;
         sPointerU = u;
         sPointerV = v;
-    } else if (!wasDown) {
-        sPointerValid = false;
     }
 
     if (!hit && !wasDown) {
