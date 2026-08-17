@@ -969,6 +969,10 @@ void GfxRenderingAPIOGL::CopyFramebuffer(int fb_dst_id, int fb_src_id, int srcX0
     // A multisampled source only supports an equal, unflipped blit, so resolve it first and copy
     // from the resolved buffer. A flipped or scaled resolve is an error the driver may enforce.
     if (src.msaa_level > 1) {
+        // The resolve moves the samples, not the rows, so the copy keeps the orientation of the
+        // buffer that was drawn, not the flag on the buffer it lands in.
+        const bool src_invertY = src.invertY;
+
         // Start with the main buffer (0) as the msaa resolved buffer
         int fb_resolve_id = 0;
         FramebufferOGL fb_resolve = mFrameBuffers[fb_resolve_id];
@@ -987,6 +991,7 @@ void GfxRenderingAPIOGL::CopyFramebuffer(int fb_dst_id, int fb_src_id, int srcX0
         // Switch source buffer to the resolved sample
         fb_src_id = fb_resolve_id;
         src = fb_resolve;
+        src.invertY = src_invertY;
     }
 
     // Adjust y values for non-inverted source frame buffers because opengl uses bottom left for origin

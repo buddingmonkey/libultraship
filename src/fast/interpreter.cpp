@@ -4444,7 +4444,7 @@ bool gfx_set_timg_fb_handler_custom(F3DGfx** cmd0) {
     F3DGfx* cmd = *cmd0;
 
     gfx->Flush();
-    gfx->mRapi->SelectTextureFb((uint32_t)cmd->words.w1);
+    gfx->mRapi->SelectTextureFb((uint32_t)gfx->StereoFbForCurrentView((int)cmd->words.w1));
     // SelectTextureFb binds outside the texture cache, so the slot no longer holds a node.
     gfx->mRenderingState.mTextures[0] = nullptr;
     gfx->mRdp->textures_changed[0] = false;
