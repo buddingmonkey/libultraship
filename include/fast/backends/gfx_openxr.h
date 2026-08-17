@@ -145,6 +145,7 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     int32_t mRayTintLoc = -1;
     int32_t mRayWidthLoc = -1;
     int32_t mRayFadeLoc = -1;
+    int32_t mRayTaperLoc = -1;
 
     XrView mViews[VIEW_COUNT] = {};
     bool mViewsValid = false;

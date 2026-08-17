@@ -93,12 +93,16 @@ static constexpr float CURSOR_RING = 0.32f;
 // can carry one. It is a stub out of the hand rather than a line to the dot: hidden for the first
 // stretch, so it does not sit on the front of a controller, and stopped short of the dot, so it
 // never runs into the middle of it. Where the dot is nearer than the reach, the gap wins.
-static constexpr float RAY_HIDDEN = 0.04f;
+static constexpr float RAY_HIDDEN = 0.06f;
 static constexpr float RAY_RAMP = 0.01f;
-static constexpr float RAY_REACH = 0.30f;
+static constexpr float RAY_REACH = 0.50f;
 static constexpr float RAY_GAP = 0.02f;
-// Held at the width it has at the hand, so it does not narrow into the distance.
-static constexpr float RAY_WIDTH = 0.005f;
+// Held at the width it has at the hand, so perspective does not narrow it. What narrows it is the
+// taper, which begins this far before the far fade and takes it to this much of its width by the
+// end. Raise the first number to start the taper nearer the hand.
+static constexpr float RAY_WIDTH = 0.00125f;
+static constexpr float RAY_TAPER = 0.02f;
+static constexpr float RAY_TAPER_TO = 0.4f;
 
 // What the ray and the dot turn while the trigger is held. A color rather than more opacity: the
 // pointer hangs over passthrough as readily as over the game, and a white that is only brighter
@@ -2038,13 +2042,15 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
                                       "precision highp float;\n"
                                       "uniform vec3 uTint;\n"
                                       "uniform vec4 uFade;\n"
+                                      "uniform vec2 uTaper;\n"
                                       "in vec2 vUv;\n"
                                       "out vec4 oColor;\n"
                                       "void main() {\n"
                                       "    float across = abs(vUv.y - 0.5) * 2.0;\n"
-                                      "    float aa = max(fwidth(across), 0.001);\n"
-                                      "    float core = 1.0 - smoothstep(1.0 - 2.0 * aa, 1.0, across);\n"
                                       "    float along = vUv.x * uFade.w;\n"
+                                      "    float narrow = mix(1.0, uTaper.y, smoothstep(uTaper.x, uFade.w, along));\n"
+                                      "    float aa = max(fwidth(across), 0.001);\n"
+                                      "    float core = 1.0 - smoothstep(narrow - aa, narrow + aa, across);\n"
                                       "    float a = core * smoothstep(uFade.x, uFade.y, along) *\n"
                                       "              (1.0 - smoothstep(uFade.z, uFade.w, along)) * 0.85;\n"
                                       "    oColor = vec4(uTint * a, a);\n"
@@ -2125,6 +2131,7 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
     mRayTintLoc = glGetUniformLocation(mRayProgram, "uTint");
     mRayWidthLoc = glGetUniformLocation(mRayProgram, "uWidth");
     mRayFadeLoc = glGetUniformLocation(mRayProgram, "uFade");
+    mRayTaperLoc = glGetUniformLocation(mRayProgram, "uTaper");
     glGenVertexArrays(1, &mVao);
     return true;
 }
@@ -2347,6 +2354,7 @@ void GfxWindowBackendOpenXR::DrawOverlays(uint32_t eye) {
             glUniformMatrix4fv(mRayMvpLoc, 1, GL_FALSE, mvp);
             glUniform2f(mRayWidthLoc, RAY_WIDTH, wide);
             glUniform4f(mRayFadeLoc, RAY_HIDDEN, RAY_HIDDEN + RAY_RAMP, span - RAY_RAMP, span);
+            glUniform2f(mRayTaperLoc, span - RAY_RAMP - RAY_TAPER, RAY_TAPER_TO);
             glUniform3fv(mRayTintLoc, 1, tint);
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         }
