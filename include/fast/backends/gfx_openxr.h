@@ -135,13 +135,16 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     int32_t mMenuGlowLoc = -1;
     int32_t mCursorMvpLoc = -1;
     int32_t mCursorDownLoc = -1;
+    int32_t mCursorTintLoc = -1;
     int32_t mBarMvpLoc = -1;
     int32_t mBarGlowLoc = -1;
     int32_t mBarAspectLoc = -1;
     int32_t mCornerMvpLoc = -1;
     int32_t mCornerGlowLoc = -1;
     int32_t mRayMvpLoc = -1;
-    int32_t mRayDownLoc = -1;
+    int32_t mRayTintLoc = -1;
+    int32_t mRayWidthLoc = -1;
+    int32_t mRayFadeLoc = -1;
 
     XrView mViews[VIEW_COUNT] = {};
     bool mViewsValid = false;

@@ -84,12 +84,27 @@ static constexpr float MENU_BUTTON_REACH = 1.6f;
 // picture to the button, which is the only place a small target is hard to find.
 static constexpr float MENU_BUTTON_ZONE = 3.0f;
 
-// The cursor, in window heights. The rest of the rectangle holds the shadow.
+// The cursor, in window heights. The rest of the rectangle holds the shadow. The ring sits at this
+// much of the rectangle, which is what the ray keeps its distance from; CURSOR_FRAGMENT draws it.
 static constexpr float CURSOR_SIDE = 0.075f;
+static constexpr float CURSOR_RING = 0.32f;
 
-// The ray from the hand to its dot, as a share of the cursor. A dot on its own says nothing about
-// which hand put it there, and both hands can carry one.
-static constexpr float RAY_WIDTH = 0.10f;
+// The ray, in meters. A dot on its own says nothing about which hand put it there, and both hands
+// can carry one. It is a stub out of the hand rather than a line to the dot: hidden for the first
+// stretch, so it does not sit on the front of a controller, and stopped short of the dot, so it
+// never runs into the middle of it. Where the dot is nearer than the reach, the gap wins.
+static constexpr float RAY_HIDDEN = 0.04f;
+static constexpr float RAY_RAMP = 0.01f;
+static constexpr float RAY_REACH = 0.30f;
+static constexpr float RAY_GAP = 0.02f;
+// Held at the width it has at the hand, so it does not narrow into the distance.
+static constexpr float RAY_WIDTH = 0.005f;
+
+// What the ray and the dot turn while the trigger is held. A color rather than more opacity: the
+// pointer hangs over passthrough as readily as over the game, and a white that is only brighter
+// says nothing against a bright picture. One definition, because two shaders read it.
+static constexpr float POINTER_IDLE[3] = { 1.0f, 1.0f, 1.0f };
+static constexpr float POINTER_HELD[3] = { 0.20f, 0.55f, 1.0f };
 
 // The move bar, in window widths and window heights: how wide and how tall it is drawn, how far
 // below the bottom edge it hangs, and how much taller than the drawing the rectangle that takes the
@@ -1981,6 +1996,7 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
         "#version 300 es\n"
         "precision highp float;\n"
         "uniform float uDown;\n"
+        "uniform vec3 uTint;\n"
         "in vec2 vUv;\n"
         "out vec4 oColor;\n"
         "void main() {\n"
@@ -1992,29 +2008,46 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
         "    float disc = 1.0 - smoothstep(r - aa, r + aa, d);\n"
         "    float inner = 1.0 - smoothstep(r - t - aa, r - t + aa, d);\n"
         "    float shadow = (1.0 - smoothstep(r - 0.005, r + 0.05, d)) * (1.0 - disc);\n"
-        "    float fillA = inner * mix(0.25, 0.45, uDown);\n"
-        "    float ringA = (disc - inner) * mix(0.60, 0.90, uDown);\n"
+        "    float fillA = inner * 0.35;\n"
+        "    float ringA = (disc - inner) * 0.85;\n"
         "    vec4 c = vec4(0.0, 0.0, 0.0, shadow * 0.55);\n"
-        "    c = vec4(vec3(fillA), fillA) + c * (1.0 - fillA);\n"
-        "    c = vec4(vec3(ringA), ringA) + c * (1.0 - ringA);\n"
+        "    c = vec4(uTint * fillA, fillA) + c * (1.0 - fillA);\n"
+        "    c = vec4(uTint * ringA, ringA) + c * (1.0 - ringA);\n"
         "    oColor = c;\n"
         "}\n";
 
-    // The ray, drawn on a band that runs from the hand at x 0 to the dot at x 1 and is turned to
-    // face the eye. It comes out of nothing a little ahead of the hand rather than starting at it,
-    // which is what keeps a controller or a hand from wearing a line stuck to its front.
+    // The ray's band is one meter across and the width is set here, from what it should be at each
+    // end. Both ends are held at the same angle, so the far one is the wider, and no matrix makes
+    // that shape.
+    static const char* RAY_VERTEX =
+        "#version 300 es\n"
+        "uniform mat4 uMvp;\n"
+        "uniform vec2 uWidth;\n"
+        "out vec2 vUv;\n"
+        "void main() {\n"
+        "    vec2 c = vec2((gl_VertexID & 1) == 1 ? 0.5 : -0.5, (gl_VertexID & 2) == 2 ? 0.5 : -0.5);\n"
+        "    vUv = c + 0.5;\n"
+        "    gl_Position = uMvp * vec4(c.x, c.y * mix(uWidth.x, uWidth.y, vUv.x), 0.0, 1.0);\n"
+        "}\n";
+
+    // The ray. uFade carries its profile in meters from the hand: nothing until x, full by y, held
+    // to z, gone by w. It comes out of nothing rather than starting at the hand, so no controller
+    // wears a line on its front, and it is gone before the dot rather than reaching the middle of
+    // it. Nothing tapers: the width is an angle and the ramps are the only thing that changes.
     static const char* RAY_FRAGMENT = "#version 300 es\n"
                                       "precision highp float;\n"
-                                      "uniform float uDown;\n"
+                                      "uniform vec3 uTint;\n"
+                                      "uniform vec4 uFade;\n"
                                       "in vec2 vUv;\n"
                                       "out vec4 oColor;\n"
                                       "void main() {\n"
                                       "    float across = abs(vUv.y - 0.5) * 2.0;\n"
                                       "    float aa = max(fwidth(across), 0.001);\n"
                                       "    float core = 1.0 - smoothstep(1.0 - 2.0 * aa, 1.0, across);\n"
-                                      "    float along = smoothstep(0.0, 0.55, vUv.x);\n"
-                                      "    float a = core * along * mix(0.45, 0.80, uDown);\n"
-                                      "    oColor = vec4(vec3(a), a);\n"
+                                      "    float along = vUv.x * uFade.w;\n"
+                                      "    float a = core * smoothstep(uFade.x, uFade.y, along) *\n"
+                                      "              (1.0 - smoothstep(uFade.z, uFade.w, along)) * 0.85;\n"
+                                      "    oColor = vec4(uTint * a, a);\n"
                                       "}\n";
 
     // The move bar. The quad is far wider than it is tall, so the shape is drawn in a space the
@@ -2062,8 +2095,10 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
     mCursorProgram = LinkProgram(vertex, CURSOR_FRAGMENT);
     mBarProgram = LinkProgram(vertex, BAR_FRAGMENT);
     mCornerProgram = LinkProgram(vertex, CORNER_FRAGMENT);
-    mRayProgram = LinkProgram(vertex, RAY_FRAGMENT);
+    const GLuint rayVertex = CompileShader(GL_VERTEX_SHADER, RAY_VERTEX);
+    mRayProgram = LinkProgram(rayVertex, RAY_FRAGMENT);
     glDeleteShader(vertex);
+    glDeleteShader(rayVertex);
     if (mProgram == 0 || mMenuProgram == 0 || mCursorProgram == 0 || mBarProgram == 0 || mCornerProgram == 0 ||
         mRayProgram == 0) {
         return false;
@@ -2080,13 +2115,16 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
     mMenuGlowLoc = glGetUniformLocation(mMenuProgram, "uGlow");
     mCursorMvpLoc = glGetUniformLocation(mCursorProgram, "uMvp");
     mCursorDownLoc = glGetUniformLocation(mCursorProgram, "uDown");
+    mCursorTintLoc = glGetUniformLocation(mCursorProgram, "uTint");
     mBarMvpLoc = glGetUniformLocation(mBarProgram, "uMvp");
     mBarGlowLoc = glGetUniformLocation(mBarProgram, "uGlow");
     mBarAspectLoc = glGetUniformLocation(mBarProgram, "uAspect");
     mCornerMvpLoc = glGetUniformLocation(mCornerProgram, "uMvp");
     mCornerGlowLoc = glGetUniformLocation(mCornerProgram, "uGlow");
     mRayMvpLoc = glGetUniformLocation(mRayProgram, "uMvp");
-    mRayDownLoc = glGetUniformLocation(mRayProgram, "uDown");
+    mRayTintLoc = glGetUniformLocation(mRayProgram, "uTint");
+    mRayWidthLoc = glGetUniformLocation(mRayProgram, "uWidth");
+    mRayFadeLoc = glGetUniformLocation(mRayProgram, "uFade");
     glGenVertexArrays(1, &mVao);
     return true;
 }
@@ -2169,9 +2207,10 @@ static void PlacementMatrix(const XrView& eye, const XrPosef& anchor, float widt
     MulMatrix(eyeMatrix, model, mvp);
 }
 
-// A flat band from one point to another, turned to face the eye. The unit quad's x runs along the
-// band from the hand to the dot and its y across the width, which is what the shader reads.
-static void RayMatrix(const XrView& eye, const XrVector3f& from, const XrVector3f& to, float width, float mvp[16]) {
+// A flat band from one point to another, turned to face the eye. The band's x runs along it from
+// the hand and its y across, one meter wide, because the shader is what sets the width: a band held
+// at one angle is wider at the end than at the start and no matrix can do that.
+static void RayMatrix(const XrView& eye, const XrVector3f& from, const XrVector3f& to, float mvp[16]) {
     XrVector3f along = Subtract(to, from);
     const float span = Length(along);
     if (span <= 1e-5f) {
@@ -2199,9 +2238,9 @@ static void RayMatrix(const XrView& eye, const XrVector3f& from, const XrVector3
     model[0] = along.x * span;
     model[1] = along.y * span;
     model[2] = along.z * span;
-    model[4] = across.x * width;
-    model[5] = across.y * width;
-    model[6] = across.z * width;
+    model[4] = across.x;
+    model[5] = across.y;
+    model[6] = across.z;
     model[8] = -toEye.x;
     model[9] = -toEye.y;
     model[10] = -toEye.z;
@@ -2285,16 +2324,38 @@ void GfxWindowBackendOpenXR::DrawOverlays(uint32_t eye) {
         }
         anyHand = true;
         const XrPosef dot = PlanePose(sHandX[hand], sHandY[hand]);
-        RayMatrix(mViews[eye], sHandFrom[hand], dot.position, cursor * RAY_WIDTH, mvp);
-        glUseProgram(mRayProgram);
-        glUniformMatrix4fv(mRayMvpLoc, 1, GL_FALSE, mvp);
-        glUniform1f(mRayDownLoc, sHandDown[hand] ? 1.0f : 0.0f);
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        const float* tint = sHandDown[hand] ? POINTER_HELD : POINTER_IDLE;
+
+        // The ray reaches as far as it is allowed or as far as it can while staying clear of the
+        // ring, whichever is nearer. The gap is measured from the ring rather than from the middle
+        // of it, or a ring wider than the gap would swallow the end of the ray. Below the length
+        // its own ramps need, there is nothing left to draw.
+        const XrVector3f& from = sHandFrom[hand];
+        XrVector3f along = Subtract(dot.position, from);
+        const float reach = Length(along);
+        const float span = fminf(RAY_REACH, reach - cursor * CURSOR_RING - RAY_GAP);
+        if (span > RAY_HIDDEN + 2.0f * RAY_RAMP) {
+            const XrVector3f end = { from.x + along.x * span / reach, from.y + along.y * span / reach,
+                                     from.z + along.z * span / reach };
+            // One angle from end to end, taken from the width the near end should have.
+            const float atHand = Length(Subtract(from, mViews[eye].pose.position));
+            const float atEnd = Length(Subtract(end, mViews[eye].pose.position));
+            const float wide = atHand > 1e-4f ? RAY_WIDTH * atEnd / atHand : RAY_WIDTH;
+
+            RayMatrix(mViews[eye], from, end, mvp);
+            glUseProgram(mRayProgram);
+            glUniformMatrix4fv(mRayMvpLoc, 1, GL_FALSE, mvp);
+            glUniform2f(mRayWidthLoc, RAY_WIDTH, wide);
+            glUniform4f(mRayFadeLoc, RAY_HIDDEN, RAY_HIDDEN + RAY_RAMP, span - RAY_RAMP, span);
+            glUniform3fv(mRayTintLoc, 1, tint);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        }
 
         PlacementMatrix(mViews[eye], dot, cursor, cursor, mvp);
         glUseProgram(mCursorProgram);
         glUniformMatrix4fv(mCursorMvpLoc, 1, GL_FALSE, mvp);
         glUniform1f(mCursorDownLoc, sHandDown[hand] ? 1.0f : 0.0f);
+        glUniform3fv(mCursorTintLoc, 1, tint);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
 
@@ -2303,7 +2364,9 @@ void GfxWindowBackendOpenXR::DrawOverlays(uint32_t eye) {
         PlacementMatrix(mViews[eye], PlanePose(sCursorX, sCursorY), cursor, cursor, mvp);
         glUseProgram(mCursorProgram);
         glUniformMatrix4fv(mCursorMvpLoc, 1, GL_FALSE, mvp);
-        glUniform1f(mCursorDownLoc, sPointerDown || sMenuHeld ? 1.0f : 0.0f);
+        const bool held = sPointerDown || sMenuHeld;
+        glUniform1f(mCursorDownLoc, held ? 1.0f : 0.0f);
+        glUniform3fv(mCursorTintLoc, 1, held ? POINTER_HELD : POINTER_IDLE);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
 
