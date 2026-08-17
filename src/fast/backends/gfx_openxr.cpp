@@ -30,7 +30,9 @@
 namespace Fast {
 
 // The window hangs in front of where the user faced at start, at the range the setting asks for.
-static constexpr float WINDOW_DISTANCE_DEFAULT = 0.5f;
+// The default is the range the common headsets focus at, so the glass, the frame and the HUD ask
+// the eyes for the vergence the optics already ask for.
+static constexpr float WINDOW_DISTANCE_DEFAULT = 1.3f;
 static constexpr float WINDOW_DISTANCE_MIN = 0.5f;
 static constexpr float WINDOW_DISTANCE_MAX = 4.0f;
 // The half-angle the window covers across, before the game has loaded a projection to ask for its
@@ -49,6 +51,16 @@ static constexpr float RENDER_HEADROOM = 1.2f;
 static constexpr float WINDOW_SIZE_RANGE = 0.5f;
 static constexpr float WINDOW_SCALE_MIN = 0.5f;
 static constexpr float WINDOW_SCALE_MAX = 8.0f;
+// The scale that covers the same angle at the default range as scale 1 does at the nearest one.
+static constexpr float WINDOW_SCALE_DEFAULT = WINDOW_DISTANCE_DEFAULT / WINDOW_SIZE_RANGE;
+
+// Meters of world behind the glass: the farthest thing the game draws sits this far behind the
+// window, and everything nearer sorts itself in between. The gain it makes, depth over range plus
+// depth, stays under one, so no range and no size can put more than one eye separation of parallax
+// on the glass and the eyes never diverge.
+static constexpr float DIORAMA_DEPTH_DEFAULT = 2.0f;
+static constexpr float DIORAMA_DEPTH_MIN = 0.5f;
+static constexpr float DIORAMA_DEPTH_MAX = 4.0f;
 
 // How far above or below the eyes the window can go, in radians, and where it starts to bend in to
 // face the user. Below the first figure it stands upright. The second is the end of the capsule,
@@ -152,7 +164,8 @@ static constexpr float EDGE_FLOAT_MAX = 1.0f;
 static constexpr float RECENTER_YAW_MIN = 0.035f;
 
 static float sWindowDistance = WINDOW_DISTANCE_DEFAULT;
-static float sWindowScale = 1.0f;
+static float sWindowScale = WINDOW_SCALE_DEFAULT;
+static float sDioramaDepth = DIORAMA_DEPTH_DEFAULT;
 
 static float Clamp(float value, float low, float high) {
     return value < low ? low : (value > high ? high : value);
@@ -987,6 +1000,10 @@ void SetXrWindowScale(float scale) {
     sWindowScale = Clamp(scale, WINDOW_SCALE_MIN, WINDOW_SCALE_MAX);
 }
 
+void SetXrDioramaDepth(float meters) {
+    sDioramaDepth = Clamp(meters, DIORAMA_DEPTH_MIN, DIORAMA_DEPTH_MAX);
+}
+
 float GetXrWindowScale() {
     return sWindowScale;
 }
@@ -1749,9 +1766,9 @@ void GfxWindowBackendOpenXR::ApplySettings() {
         AnchorHere();
     }
     __android_log_print(ANDROID_LOG_INFO, "LighthouseXR",
-                        "window %.2f x %.2f m at %.2f m, %.1f degrees wide, up to %.0f units per meter", mWindowWidth,
-                        mWindowHeight, mWindowRadius, sWindowAngularWidth * 180.0f / (float)M_PI,
-                        WINDOW_DEPTH_MAX / mWindowRadius);
+                        "window %.2f x %.2f m at %.2f m, %.1f degrees wide, the world within %.2f m behind it",
+                        mWindowWidth, mWindowHeight, mWindowRadius, sWindowAngularWidth * 180.0f / (float)M_PI,
+                        sDioramaDepth);
 }
 
 // The rectangle the button is drawn and aimed at, the zone around it the cursor shows in, the
@@ -1867,10 +1884,16 @@ void GfxWindowBackendOpenXR::BeginRenderView(uint32_t view) {
         return;
     }
 
-    // The window plane is a copy of the game's own screen, so the head offset converts with the
-    // one scale that puts the glass sGlassDepth from the viewpoint. LOCAL space starts at the
-    // head, and the window hangs straight ahead of it, so the eye pose is already the offset.
-    const float unitsPerMeter = sGlassDepth / mWindowRadius;
+    // Across the glass, the eye offset converts against the glass itself — sGlassDepth game units
+    // over a window WINDOW_SIZE_RANGE * scale meters wide — so a point on the glass lands on the
+    // same spot for both eyes at any size and range. The gain then sets how deep the world reads:
+    // it compresses every disparity so the farthest thing the game draws sits sDioramaDepth meters
+    // behind the window, whatever the range and however the window is resized. Along the normal the
+    // old scale stands, so the apex of the frustum reaches the glass when the nose does and not a
+    // step before; the parallax a lean can put on the glass stays under the same gain.
+    const float gain = sDioramaDepth / (mWindowRadius + sDioramaDepth);
+    const float acrossGlass = gain * sGlassDepth / (WINDOW_SIZE_RANGE * mWindowScale);
+    const float alongNormal = sGlassDepth / mWindowRadius;
     const XrVector3f& left = mViews[0].pose.position;
     const XrVector3f& right = mViews[1].pose.position;
     // One image for both eyes is drawn from between them, not from either one.
@@ -1879,9 +1902,9 @@ void GfxWindowBackendOpenXR::BeginRenderView(uint32_t view) {
     const XrVector3f world =
         mono ? XrVector3f{ 0.5f * (left.x + right.x), 0.5f * (left.y + right.y), 0.5f * (left.z + right.z) } : eye;
     const XrVector3f offset = ToWindowAxes(world);
-    sViewGeometry.eyeOffset[0] = offset.x * unitsPerMeter;
-    sViewGeometry.eyeOffset[1] = offset.y * unitsPerMeter;
-    sViewGeometry.eyeOffset[2] = offset.z * unitsPerMeter;
+    sViewGeometry.eyeOffset[0] = offset.x * acrossGlass;
+    sViewGeometry.eyeOffset[1] = offset.y * acrossGlass;
+    sViewGeometry.eyeOffset[2] = offset.z * alongNormal;
     sViewGeometry.windowDistance = sGlassDepth;
     sViewGeometryValid = true;
 }

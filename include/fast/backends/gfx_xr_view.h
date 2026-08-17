@@ -26,18 +26,22 @@ void SetXrSceneNear(float units);
 // game's own projection.
 void SetXrViewTangents(float tanHalfWidth, float tanHalfHeight);
 
-// How far the window hangs from the viewer, in meters. The window keeps the angular size the
-// game's field of view gives it, so this does not change the framing: it scales the whole diorama
-// towards the viewer, and a smaller world at a shorter range has more depth in it. Parallax on the
-// glass never exceeds one eye separation whatever the distance, so no setting here can make the
-// eyes diverge. The move bar writes the same number, so read it back before writing it again: the
-// one that moved last owns the range.
+// How far the window hangs from the viewer, in meters. It does not change the framing and it does
+// not change how deep the world reads — the diorama depth owns that — it only says where in the
+// room the glass stands. The move bar writes the same number, so read it back before writing it
+// again: the one that moved last owns the range.
 void SetXrWindowDistance(float meters);
 float GetXrWindowDistance();
 
+// How deep the world reads through the glass, in meters: the farthest thing the game draws sits
+// this far behind the window, and everything nearer sorts itself in between. The gain it takes
+// stays under one for any range and size, so no setting can make the eyes diverge, and a small
+// value keeps every vergence near the glass, which is what a long session wants.
+void SetXrDioramaDepth(float meters);
+
 // How large the window is drawn, as a multiple of the size the game's field of view gives it at
-// that range. It holds the range and widens the angle, so a larger window shows a larger diorama
-// where a shorter range shows a deeper one. The corner handles write the same number.
+// the nearest range. It holds the range and widens the angle, and the depth behind the glass holds
+// still through it. The corner handles write the same number.
 void SetXrWindowScale(float scale);
 float GetXrWindowScale();
 
