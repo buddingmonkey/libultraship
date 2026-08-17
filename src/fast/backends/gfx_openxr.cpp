@@ -29,10 +29,7 @@
 
 namespace Fast {
 
-// The window hangs in front of where the user faced at start, as wide as the game's field of view
-// needs it to be there. The width below only holds until the first frame says otherwise. The range
-// covers exactly what the depth setting can express, so a range the move bar leaves survives the
-// read-back into that setting.
+// The window hangs in front of where the user faced at start, at the range the setting asks for.
 static constexpr float WINDOW_DISTANCE_DEFAULT = 0.5f;
 static constexpr float WINDOW_DISTANCE_MIN = 0.5f;
 static constexpr float WINDOW_DISTANCE_MAX = 4.0f;
@@ -45,10 +42,13 @@ static constexpr float WINDOW_TAN_HALF_WIDTH_DEFAULT = 0.59f;
 static constexpr float RENDER_STEPS = 16.0f;
 static constexpr float RENDER_HEADROOM = 1.2f;
 
-// What the corner handles can do to the size, as a multiple of the size the game's field of view
-// gives the window at its range.
+// The size is meters of glass, and the range does not touch it: a window pushed away keeps the
+// width it had and goes small in the eye, as everything else in the room does. Scale 1 is the width
+// the game's field of view gives at the range below, and the largest scale fills the same angle
+// from the furthest range.
+static constexpr float WINDOW_SIZE_RANGE = 0.5f;
 static constexpr float WINDOW_SCALE_MIN = 0.5f;
-static constexpr float WINDOW_SCALE_MAX = 2.0f;
+static constexpr float WINDOW_SCALE_MAX = 8.0f;
 
 // How far above or below the eyes the window can go, in radians, and where it starts to bend in to
 // face the user. Below the first figure it stands upright. The second is the end of the capsule,
@@ -488,7 +488,6 @@ bool GfxWindowBackendOpenXR::StartSession() {
 
     mWindowRadius = sWindowDistance;
     mWindowScale = sWindowScale;
-    mWindowDistance = mWindowRadius * mWindowScale;
     SizeWindow();
 
     for (XrView& view : mViews) {
@@ -1016,7 +1015,7 @@ bool GfxWindowBackendOpenXR::PlaneHit(const XrPosef& pose, float* planeX, float*
     if (forward.z >= -1e-4f) {
         return false;
     }
-    const float t = (-mWindowDistance - origin.z) / forward.z;
+    const float t = (-mWindowRadius - origin.z) / forward.z;
     if (t <= 0.0f) {
         return false;
     }
@@ -1103,17 +1102,15 @@ void GfxWindowBackendOpenXR::StartGrab(Grab kind, int hand, const XrVector3f& ha
         mCornerHover = -1;
     }
 
-    // The grab must change nothing that can be seen. The head has moved since the window was
-    // placed, so the range from where the user is now is not the range it was placed with. The
-    // size takes up the difference, which holds the picture, and the window turns to face the
-    // user because that is what a window taken hold of does.
+    // The head has moved since the window was placed, so the range the user pulls against is the
+    // one from where they stand now. The size is glass and holds through that, and the window turns
+    // to face the user because that is what a window taken hold of does.
     mGrabHandPosition = handPosition;
     mGrabWindowPosition = mAnchorPose.position;
-    mGrabScale = mWindowDistance / radius;
+    mGrabScale = mWindowScale;
     mPlacementHead = head;
     mWindowDir = { reach.x / radius, reach.y / radius, reach.z / radius };
     mWindowRadius = radius;
-    mWindowScale = mGrabScale;
     PlaceWindow();
     sWindowDistance = mWindowRadius;
     sWindowScale = mWindowScale;
@@ -1151,7 +1148,6 @@ bool GfxWindowBackendOpenXR::UpdateGrab(XrTime displayTime) {
         if (radius > 1e-3f) {
             mWindowDir = { from.x / radius, from.y / radius, from.z / radius };
             mWindowRadius = radius;
-            mWindowScale = mGrabScale;
             PlaceWindow();
             sWindowDistance = mWindowRadius;
             sWindowScale = mWindowScale;
@@ -1572,16 +1568,19 @@ void GfxWindowBackendOpenXR::LocateViews() {
 }
 
 // Where the window hangs comes from four numbers: the head it was placed around, the direction from
-// that head to its middle, the range, and what the corner handles left. The apex of the game's
-// frustum sits a scaled range behind the glass, which is what lets a larger window show a larger
-// diorama from the same place where a shorter range shows a deeper one.
+// that head to its middle, the range, and what the corner handles left. The range alone puts the
+// apex of the game's frustum behind the glass, which holds the framing at every range: the picture
+// is the one the game drew, and the range says how large the diorama behind it is in the room. The
+// size is glass only. A larger window shows the same diorama over more of the eye, and a further
+// range shows a larger one over less of it.
 //
 // The window hangs on a capsule around the user, not a sphere. It faces the user in the horizontal
 // and stands upright through the middle of the range, so it can go up and down with no tilt at all.
 // It bends in only near the ends, where an upright panel is read at too flat an angle. The bend
 // stops short of straight up, because the yaw of a window that faces the user has no answer there.
-// The window is as wide as the field of view it shows, so that the mapping is a similarity. That
-// field of view is the game's, once the game has loaded a projection to ask for one. Before then —
+// The window takes the shape of the field of view it shows, and the size scale gives it its width
+// in meters. That field of view is the game's, once the game has loaded a projection to ask for
+// one. Before then —
 // the extractor, the ROM prompt, the menu over them — nothing has asked, and the window takes the
 // shape of the picture at a plain angle. It cannot take the shape of the swapchain: an eye image is
 // about as tall as it is wide, and a landscape picture drawn on a rectangle that shape is squeezed
@@ -1626,14 +1625,14 @@ void GfxWindowBackendOpenXR::SizeWindow() {
         tanHalfHeight = mGameWidth > 0 ? tanHalfWidth * (float)mGameHeight / (float)mGameWidth : tanHalfWidth;
     }
 
-    mWindowWidth = 2.0f * mWindowDistance * tanHalfWidth;
-    mWindowHeight = 2.0f * mWindowDistance * tanHalfHeight;
+    const float glass = 2.0f * WINDOW_SIZE_RANGE * mWindowScale;
+    mWindowWidth = glass * tanHalfWidth;
+    mWindowHeight = glass * tanHalfHeight;
 }
 
 void GfxWindowBackendOpenXR::PlaceWindow() {
     mWindowRadius = Clamp(mWindowRadius, WINDOW_DISTANCE_MIN, WINDOW_DISTANCE_MAX);
     mWindowScale = Clamp(mWindowScale, WINDOW_SCALE_MIN, WINDOW_SCALE_MAX);
-    mWindowDistance = mWindowRadius * mWindowScale;
     SizeWindow();
     sWindowAngularWidth = 2.0f * atanf(0.5f * mWindowWidth / mWindowRadius);
 
@@ -1657,9 +1656,9 @@ void GfxWindowBackendOpenXR::PlaceWindow() {
     // Along the window's own normal, which is not the line to the head once the window stands
     // upright below or above it. The apex of the frustum has to sit square behind the glass.
     const XrVector3f normal = RotateByQuaternion(mAnchorPose.orientation, { 0.0f, 0.0f, 1.0f });
-    mViewpoint = { mAnchorPose.position.x + normal.x * mWindowDistance,
-                   mAnchorPose.position.y + normal.y * mWindowDistance,
-                   mAnchorPose.position.z + normal.z * mWindowDistance };
+    mViewpoint = { mAnchorPose.position.x + normal.x * mWindowRadius,
+                   mAnchorPose.position.y + normal.y * mWindowRadius,
+                   mAnchorPose.position.z + normal.z * mWindowRadius };
     mAnchorValid = true;
 }
 
@@ -1752,7 +1751,7 @@ void GfxWindowBackendOpenXR::ApplySettings() {
     __android_log_print(ANDROID_LOG_INFO, "LighthouseXR",
                         "window %.2f x %.2f m at %.2f m, %.1f degrees wide, up to %.0f units per meter", mWindowWidth,
                         mWindowHeight, mWindowRadius, sWindowAngularWidth * 180.0f / (float)M_PI,
-                        WINDOW_DEPTH_MAX / mWindowDistance);
+                        WINDOW_DEPTH_MAX / mWindowRadius);
 }
 
 // The rectangle the button is drawn and aimed at, the zone around it the cursor shows in, the
@@ -1835,9 +1834,9 @@ bool GfxWindowBackendOpenXR::OpenFrame() {
             (anchor.locationFlags & needed) == needed) {
             mAnchorPose = anchor.pose;
             const XrVector3f normal = RotateByQuaternion(anchor.pose.orientation, { 0.0f, 0.0f, 1.0f });
-            mViewpoint = { anchor.pose.position.x + normal.x * mWindowDistance,
-                           anchor.pose.position.y + normal.y * mWindowDistance,
-                           anchor.pose.position.z + normal.z * mWindowDistance };
+            mViewpoint = { anchor.pose.position.x + normal.x * mWindowRadius,
+                           anchor.pose.position.y + normal.y * mWindowRadius,
+                           anchor.pose.position.z + normal.z * mWindowRadius };
             // The head the window was placed around goes with the anchor. It is not the reverse of
             // the normal any more: an upright window above or below the eyes does not face them.
             mPlacementHead = { anchor.pose.position.x - mWindowDir.x * mWindowRadius,
@@ -1871,7 +1870,7 @@ void GfxWindowBackendOpenXR::BeginRenderView(uint32_t view) {
     // The window plane is a copy of the game's own screen, so the head offset converts with the
     // one scale that puts the glass sGlassDepth from the viewpoint. LOCAL space starts at the
     // head, and the window hangs straight ahead of it, so the eye pose is already the offset.
-    const float unitsPerMeter = sGlassDepth / mWindowDistance;
+    const float unitsPerMeter = sGlassDepth / mWindowRadius;
     const XrVector3f& left = mViews[0].pose.position;
     const XrVector3f& right = mViews[1].pose.position;
     // One image for both eyes is drawn from between them, not from either one.
