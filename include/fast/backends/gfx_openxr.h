@@ -124,6 +124,7 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     uint32_t mCursorProgram = 0;
     uint32_t mBarProgram = 0;
     uint32_t mCornerProgram = 0;
+    uint32_t mRayProgram = 0;
     uint32_t mVao = 0;
     int32_t mMvpLoc = -1;
     int32_t mAspectLoc = -1;
@@ -139,6 +140,8 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     int32_t mBarAspectLoc = -1;
     int32_t mCornerMvpLoc = -1;
     int32_t mCornerGlowLoc = -1;
+    int32_t mRayMvpLoc = -1;
+    int32_t mRayDownLoc = -1;
 
     XrView mViews[VIEW_COUNT] = {};
     bool mViewsValid = false;

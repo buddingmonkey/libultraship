@@ -87,6 +87,10 @@ static constexpr float MENU_BUTTON_ZONE = 3.0f;
 // The cursor, in window heights. The rest of the rectangle holds the shadow.
 static constexpr float CURSOR_SIDE = 0.075f;
 
+// The ray from the hand to its dot, as a share of the cursor. A dot on its own says nothing about
+// which hand put it there, and both hands can carry one.
+static constexpr float RAY_WIDTH = 0.10f;
+
 // The move bar, in window widths and window heights: how wide and how tall it is drawn, how far
 // below the bottom edge it hangs, and how much taller than the drawing the rectangle that takes the
 // pinch is. A bar that thin needs the extra height to be reachable, and the gap is wider than the
@@ -875,6 +879,14 @@ static bool sCursorValid = false;
 static float sCursorX = 0.0f;
 static float sCursorY = 0.0f;
 
+// Each hand that reaches the window, whether or not it is the one the window answers. A dot alone
+// says nothing about which hand put it there, so the ray back to the hand is drawn with it.
+static bool sHandValid[2] = { false, false };
+static XrVector3f sHandFrom[2] = {};
+static float sHandX[2] = { 0.0f, 0.0f };
+static float sHandY[2] = { 0.0f, 0.0f };
+static bool sHandDown[2] = { false, false };
+
 static void ToggleMenu() {
     auto context = Ship::Context::GetRawInstance();
     if (context == nullptr || context->GetWindow() == nullptr || context->GetWindow()->GetGui() == nullptr) {
@@ -1163,6 +1175,8 @@ void GfxWindowBackendOpenXR::ClearPointer() {
     sMenuHover = false;
     sMenuHeld = false;
     sCursorValid = false;
+    sHandValid[0] = false;
+    sHandValid[1] = false;
     // A session that stops answering ends the grab where the window stands, anchor and all.
     if (mGrab != Grab::None && mAnchorValid) {
         EndGrab();
@@ -1195,9 +1209,12 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         return;
     }
 
-    // A held handle owns that hand until it lifts, and nothing else on the window answers.
+    // A held handle owns that hand until it lifts, and nothing else on the window answers. The
+    // handle lights to say so, and a dot left over the point the hand took would only follow it.
     if (mGrab != Grab::None) {
         if (UpdateGrab(displayTime)) {
+            sHandValid[0] = false;
+            sHandValid[1] = false;
             return;
         }
         EndGrab();
@@ -1220,10 +1237,24 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
     XrVector3f pinchPosition = {};
     float pinchX = 0.0f;
     float pinchY = 0.0f;
+    bool answered = false;
+
+    sHandValid[0] = false;
+    sHandValid[1] = false;
 
     const float menuHalf = 0.5f * MenuSide();
     const float zoneHalf = 0.5f * MenuZone();
     const float menuRise = MenuRise();
+
+    // Both hands are read before any of them is answered, because both are drawn: each one that
+    // reaches the window carries a dot, and a ray back to the hand it came from.
+    struct HandAim {
+        bool onPlane;
+        XrVector3f from;
+        float planeX;
+        float planeY;
+        bool pinching;
+    } aims[2] = {};
 
     for (int hand = 0; hand < 2; hand++) {
         XrSpaceLocation location{ XR_TYPE_SPACE_LOCATION };
@@ -1232,12 +1263,27 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
             (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) == 0) {
             continue;
         }
-
-        float planeX = 0.0f;
-        float planeY = 0.0f;
-        if (!PlaneHit(location.pose, &planeX, &planeY)) {
+        if (!PlaneHit(location.pose, &aims[hand].planeX, &aims[hand].planeY)) {
             continue;
         }
+
+        XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
+        getInfo.action = mSelectAction;
+        getInfo.subactionPath = mHandPath[hand];
+        XrActionStateBoolean select{ XR_TYPE_ACTION_STATE_BOOLEAN };
+        aims[hand].onPlane = true;
+        aims[hand].from = location.pose.position;
+        aims[hand].pinching = XR_SUCCEEDED(xrGetActionStateBoolean(mSession, &getInfo, &select)) && select.isActive &&
+                              select.currentState == XR_TRUE;
+    }
+
+    for (int hand = 0; hand < 2; hand++) {
+        if (!aims[hand].onPlane) {
+            continue;
+        }
+        const float planeX = aims[hand].planeX;
+        const float planeY = aims[hand].planeY;
+        const bool pinching = aims[hand].pinching;
 
         const bool onMenu = fabsf(planeX) <= menuHalf && fabsf(planeY - menuRise) <= menuHalf;
         const bool onWindow = fabsf(planeX) <= 0.5f * mWindowWidth && fabsf(planeY) <= 0.5f * mWindowHeight;
@@ -1248,12 +1294,16 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
             continue;
         }
 
-        XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
-        getInfo.action = mSelectAction;
-        getInfo.subactionPath = mHandPath[hand];
-        XrActionStateBoolean select{ XR_TYPE_ACTION_STATE_BOOLEAN };
-        const bool pinching = XR_SUCCEEDED(xrGetActionStateBoolean(mSession, &getInfo, &select)) && select.isActive &&
-                              select.currentState == XR_TRUE;
+        // Both hands are drawn, so both are marked here. Only one of them answers: a pinch takes
+        // the window and the hand that took it keeps it, which is what answered says.
+        sHandValid[hand] = true;
+        sHandFrom[hand] = aims[hand].from;
+        sHandX[hand] = planeX;
+        sHandY[hand] = planeY;
+        sHandDown[hand] = pinching;
+        if (answered) {
+            continue;
+        }
 
         // A pinching hand wins; otherwise the first hand on the quad drives the cursor.
         if (!cursor || pinching) {
@@ -1284,10 +1334,10 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         }
         if (pinching) {
             pinchHand = hand;
-            pinchPosition = location.pose.position;
+            pinchPosition = aims[hand].from;
             pinchX = planeX;
             pinchY = planeY;
-            break;
+            answered = true;
         }
     }
 
@@ -1305,6 +1355,22 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         cursor = true;
         cursorX = (u - 0.5f) * mWindowWidth;
         cursorY = (0.5f - v) * mWindowHeight;
+
+        // A hand is invented for it, part of the way to the window and low and to the right, so
+        // that what a hand draws can be looked at from the host as well.
+        if (mViewsValid) {
+            const XrVector3f head = HeadPosition();
+            const XrVector3f right = RotateByQuaternion(mAnchorPose.orientation, { 1.0f, 0.0f, 0.0f });
+            const XrVector3f up = RotateByQuaternion(mAnchorPose.orientation, { 0.0f, 1.0f, 0.0f });
+            const XrVector3f reach = Subtract(mAnchorPose.position, head);
+            sHandValid[0] = true;
+            sHandDown[0] = debugDown;
+            sHandX[0] = cursorX;
+            sHandY[0] = cursorY;
+            sHandFrom[0] = { head.x + reach.x * 0.35f + right.x * 0.20f - up.x * 0.25f,
+                             head.y + reach.y * 0.35f + right.y * 0.20f - up.y * 0.25f,
+                             head.z + reach.z * 0.35f + right.z * 0.20f - up.z * 0.25f };
+        }
     }
 #endif
 
@@ -1321,6 +1387,8 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
             sCursorValid = true;
             sCursorX = cursorX;
             sCursorY = cursorY;
+            sHandValid[0] = false;
+            sHandValid[1] = false;
             return;
         }
     }
@@ -1932,6 +2000,23 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
         "    oColor = c;\n"
         "}\n";
 
+    // The ray, drawn on a band that runs from the hand at x 0 to the dot at x 1 and is turned to
+    // face the eye. It comes out of nothing a little ahead of the hand rather than starting at it,
+    // which is what keeps a controller or a hand from wearing a line stuck to its front.
+    static const char* RAY_FRAGMENT = "#version 300 es\n"
+                                      "precision highp float;\n"
+                                      "uniform float uDown;\n"
+                                      "in vec2 vUv;\n"
+                                      "out vec4 oColor;\n"
+                                      "void main() {\n"
+                                      "    float across = abs(vUv.y - 0.5) * 2.0;\n"
+                                      "    float aa = max(fwidth(across), 0.001);\n"
+                                      "    float core = 1.0 - smoothstep(1.0 - 2.0 * aa, 1.0, across);\n"
+                                      "    float along = smoothstep(0.0, 0.55, vUv.x);\n"
+                                      "    float a = core * along * mix(0.45, 0.80, uDown);\n"
+                                      "    oColor = vec4(vec3(a), a);\n"
+                                      "}\n";
+
     // The move bar. The quad is far wider than it is tall, so the shape is drawn in a space the
     // width stretches, or the ends would be ellipses rather than half circles.
     static const char* BAR_FRAGMENT = "#version 300 es\n"
@@ -1977,8 +2062,10 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
     mCursorProgram = LinkProgram(vertex, CURSOR_FRAGMENT);
     mBarProgram = LinkProgram(vertex, BAR_FRAGMENT);
     mCornerProgram = LinkProgram(vertex, CORNER_FRAGMENT);
+    mRayProgram = LinkProgram(vertex, RAY_FRAGMENT);
     glDeleteShader(vertex);
-    if (mProgram == 0 || mMenuProgram == 0 || mCursorProgram == 0 || mBarProgram == 0 || mCornerProgram == 0) {
+    if (mProgram == 0 || mMenuProgram == 0 || mCursorProgram == 0 || mBarProgram == 0 || mCornerProgram == 0 ||
+        mRayProgram == 0) {
         return false;
     }
     mMvpLoc = glGetUniformLocation(mProgram, "uMvp");
@@ -1998,6 +2085,8 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
     mBarAspectLoc = glGetUniformLocation(mBarProgram, "uAspect");
     mCornerMvpLoc = glGetUniformLocation(mCornerProgram, "uMvp");
     mCornerGlowLoc = glGetUniformLocation(mCornerProgram, "uGlow");
+    mRayMvpLoc = glGetUniformLocation(mRayProgram, "uMvp");
+    mRayDownLoc = glGetUniformLocation(mRayProgram, "uDown");
     glGenVertexArrays(1, &mVao);
     return true;
 }
@@ -2024,26 +2113,13 @@ static void RotationFromQuaternion(const XrQuaternionf& q, float r[9]) {
     r[8] = 1.0f - 2.0f * (q.x * q.x + q.y * q.y);
 }
 
-// The window rectangle at the anchor pose, seen from the eye pose, through the eye's frustum.
-static void PlacementMatrix(const XrView& eye, const XrPosef& anchor, float width, float height, float mvp[16]) {
+// This eye's own frustum and pose, which everything drawn in the room goes through.
+static void EyeMatrix(const XrView& eye, float out[16]) {
     float r[9];
-
-    // Columns 0 and 1 carry the rectangle's own size, so the unit quad comes out the window.
-    RotationFromQuaternion(anchor.orientation, r);
-    float model[16] = {};
-    for (int axis = 0; axis < 3; axis++) {
-        model[axis] = r[axis] * width;
-        model[4 + axis] = r[3 + axis] * height;
-        model[8 + axis] = r[6 + axis];
-    }
-    model[12] = anchor.position.x;
-    model[13] = anchor.position.y;
-    model[14] = anchor.position.z;
-    model[15] = 1.0f;
-
-    // The inverse of the eye pose, which for a rotation is its transpose.
     RotationFromQuaternion(eye.pose.orientation, r);
     const XrVector3f& p = eye.pose.position;
+
+    // The inverse of the eye pose, which for a rotation is its transpose.
     float view[16] = {};
     for (int axis = 0; axis < 3; axis++) {
         view[axis * 4] = r[axis];
@@ -2068,9 +2144,75 @@ static void PlacementMatrix(const XrView& eye, const XrPosef& anchor, float widt
     proj[11] = -1.0f;
     proj[14] = -2.0f * farZ * nearZ / (farZ - nearZ);
 
-    float viewModel[16];
-    MulMatrix(view, model, viewModel);
-    MulMatrix(proj, viewModel, mvp);
+    MulMatrix(proj, view, out);
+}
+
+// The window rectangle at the anchor pose, seen from the eye pose, through the eye's frustum.
+static void PlacementMatrix(const XrView& eye, const XrPosef& anchor, float width, float height, float mvp[16]) {
+    float r[9];
+
+    // Columns 0 and 1 carry the rectangle's own size, so the unit quad comes out the window.
+    RotationFromQuaternion(anchor.orientation, r);
+    float model[16] = {};
+    for (int axis = 0; axis < 3; axis++) {
+        model[axis] = r[axis] * width;
+        model[4 + axis] = r[3 + axis] * height;
+        model[8 + axis] = r[6 + axis];
+    }
+    model[12] = anchor.position.x;
+    model[13] = anchor.position.y;
+    model[14] = anchor.position.z;
+    model[15] = 1.0f;
+
+    float eyeMatrix[16];
+    EyeMatrix(eye, eyeMatrix);
+    MulMatrix(eyeMatrix, model, mvp);
+}
+
+// A flat band from one point to another, turned to face the eye. The unit quad's x runs along the
+// band from the hand to the dot and its y across the width, which is what the shader reads.
+static void RayMatrix(const XrView& eye, const XrVector3f& from, const XrVector3f& to, float width, float mvp[16]) {
+    XrVector3f along = Subtract(to, from);
+    const float span = Length(along);
+    if (span <= 1e-5f) {
+        return;
+    }
+    along = { along.x / span, along.y / span, along.z / span };
+
+    const XrVector3f middle = { 0.5f * (from.x + to.x), 0.5f * (from.y + to.y), 0.5f * (from.z + to.z) };
+    XrVector3f toEye = Subtract(middle, eye.pose.position);
+    const float range = Length(toEye);
+    if (range <= 1e-5f) {
+        return;
+    }
+    toEye = { toEye.x / range, toEye.y / range, toEye.z / range };
+
+    XrVector3f across = { along.y * toEye.z - along.z * toEye.y, along.z * toEye.x - along.x * toEye.z,
+                          along.x * toEye.y - along.y * toEye.x };
+    const float side = Length(across);
+    if (side <= 1e-5f) {
+        return;
+    }
+    across = { across.x / side, across.y / side, across.z / side };
+
+    float model[16] = {};
+    model[0] = along.x * span;
+    model[1] = along.y * span;
+    model[2] = along.z * span;
+    model[4] = across.x * width;
+    model[5] = across.y * width;
+    model[6] = across.z * width;
+    model[8] = -toEye.x;
+    model[9] = -toEye.y;
+    model[10] = -toEye.z;
+    model[12] = middle.x;
+    model[13] = middle.y;
+    model[14] = middle.z;
+    model[15] = 1.0f;
+
+    float eyeMatrix[16];
+    EyeMatrix(eye, eyeMatrix);
+    MulMatrix(eyeMatrix, model, mvp);
 }
 
 // The game has just drawn this eye into the default framebuffer; keep a copy to place later.
@@ -2132,8 +2274,32 @@ void GfxWindowBackendOpenXR::DrawOverlays(uint32_t eye) {
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
 
-    if (sCursorValid) {
-        const float cursor = CursorSide();
+    // A dot for every hand that reaches the window, and a ray from the hand it came from. Both are
+    // drawn even where only one of them answers, because two dots and no rays say nothing about
+    // which hand is which.
+    const float cursor = CursorSide();
+    bool anyHand = false;
+    for (int hand = 0; hand < 2; hand++) {
+        if (!sHandValid[hand]) {
+            continue;
+        }
+        anyHand = true;
+        const XrPosef dot = PlanePose(sHandX[hand], sHandY[hand]);
+        RayMatrix(mViews[eye], sHandFrom[hand], dot.position, cursor * RAY_WIDTH, mvp);
+        glUseProgram(mRayProgram);
+        glUniformMatrix4fv(mRayMvpLoc, 1, GL_FALSE, mvp);
+        glUniform1f(mRayDownLoc, sHandDown[hand] ? 1.0f : 0.0f);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+        PlacementMatrix(mViews[eye], dot, cursor, cursor, mvp);
+        glUseProgram(mCursorProgram);
+        glUniformMatrix4fv(mCursorMvpLoc, 1, GL_FALSE, mvp);
+        glUniform1f(mCursorDownLoc, sHandDown[hand] ? 1.0f : 0.0f);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
+
+    // Nothing else puts a pointer on the window but a hand, except the one driven from the host.
+    if (!anyHand && sCursorValid) {
         PlacementMatrix(mViews[eye], PlanePose(sCursorX, sCursorY), cursor, cursor, mvp);
         glUseProgram(mCursorProgram);
         glUniformMatrix4fv(mCursorMvpLoc, 1, GL_FALSE, mvp);
@@ -2322,6 +2488,10 @@ void GfxWindowBackendOpenXR::Teardown() {
     if (mCornerProgram != 0) {
         glDeleteProgram(mCornerProgram);
         mCornerProgram = 0;
+    }
+    if (mRayProgram != 0) {
+        glDeleteProgram(mRayProgram);
+        mRayProgram = 0;
     }
     if (mVao != 0) {
         glDeleteVertexArrays(1, &mVao);
