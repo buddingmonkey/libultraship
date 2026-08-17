@@ -19,6 +19,7 @@
 
 #ifdef ENABLE_DEBUG_TOOLS
 #include "fast/backends/gfx_debug_capture.h"
+#include "fast/backends/gfx_debug_pointer.h"
 #endif
 #include "ship/Context.h"
 #include "ship/window/MouseStateManager.h"
@@ -29,11 +30,17 @@
 namespace Fast {
 
 // The window hangs in front of where the user faced at start, at the range the setting asks for.
-// The width below only holds until the first frame says what the game's field of view needs.
 static constexpr float WINDOW_DISTANCE_DEFAULT = 0.5f;
 static constexpr float WINDOW_DISTANCE_MIN = 0.5f;
 static constexpr float WINDOW_DISTANCE_MAX = 4.0f;
-static constexpr float WINDOW_WIDTH_METERS = 1.6f;
+// The half-angle the window covers across, before the game has loaded a projection to ask for its
+// own. About 61 degrees, which is what Banjo-Kazooie asks for once it runs.
+static constexpr float WINDOW_TAN_HALF_WIDTH_DEFAULT = 0.59f;
+
+// How much of the window's own width the game draws, in steps, and what it draws over the width the
+// window covers in the view.
+static constexpr float RENDER_STEPS = 16.0f;
+static constexpr float RENDER_HEADROOM = 1.2f;
 
 // The size is meters of glass, and the range does not touch it: a window pushed away keeps the
 // width it had and goes small in the eye, as everything else in the room does. Scale 1 is the width
@@ -240,6 +247,12 @@ bool GfxWindowBackendOpenXR::StartSession() {
     if (trackables) {
         enabled.push_back(XR_ANDROID_TRACKABLES_EXTENSION_NAME);
     }
+    // Horizon OS offers no ALPHA_BLEND environment on a stereo view, so the room can only come
+    // from a passthrough layer under the frame.
+    const bool passthrough = HasExtension(extensions, XR_FB_PASSTHROUGH_EXTENSION_NAME);
+    if (passthrough) {
+        enabled.push_back(XR_FB_PASSTHROUGH_EXTENSION_NAME);
+    }
 
     XrInstanceCreateInfoAndroidKHR androidInfo{ XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR };
     androidInfo.applicationVM = vm;
@@ -356,6 +369,10 @@ bool GfxWindowBackendOpenXR::StartSession() {
         }
     }
 
+    if (passthrough && mBlendMode != XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND) {
+        StartPassthrough();
+    }
+
     uint32_t formatCount = 0;
     if (Failed(mInstance, xrEnumerateSwapchainFormats(mSession, 0, &formatCount, nullptr),
                "xrEnumerateSwapchainFormats")) {
@@ -435,30 +452,20 @@ bool GfxWindowBackendOpenXR::StartSession() {
             glBindFramebuffer(GL_FRAMEBUFFER, mImageFbos[view][i]);
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mImages[view][i].image, 0);
         }
-
-        glGenTextures(1, &mGameTex[view]);
-        glBindTexture(GL_TEXTURE_2D, mGameTex[view]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, mGameWidth, mGameHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glGenFramebuffers(1, &mGameFbo[view]);
-        glBindFramebuffer(GL_FRAMEBUFFER, mGameFbo[view]);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mGameTex[view], 0);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
+
+    // The frame the game gives back until the first head pose says how much of the view the window
+    // covers. SizeRender shrinks it as soon as it can.
+    CreateGameTargets(mGameWidth, mGameHeight);
 
     if (!StartPlacementPass()) {
         return false;
     }
 
-    // Until the first frame says what the game's field of view needs, the window keeps a plain size.
     mWindowRadius = sWindowDistance;
     mWindowScale = sWindowScale;
-    mWindowWidth = WINDOW_WIDTH_METERS;
-    mWindowHeight = WINDOW_WIDTH_METERS * (float)mSwapchainHeight / (float)mSwapchainWidth;
+    SizeWindow();
 
     for (XrView& view : mViews) {
         view = { XR_TYPE_VIEW };
@@ -476,6 +483,73 @@ bool GfxWindowBackendOpenXR::StartSession() {
                         "session up: %u images %ux%u per eye, format 0x%04x, blend %d, srgb ctl %d", imageCount,
                         mSwapchainWidth, mSwapchainHeight, (unsigned)format, (int)mBlendMode, (int)mSrgbWriteControl);
     return true;
+}
+
+void GfxWindowBackendOpenXR::CreateGameTargets(uint32_t width, uint32_t height) {
+    mTexWidth = width < 1 ? 1 : width;
+    mTexHeight = height < 1 ? 1 : height;
+
+    for (uint32_t view = 0; view < VIEW_COUNT; view++) {
+        if (mGameFbo[view] != 0) {
+            glDeleteFramebuffers(1, &mGameFbo[view]);
+        }
+        if (mGameTex[view] != 0) {
+            glDeleteTextures(1, &mGameTex[view]);
+        }
+        glGenTextures(1, &mGameTex[view]);
+        glBindTexture(GL_TEXTURE_2D, mGameTex[view]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, mTexWidth, mTexHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenFramebuffers(1, &mGameFbo[view]);
+        glBindFramebuffer(GL_FRAMEBUFFER, mGameFbo[view]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mGameTex[view], 0);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void GfxWindowBackendOpenXR::StartPassthrough() {
+    PFN_xrCreatePassthroughFB create = nullptr;
+    PFN_xrCreatePassthroughLayerFB createLayer = nullptr;
+    PFN_xrPassthroughStartFB start = nullptr;
+    PFN_xrPassthroughLayerResumeFB resume = nullptr;
+    if (XR_FAILED(xrGetInstanceProcAddr(mInstance, "xrCreatePassthroughFB", (PFN_xrVoidFunction*)&create)) ||
+        XR_FAILED(xrGetInstanceProcAddr(mInstance, "xrCreatePassthroughLayerFB", (PFN_xrVoidFunction*)&createLayer)) ||
+        XR_FAILED(xrGetInstanceProcAddr(mInstance, "xrPassthroughStartFB", (PFN_xrVoidFunction*)&start)) ||
+        XR_FAILED(xrGetInstanceProcAddr(mInstance, "xrPassthroughLayerResumeFB", (PFN_xrVoidFunction*)&resume)) ||
+        XR_FAILED(
+            xrGetInstanceProcAddr(mInstance, "xrDestroyPassthroughFB", (PFN_xrVoidFunction*)&mDestroyPassthrough)) ||
+        XR_FAILED(xrGetInstanceProcAddr(mInstance, "xrDestroyPassthroughLayerFB",
+                                        (PFN_xrVoidFunction*)&mDestroyPassthroughLayer))) {
+        mDestroyPassthrough = nullptr;
+        mDestroyPassthroughLayer = nullptr;
+        return;
+    }
+
+    XrPassthroughCreateInfoFB info{ XR_TYPE_PASSTHROUGH_CREATE_INFO_FB };
+    info.flags = XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT_FB;
+    if (Failed(mInstance, create(mSession, &info, &mPassthrough), "xrCreatePassthroughFB")) {
+        mPassthrough = XR_NULL_HANDLE;
+        return;
+    }
+
+    XrPassthroughLayerCreateInfoFB layerInfo{ XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB };
+    layerInfo.passthrough = mPassthrough;
+    layerInfo.purpose = XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION_FB;
+    layerInfo.flags = XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT_FB;
+    if (Failed(mInstance, createLayer(mSession, &layerInfo, &mPassthroughLayer), "xrCreatePassthroughLayerFB")) {
+        mPassthroughLayer = XR_NULL_HANDLE;
+        mDestroyPassthrough(mPassthrough);
+        mPassthrough = XR_NULL_HANDLE;
+        return;
+    }
+
+    start(mPassthrough);
+    resume(mPassthroughLayer);
+    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "the room comes from a passthrough layer");
 }
 
 void GfxWindowBackendOpenXR::StartRefreshRates() {
@@ -523,8 +597,24 @@ bool GfxWindowBackendOpenXR::SetRefreshRate(float rate) {
         return false;
     }
     mRefreshRate = rate;
+    mWantedRate = rate;
+    mRateRetries = 0;
     __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "asked the display for %.0f Hz", rate);
     return true;
+}
+
+// Horizon OS puts the panel back to its own rate at the end of the launch transition, which lands
+// after the one request the game makes. Ask again whenever the rate is not the one asked for, a few
+// times, so a runtime that simply refuses the rate is not argued with for the whole run.
+void GfxWindowBackendOpenXR::HoldRefreshRate() {
+    if (mWantedRate <= 0.0f || mRequestRefreshRate == nullptr || fabsf(mRefreshRate - mWantedRate) < 0.5f ||
+        mRateRetries >= 4) {
+        return;
+    }
+    mRateRetries++;
+    if (!Failed(mInstance, mRequestRefreshRate(mSession, mWantedRate), "xrRequestDisplayRefreshRateFB")) {
+        __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "asked the display for %.0f Hz again", mWantedRate);
+    }
 }
 
 void GfxWindowBackendOpenXR::GetActiveWindowRefreshRate(uint32_t* refreshRate) {
@@ -602,6 +692,10 @@ bool GfxWindowBackendOpenXR::StartActions(bool handInteraction) {
                 "/user/hand/right/input/aim_activate_ext/value");
     }
 
+    if (!StartPadActions()) {
+        return false;
+    }
+
     for (int hand = 0; hand < 2; hand++) {
         XrActionSpaceCreateInfo spaceInfo{ XR_TYPE_ACTION_SPACE_CREATE_INFO };
         spaceInfo.action = mAimAction;
@@ -616,6 +710,138 @@ bool GfxWindowBackendOpenXR::StartActions(bool handInteraction) {
     attachInfo.countActionSets = 1;
     attachInfo.actionSets = &mActionSet;
     return !Failed(mInstance, xrAttachSessionActionSets(mSession, &attachInfo), "xrAttachSessionActionSets");
+}
+
+static Fast::XrPadState sPad = {};
+static bool sPadValid = false;
+
+// The game pad, which on Horizon OS can only come through here: a Touch controller reaches no
+// Android input device, so SDL never sees one. The whole Touch profile is suggested in this one
+// call, aim and select included, because a second call for the same profile replaces the first.
+bool GfxWindowBackendOpenXR::StartPadActions() {
+    auto make = [&](const char* name, const char* localized, XrActionType type, XrAction* action) {
+        XrActionCreateInfo info{ XR_TYPE_ACTION_CREATE_INFO };
+        snprintf(info.actionName, XR_MAX_ACTION_NAME_SIZE, "%s", name);
+        snprintf(info.localizedActionName, XR_MAX_LOCALIZED_ACTION_NAME_SIZE, "%s", localized);
+        info.actionType = type;
+        info.countSubactionPaths = 2;
+        info.subactionPaths = mHandPath;
+        return !Failed(mInstance, xrCreateAction(mActionSet, &info, action), "xrCreateAction");
+    };
+
+    if (!make("stick", "Stick", XR_ACTION_TYPE_VECTOR2F_INPUT, &mStickAction) ||
+        !make("trigger", "Trigger", XR_ACTION_TYPE_FLOAT_INPUT, &mTriggerAction) ||
+        !make("squeeze", "Squeeze", XR_ACTION_TYPE_FLOAT_INPUT, &mSqueezeAction) ||
+        !make("facelow", "Face Low", XR_ACTION_TYPE_BOOLEAN_INPUT, &mFaceLowAction) ||
+        !make("facehigh", "Face High", XR_ACTION_TYPE_BOOLEAN_INPUT, &mFaceHighAction) ||
+        !make("menu", "Menu", XR_ACTION_TYPE_BOOLEAN_INPUT, &mMenuAction) ||
+        !make("stickclick", "Stick Click", XR_ACTION_TYPE_BOOLEAN_INPUT, &mStickClickAction)) {
+        return false;
+    }
+
+    XrPath profile = XR_NULL_PATH;
+    if (XR_FAILED(xrStringToPath(mInstance, "/interaction_profiles/oculus/touch_controller", &profile))) {
+        return true;
+    }
+
+    std::vector<XrActionSuggestedBinding> bindings;
+    auto bind = [&](XrAction action, const char* path) {
+        XrPath bound = XR_NULL_PATH;
+        if (XR_SUCCEEDED(xrStringToPath(mInstance, path, &bound))) {
+            bindings.push_back({ action, bound });
+        }
+    };
+
+    bind(mAimAction, "/user/hand/left/input/aim/pose");
+    bind(mAimAction, "/user/hand/right/input/aim/pose");
+    bind(mSelectAction, "/user/hand/left/input/trigger/value");
+    bind(mSelectAction, "/user/hand/right/input/trigger/value");
+    bind(mStickAction, "/user/hand/left/input/thumbstick");
+    bind(mStickAction, "/user/hand/right/input/thumbstick");
+    bind(mTriggerAction, "/user/hand/left/input/trigger/value");
+    bind(mTriggerAction, "/user/hand/right/input/trigger/value");
+    bind(mSqueezeAction, "/user/hand/left/input/squeeze/value");
+    bind(mSqueezeAction, "/user/hand/right/input/squeeze/value");
+    bind(mFaceLowAction, "/user/hand/left/input/x/click");
+    bind(mFaceLowAction, "/user/hand/right/input/a/click");
+    bind(mFaceHighAction, "/user/hand/left/input/y/click");
+    bind(mFaceHighAction, "/user/hand/right/input/b/click");
+    // The right hand's system button belongs to Horizon OS and cannot be bound.
+    bind(mMenuAction, "/user/hand/left/input/menu/click");
+    bind(mStickClickAction, "/user/hand/left/input/thumbstick/click");
+    bind(mStickClickAction, "/user/hand/right/input/thumbstick/click");
+
+    XrInteractionProfileSuggestedBinding suggestion{ XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING };
+    suggestion.interactionProfile = profile;
+    suggestion.countSuggestedBindings = (uint32_t)bindings.size();
+    suggestion.suggestedBindings = bindings.data();
+    xrSuggestInteractionProfileBindings(mInstance, &suggestion);
+    return true;
+}
+
+void GfxWindowBackendOpenXR::PumpPad() {
+    Fast::XrPadState pad = {};
+    bool any = false;
+
+    for (int hand = 0; hand < 2; hand++) {
+        XrActionStateGetInfo info{ XR_TYPE_ACTION_STATE_GET_INFO };
+        info.subactionPath = mHandPath[hand];
+
+        info.action = mStickAction;
+        XrActionStateVector2f stick{ XR_TYPE_ACTION_STATE_VECTOR2F };
+        if (XR_SUCCEEDED(xrGetActionStateVector2f(mSession, &info, &stick)) && stick.isActive) {
+            pad.stick[hand][0] = stick.currentState.x;
+            pad.stick[hand][1] = stick.currentState.y;
+            any = true;
+        }
+
+        XrActionStateFloat value{ XR_TYPE_ACTION_STATE_FLOAT };
+        info.action = mTriggerAction;
+        if (XR_SUCCEEDED(xrGetActionStateFloat(mSession, &info, &value)) && value.isActive) {
+            pad.trigger[hand] = value.currentState;
+            any = true;
+        }
+        value = { XR_TYPE_ACTION_STATE_FLOAT };
+        info.action = mSqueezeAction;
+        if (XR_SUCCEEDED(xrGetActionStateFloat(mSession, &info, &value)) && value.isActive) {
+            pad.squeeze[hand] = value.currentState;
+            any = true;
+        }
+
+        auto held = [&](XrAction action) {
+            info.action = action;
+            XrActionStateBoolean state{ XR_TYPE_ACTION_STATE_BOOLEAN };
+            if (XR_FAILED(xrGetActionStateBoolean(mSession, &info, &state)) || !state.isActive) {
+                return false;
+            }
+            any = true;
+            return state.currentState == XR_TRUE;
+        };
+
+        if (held(mFaceLowAction)) {
+            pad.buttons |= hand == 0 ? Fast::XR_PAD_X : Fast::XR_PAD_A;
+        }
+        if (held(mFaceHighAction)) {
+            pad.buttons |= hand == 0 ? Fast::XR_PAD_Y : Fast::XR_PAD_B;
+        }
+        if (held(mMenuAction)) {
+            pad.buttons |= Fast::XR_PAD_MENU;
+        }
+        if (held(mStickClickAction)) {
+            pad.buttons |= hand == 0 ? Fast::XR_PAD_LEFT_STICK : Fast::XR_PAD_RIGHT_STICK;
+        }
+    }
+
+    sPad = pad;
+    sPadValid = any;
+}
+
+bool GetXrPad(XrPadState* pad) {
+    if (!sPadValid || pad == nullptr) {
+        return false;
+    }
+    *pad = sPad;
+    return true;
 }
 
 static XrVector3f RotateByQuaternion(const XrQuaternionf& q, const XrVector3f& v) {
@@ -666,6 +892,7 @@ static XrViewGeometry sViewGeometry = {};
 static float sViewTanHalfWidth = 0.0f;
 static float sViewTanHalfHeight = 0.0f;
 static float sWindowAngularWidth = 0.0f;
+static float sRenderScale = 1.0f;
 static bool sFlatProjection = false;
 static bool sStereo = true;
 static float sEdgeSoftness = 0.36f;
@@ -736,6 +963,10 @@ float GetXrWindowScale() {
 
 float GetXrWindowAngularWidth() {
     return sWindowAngularWidth;
+}
+
+float GetXrRenderScale() {
+    return sRenderScale;
 }
 
 XrVector3f GfxWindowBackendOpenXR::HeadPosition() const {
@@ -924,18 +1155,23 @@ void GfxWindowBackendOpenXR::EndGrab() {
                         mWindowScale, sWindowAngularWidth * 180.0f / (float)M_PI);
 }
 
+void GfxWindowBackendOpenXR::ClearPointer() {
+    sMenuHover = false;
+    sMenuHeld = false;
+    sCursorValid = false;
+    // A session that stops answering ends the grab where the window stands, anchor and all.
+    if (mGrab != Grab::None && mAnchorValid) {
+        EndGrab();
+    }
+    mBarHover = false;
+    mCornerHover = -1;
+    mGrab = Grab::None;
+}
+
 void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
-    if (mActionSet == XR_NULL_HANDLE || mState != XR_SESSION_STATE_FOCUSED || !mAnchorValid) {
-        sMenuHover = false;
-        sMenuHeld = false;
-        sCursorValid = false;
-        // A session that stops answering ends the grab where the window stands, anchor and all.
-        if (mGrab != Grab::None && mAnchorValid) {
-            EndGrab();
-        }
-        mBarHover = false;
-        mCornerHover = -1;
-        mGrab = Grab::None;
+    if (mActionSet == XR_NULL_HANDLE || mState != XR_SESSION_STATE_FOCUSED) {
+        ClearPointer();
+        sPadValid = false;
         return;
     }
 
@@ -944,6 +1180,14 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
     syncInfo.countActiveActionSets = 1;
     syncInfo.activeActionSets = &active;
     if (Failed(mInstance, xrSyncActions(mSession, &syncInfo), "xrSyncActions")) {
+        return;
+    }
+
+    // The pad answers wherever the window is, so it is read before the window is asked about.
+    PumpPad();
+
+    if (!mAnchorValid) {
+        ClearPointer();
         return;
     }
 
@@ -1042,6 +1286,23 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
             break;
         }
     }
+
+#ifdef ENABLE_DEBUG_TOOLS
+    // A pointer put on the window from the host, so a prompt can be answered with no hand in the
+    // headset. It takes the place of a hand on the picture and leaves the handles alone.
+    float debugU = 0.0f;
+    float debugV = 0.0f;
+    bool debugDown = false;
+    if (DebugPointer::Poll(&debugU, &debugV, &debugDown)) {
+        hit = true;
+        down = debugDown;
+        u = debugU;
+        v = debugV;
+        cursor = true;
+        cursorX = (u - 0.5f) * mWindowWidth;
+        cursorY = (0.5f - v) * mWindowHeight;
+    }
+#endif
 
     const bool wasDown = sPointerDown;
     mBarHover = barHit;
@@ -1147,6 +1408,7 @@ void GfxWindowBackendOpenXR::PollEvents() {
             // count follows whatever it reports here.
             mRefreshRate = ((const XrEventDataDisplayRefreshRateChangedFB*)&event)->toDisplayRefreshRate;
             __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "display now runs at %.0f Hz", mRefreshRate);
+            HoldRefreshRate();
         }
     }
 }
@@ -1193,6 +1455,9 @@ void GfxWindowBackendOpenXR::HandleStateChange(const XrEventDataSessionStateChan
         XrSessionBeginInfo beginInfo{ XR_TYPE_SESSION_BEGIN_INFO };
         beginInfo.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
         mRunning = !Failed(mInstance, xrBeginSession(mSession, &beginInfo), "xrBeginSession");
+    } else if (mState == XR_SESSION_STATE_FOCUSED) {
+        mRateRetries = 0;
+        HoldRefreshRate();
     } else if (mState == XR_SESSION_STATE_STOPPING) {
         Failed(mInstance, xrEndSession(mSession), "xrEndSession");
         mRunning = false;
@@ -1230,15 +1495,62 @@ void GfxWindowBackendOpenXR::LocateViews() {
 // and stands upright through the middle of the range, so it can go up and down with no tilt at all.
 // It bends in only near the ends, where an upright panel is read at too flat an angle. The bend
 // stops short of straight up, because the yaw of a window that faces the user has no answer there.
+// The window takes the shape of the field of view it shows, and the size scale gives it its width
+// in meters. That field of view is the game's, once the game has loaded a projection to ask for
+// one. Before then —
+// the extractor, the ROM prompt, the menu over them — nothing has asked, and the window takes the
+// shape of the picture at a plain angle. It cannot take the shape of the swapchain: an eye image is
+// about as tall as it is wide, and a landscape picture drawn on a rectangle that shape is squeezed
+// to about half its width.
+// The game is drawn once per eye and then sampled onto a window that covers part of the view, so
+// every pixel it draws past what that window covers is thrown away. The waste is small where the
+// headset hands the app a panel the size of one eye and large where it hands it the whole binocular
+// panel: Quest gives the game 4128 pixels across for a window that covers about a thousand of them,
+// which is sixteen times the pixels and the same multiple of the shading.
+//
+// The step is coarse so that a hand on a corner handle does not rebuild the targets every frame,
+// and the headroom is for a head that leans in towards the window, which widens it in the view.
+void GfxWindowBackendOpenXR::SizeRender() {
+    if (!mViewsValid || mSwapchainWidth == 0 || mGameWidth == 0 || sWindowAngularWidth <= 0.0f) {
+        return;
+    }
+    const float eyeAngle = mViews[0].fov.angleRight - mViews[0].fov.angleLeft;
+    if (eyeAngle <= 0.0f) {
+        return;
+    }
+
+    const float covered = (float)mSwapchainWidth * sWindowAngularWidth / eyeAngle;
+    const float wanted = Clamp(roundf(covered * RENDER_HEADROOM / (float)mGameWidth * RENDER_STEPS) / RENDER_STEPS,
+                               1.0f / RENDER_STEPS, 1.0f);
+    if (wanted == sRenderScale) {
+        return;
+    }
+
+    sRenderScale = wanted;
+    CreateGameTargets((uint32_t)lroundf((float)mGameWidth * wanted), (uint32_t)lroundf((float)mGameHeight * wanted));
+    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "the game draws %ux%u for a window %.0f pixels across",
+                        mTexWidth, mTexHeight, covered);
+}
+
+void GfxWindowBackendOpenXR::SizeWindow() {
+    mWindowSized = sViewTanHalfWidth > 0.0f && sViewTanHalfHeight > 0.0f;
+
+    float tanHalfWidth = sViewTanHalfWidth;
+    float tanHalfHeight = sViewTanHalfHeight;
+    if (!mWindowSized) {
+        tanHalfWidth = WINDOW_TAN_HALF_WIDTH_DEFAULT;
+        tanHalfHeight = mGameWidth > 0 ? tanHalfWidth * (float)mGameHeight / (float)mGameWidth : tanHalfWidth;
+    }
+
+    const float glass = 2.0f * WINDOW_SIZE_RANGE * mWindowScale;
+    mWindowWidth = glass * tanHalfWidth;
+    mWindowHeight = glass * tanHalfHeight;
+}
+
 void GfxWindowBackendOpenXR::PlaceWindow() {
     mWindowRadius = Clamp(mWindowRadius, WINDOW_DISTANCE_MIN, WINDOW_DISTANCE_MAX);
     mWindowScale = Clamp(mWindowScale, WINDOW_SCALE_MIN, WINDOW_SCALE_MAX);
-    if (sViewTanHalfWidth > 0.0f && sViewTanHalfHeight > 0.0f) {
-        mWindowSized = true;
-        const float glass = 2.0f * WINDOW_SIZE_RANGE * mWindowScale;
-        mWindowWidth = glass * sViewTanHalfWidth;
-        mWindowHeight = glass * sViewTanHalfHeight;
-    }
+    SizeWindow();
     sWindowAngularWidth = 2.0f * atanf(0.5f * mWindowWidth / mWindowRadius);
 
     const float across = sqrtf(mWindowDir.x * mWindowDir.x + mWindowDir.z * mWindowDir.z);
@@ -1308,9 +1620,12 @@ void GfxWindowBackendOpenXR::Recenter() {
     PlaceWindow();
     AnchorHere();
 
-    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "window placed at %.2f %.2f %.2f facing %.0f degrees%s",
+    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR",
+                        "window placed at %.2f %.2f %.2f facing %.0f degrees%s, %.2f x %.2f m at %.2f m, %s",
                         mAnchorPose.position.x, mAnchorPose.position.y, mAnchorPose.position.z,
-                        yaw * 180.0f / (float)M_PI, mAnchorSpace != XR_NULL_HANDLE ? " on an anchor" : "");
+                        yaw * 180.0f / (float)M_PI, mAnchorSpace != XR_NULL_HANDLE ? " on an anchor" : "", mWindowWidth,
+                        mWindowHeight, mWindowRadius,
+                        mWindowSized ? "the game's own field of view" : "the shape of the picture");
 }
 
 // A point measured from the viewpoint the window was placed for, in the window's own axes.
@@ -1390,6 +1705,11 @@ bool GfxWindowBackendOpenXR::OpenFrame() {
     if (!mActive) {
         return false;
     }
+#ifdef ENABLE_DEBUG_TOOLS
+    // The frame writes the picture and then one image an eye, so the request has to be taken up
+    // here rather than by whichever of them asks first.
+    DebugCapture::Arm();
+#endif
 
     PollEvents();
     if (!mRunning) {
@@ -1443,6 +1763,7 @@ bool GfxWindowBackendOpenXR::OpenFrame() {
     }
 
     PumpPointer(mDisplayTime);
+    SizeRender();
 
     // Without a head pose there is no off-axis frustum to build, so the frame falls back to one
     // image that both eyes read, which is what 2.1 presented.
@@ -1755,7 +2076,7 @@ static void PlacementMatrix(const XrView& eye, const XrPosef& anchor, float widt
 void GfxWindowBackendOpenXR::PresentView(uint32_t view) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mGameFbo[view]);
-    glBlitFramebuffer(0, 0, mGameWidth, mGameHeight, 0, 0, mGameWidth, mGameHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBlitFramebuffer(0, 0, mGameWidth, mGameHeight, 0, 0, mTexWidth, mTexHeight, GL_COLOR_BUFFER_BIT, GL_LINEAR);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -1888,8 +2209,18 @@ void GfxWindowBackendOpenXR::DrawEye(uint32_t eye, uint32_t sourceView) {
 void GfxWindowBackendOpenXR::EndRenderFrame() {
     XrCompositionLayerProjectionView projectionViews[VIEW_COUNT];
     XrCompositionLayerProjection projection{ XR_TYPE_COMPOSITION_LAYER_PROJECTION };
-    const XrCompositionLayerBaseHeader* layers[1] = {};
+    XrCompositionLayerPassthroughFB passthrough{ XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB };
+    const XrCompositionLayerBaseHeader* layers[2] = {};
     uint32_t layerCount = 0;
+
+    // The room is a layer of its own where the environment cannot be alpha blended, and it has to
+    // be under the frame for the game to draw over it.
+    if (mPassthroughLayer != XR_NULL_HANDLE) {
+        passthrough.flags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        passthrough.space = XR_NULL_HANDLE;
+        passthrough.layerHandle = mPassthroughLayer;
+        layers[layerCount++] = (const XrCompositionLayerBaseHeader*)&passthrough;
+    }
 
     if (mShouldRender && mViewsValid && mAnchorValid) {
         for (uint32_t eye = 0; eye < VIEW_COUNT; eye++) {
@@ -1935,6 +2266,14 @@ void GfxWindowBackendOpenXR::SwapBuffersBegin() {
         }
         mViewCount = 1;
     }
+
+#ifdef ENABLE_DEBUG_TOOLS
+    // The picture as the game drew it, in the coordinates the debug pointer is aimed in.
+    if (mCurrentView == 0 && DebugCapture::Pending()) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        DebugCapture::WriteBoundFramebuffer("panel", mGameWidth, mGameHeight);
+    }
+#endif
 
     if (mShouldRender) {
         PresentView(mCurrentView);
@@ -1986,6 +2325,14 @@ void GfxWindowBackendOpenXR::Teardown() {
     if (mVao != 0) {
         glDeleteVertexArrays(1, &mVao);
         mVao = 0;
+    }
+    if (mPassthroughLayer != XR_NULL_HANDLE && mDestroyPassthroughLayer != nullptr) {
+        mDestroyPassthroughLayer(mPassthroughLayer);
+        mPassthroughLayer = XR_NULL_HANDLE;
+    }
+    if (mPassthrough != XR_NULL_HANDLE && mDestroyPassthrough != nullptr) {
+        mDestroyPassthrough(mPassthrough);
+        mPassthrough = XR_NULL_HANDLE;
     }
     if (mAnchorSpace != XR_NULL_HANDLE) {
         xrDestroySpace(mAnchorSpace);

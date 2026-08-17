@@ -759,6 +759,7 @@ void GfxWindowBackendSDL2::SyncFramerateWithTime() const {
 
 void GfxWindowBackendSDL2::SwapBuffersBegin() {
 #ifdef ENABLE_DEBUG_TOOLS
+    DebugCapture::Arm();
     if (DebugCapture::Pending()) {
         int width = 0;
         int height = 0;

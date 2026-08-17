@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 namespace Fast {
 
 // Where the head is, measured from the viewpoint the game's own projection was made for, and how
@@ -71,5 +73,35 @@ void SetXrFlatProjection(bool flat);
 
 // Radians the window covers, for a caller that scales a menu drawn on it. Zero without a session.
 float GetXrWindowAngularWidth();
+
+// What fraction of the window's own width the game has to draw for one game pixel to be about one
+// eye pixel. The frame is drawn once per eye and then sampled onto a window that covers part of the
+// view, so every pixel beyond that is thrown away. It matters most where the headset hands the app
+// its whole binocular panel: the window then covers about a quarter of the width the game is given,
+// which is sixteen times the pixels. 1 without a session, and never above 1.
+float GetXrRenderScale();
+
+// The headset's own controllers. Horizon OS routes a Touch controller through OpenXR alone, so
+// Android reports no input device for one and SDL never sees it. The state is read from the action
+// set each frame and left in the runtime's own units: sticks and triggers from 0 to 1, buttons as
+// XrPadButton bits. What each control does in the game is decided by the caller.
+enum XrPadButton {
+    XR_PAD_A = 1 << 0,
+    XR_PAD_B = 1 << 1,
+    XR_PAD_X = 1 << 2,
+    XR_PAD_Y = 1 << 3,
+    XR_PAD_MENU = 1 << 4,
+    XR_PAD_LEFT_STICK = 1 << 5,
+    XR_PAD_RIGHT_STICK = 1 << 6,
+};
+
+struct XrPadState {
+    float stick[2][2]; // left then right hand, x right and y up
+    float trigger[2];  // index trigger, left then right
+    float squeeze[2];  // grip, left then right
+    uint32_t buttons;  // XrPadButton bits
+};
+
+bool GetXrPad(XrPadState* pad);
 
 } // namespace Fast

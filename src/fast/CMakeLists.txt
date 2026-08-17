@@ -30,7 +30,7 @@ if (NOT ENABLE_OPENXR)
 endif()
 
 if (NOT ENABLE_DEBUG_TOOLS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Android")
-    list(FILTER Source_Files__Graphic EXCLUDE REGEX "gfx_debug_capture")
+    list(FILTER Source_Files__Graphic EXCLUDE REGEX "gfx_debug_")
 endif()
 
 if (NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
