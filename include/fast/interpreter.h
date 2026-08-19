@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <map>
 #include <list>
 #include <cstddef>
@@ -566,6 +567,14 @@ class Interpreter {
     size_t mBufVboLen{};
     size_t mBufVboNumTris{};
     uint32_t mDrawCallCount{}; // draws issued since the port last cleared it
+#ifdef ENABLE_DEBUG_TOOLS
+    // What perfect batching would leave. A draw ends at a state change, and for sprite content the
+    // change is almost always the texture binding, so the count of distinct bindings is the floor
+    // the draws could fall to. The marked pair is the same question asked of the pass a display
+    // list keeps out of the window depth measurement, which is where the particles are.
+    uint32_t mMarkedDrawCount{};
+    uint32_t mMarkedFlushCauses[10]{};
+#endif
     // One bucket per texture inside a gSPTextureBatch span; drained as one draw each.
     struct PendingBucket {
         uint32_t textureId{};
@@ -578,6 +587,10 @@ class Interpreter {
     bool mTextureBatch = false;
     void FlushToBucket();
     void DrainBuckets();
+#ifdef ENABLE_DEBUG_TOOLS
+    std::unordered_set<const void*> mDrawTextures;
+    std::unordered_set<const void*> mMarkedTextures;
+#endif
     GfxWindowBackend* mWapi = nullptr;
     GfxRenderingAPI* mRapi = nullptr;
     std::shared_ptr<GfxDebugger> mGfxDebugger;
