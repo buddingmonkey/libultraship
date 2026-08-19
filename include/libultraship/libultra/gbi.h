@@ -199,6 +199,7 @@
 #define G_SETTILESIZE_LERP 0x4a
 #define G_XR_FLATPROJ 0x4b
 #define G_XR_SCENEDEPTH 0x4c
+#define G_TEXBATCH 0x4d
 
 /*
  * The following commands are the "generated" RDP commands; the user
@@ -2784,6 +2785,15 @@ typedef union Gfx {
                                                         \
         _g->words.w0 = _SHIFTL(G_XR_SCENEDEPTH, 24, 8); \
         _g->words.w1 = (unsigned int)(on);              \
+    })
+
+// Merges the draws that follow into one draw call per texture; draws inside the span reorder.
+#define gSPTextureBatch(pkt, on)                    \
+    _DW({                                           \
+        Gfx* _g = (Gfx*)(pkt);                      \
+                                                    \
+        _g->words.w0 = _SHIFTL(G_TEXBATCH, 24, 8);  \
+        _g->words.w1 = (unsigned int)(on);          \
     })
 
 #define gSPRegisterBlendedTex(pkt, timg, mask, replc)    \
