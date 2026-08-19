@@ -63,7 +63,7 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     float DiagonalReach(float planeX, float planeY) const;
     bool OnBar(float planeX, float planeY) const;
     int OnCorner(float planeX, float planeY) const;
-    void StartGrab(Grab kind, int hand, const XrVector3f& handPosition, float planeX, float planeY);
+    void StartGrab(Grab kind, int hand, const XrPosef& handPose, float planeX, float planeY);
     bool UpdateGrab(XrTime displayTime);
     void EndGrab();
     void PumpPointer(XrTime displayTime);
@@ -169,8 +169,9 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
 
     Grab mGrab = Grab::None;
     int mGrabHand = 0;
-    XrVector3f mGrabHandPosition = {};
-    XrVector3f mGrabWindowPosition = {};
+    XrVector3f mGrabWindowOffset = {};
+    XrVector3f mGrabRayFrom = {};
+    float mGrabWindowReach = 0.0f;
     float mGrabScale = 1.0f;
     float mGrabReach = 0.0f;
     bool mBarHover = false;

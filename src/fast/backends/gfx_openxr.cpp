@@ -35,6 +35,12 @@ namespace Fast {
 static constexpr float WINDOW_DISTANCE_DEFAULT = 1.3f;
 static constexpr float WINDOW_DISTANCE_MIN = 0.5f;
 static constexpr float WINDOW_DISTANCE_MAX = 4.0f;
+// What a held window multiplies its reach by for each meter the hand pushes along the ray. An arm
+// pushes about half a meter and the range above is eight times over, so one stroke covers most of
+// it. It multiplies rather than adds, so the window is still fine to place close to the face and
+// still crosses the room from the far end.
+static constexpr float WINDOW_REACH_GAIN = 3.0f;
+static constexpr float WINDOW_REACH_MIN = 0.1f;
 // The half-angle the window covers across, before the game has loaded a projection to ask for its
 // own. About 61 degrees, which is what Banjo-Kazooie asks for once it runs.
 static constexpr float WINDOW_TAN_HALF_WIDTH_DEFAULT = 0.59f;
@@ -895,6 +901,10 @@ static XrVector3f Subtract(const XrVector3f& a, const XrVector3f& b) {
     return { a.x - b.x, a.y - b.y, a.z - b.z };
 }
 
+static float Dot(const XrVector3f& a, const XrVector3f& b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
 static float Length(const XrVector3f& v) {
     return sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
 }
@@ -1103,8 +1113,7 @@ int GfxWindowBackendOpenXR::OnCorner(float planeX, float planeY) const {
 
 // A grab re-bases the window onto the head as it is now, so the range and the size it leaves are
 // the ones the user sees from where they stand.
-void GfxWindowBackendOpenXR::StartGrab(Grab kind, int hand, const XrVector3f& handPosition, float planeX,
-                                       float planeY) {
+void GfxWindowBackendOpenXR::StartGrab(Grab kind, int hand, const XrPosef& handPose, float planeX, float planeY) {
     const XrVector3f head = HeadPosition();
     const XrVector3f reach = Subtract(mAnchorPose.position, head);
     const float radius = Length(reach);
@@ -1122,8 +1131,6 @@ void GfxWindowBackendOpenXR::StartGrab(Grab kind, int hand, const XrVector3f& ha
     // The head has moved since the window was placed, so the range the user pulls against is the
     // one from where they stand now. The size is glass and holds through that, and the window turns
     // to face the user because that is what a window taken hold of does.
-    mGrabHandPosition = handPosition;
-    mGrabWindowPosition = mAnchorPose.position;
     mGrabScale = mWindowScale;
     mPlacementHead = head;
     mWindowDir = { reach.x / radius, reach.y / radius, reach.z / radius };
@@ -1131,6 +1138,15 @@ void GfxWindowBackendOpenXR::StartGrab(Grab kind, int hand, const XrVector3f& ha
     PlaceWindow();
     sWindowDistance = mWindowRadius;
     sWindowScale = mWindowScale;
+
+    // Where the window stands in the frame of the ray that took it, read after the placement so a
+    // window the clamps moved does not carry the difference into the drag. The reach along that
+    // direction is held apart from it, because the push works on the reach alone.
+    const XrVector3f offset = Subtract(mAnchorPose.position, handPose.position);
+    const float held = fmaxf(Length(offset), WINDOW_REACH_MIN);
+    mGrabWindowOffset = RotateInverse(handPose.orientation, { offset.x / held, offset.y / held, offset.z / held });
+    mGrabWindowReach = held;
+    mGrabRayFrom = handPose.position;
 
     // An anchor is a fixed pose and cannot follow the hand. A new one is made where the pinch lifts.
     if (mAnchorSpace != XR_NULL_HANDLE) {
@@ -1155,12 +1171,18 @@ bool GfxWindowBackendOpenXR::UpdateGrab(XrTime displayTime) {
     }
 
     if (mGrab == Grab::Move) {
-        // The window goes where the hand goes, one meter for one meter. The user thus keeps hold of
-        // the part of the bar they took, and the window does not jump at the moment of the grab.
-        const XrVector3f moved = Subtract(location.pose.position, mGrabHandPosition);
-        const XrVector3f from = { mGrabWindowPosition.x + moved.x - mPlacementHead.x,
-                                  mGrabWindowPosition.y + moved.y - mPlacementHead.y,
-                                  mGrabWindowPosition.z + moved.z - mPlacementHead.z };
+        // The window is fixed to the ray, so a turn of the wrist carries it across the room. A
+        // push along the ray takes it out and a pull brings it in, and the reach is multiplied
+        // rather than moved: an arm is half a meter long and the range is three and a half.
+        const XrVector3f aim = RotateByQuaternion(location.pose.orientation, { 0.0f, 0.0f, -1.0f });
+        const XrVector3f step = Subtract(location.pose.position, mGrabRayFrom);
+        mGrabRayFrom = location.pose.position;
+        mGrabWindowReach = fmaxf(mGrabWindowReach * expf(Dot(step, aim) * WINDOW_REACH_GAIN), WINDOW_REACH_MIN);
+
+        const XrVector3f held = RotateByQuaternion(location.pose.orientation, mGrabWindowOffset);
+        const XrVector3f from = { location.pose.position.x + held.x * mGrabWindowReach - mPlacementHead.x,
+                                  location.pose.position.y + held.y * mGrabWindowReach - mPlacementHead.y,
+                                  location.pose.position.z + held.z * mGrabWindowReach - mPlacementHead.z };
         const float radius = Length(from);
         if (radius > 1e-3f) {
             mWindowDir = { from.x / radius, from.y / radius, from.z / radius };
@@ -1168,6 +1190,9 @@ bool GfxWindowBackendOpenXR::UpdateGrab(XrTime displayTime) {
             PlaceWindow();
             sWindowDistance = mWindowRadius;
             sWindowScale = mWindowScale;
+            // Take the reach back off the window the range clamp left. Without this a push into
+            // the clamp winds the reach up, and the pull back spends that before it moves.
+            mGrabWindowReach = fmaxf(Length(Subtract(mAnchorPose.position, location.pose.position)), WINDOW_REACH_MIN);
         }
     } else {
         // The plane does not move under a resize, so the corner stays under the ray that took it.
@@ -1265,7 +1290,7 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
     float u = 0.0f;
     float v = 0.0f;
     int pinchHand = -1;
-    XrVector3f pinchPosition = {};
+    XrPosef pinchPose = { { 0.0f, 0.0f, 0.0f, 1.0f }, {} };
     float pinchX = 0.0f;
     float pinchY = 0.0f;
     bool answered = false;
@@ -1281,7 +1306,7 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
     // reaches the window carries a dot, and a ray back to the hand it came from.
     struct HandAim {
         bool onPlane;
-        XrVector3f from;
+        XrPosef pose;
         float planeX;
         float planeY;
         bool pinching;
@@ -1303,7 +1328,7 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         getInfo.subactionPath = mHandPath[hand];
         XrActionStateBoolean select{ XR_TYPE_ACTION_STATE_BOOLEAN };
         aims[hand].onPlane = true;
-        aims[hand].from = location.pose.position;
+        aims[hand].pose = location.pose;
         aims[hand].pinching = XR_SUCCEEDED(xrGetActionStateBoolean(mSession, &getInfo, &select)) && select.isActive &&
                               select.currentState == XR_TRUE;
     }
@@ -1328,7 +1353,7 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         // Both hands are drawn, so both are marked here. Only one of them answers: a pinch takes
         // the window and the hand that took it keeps it, which is what answered says.
         sHandValid[hand] = true;
-        sHandFrom[hand] = aims[hand].from;
+        sHandFrom[hand] = aims[hand].pose.position;
         sHandX[hand] = planeX;
         sHandY[hand] = planeY;
         sHandDown[hand] = pinching;
@@ -1365,7 +1390,7 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         }
         if (pinching) {
             pinchHand = hand;
-            pinchPosition = aims[hand].from;
+            pinchPose = aims[hand].pose;
             pinchX = planeX;
             pinchY = planeY;
             answered = true;
@@ -1412,7 +1437,7 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
     // A pinch on a handle takes the window, but only if it did not start on the picture: a finger
     // already down belongs to the game until it lifts.
     if (!wasDown && !sMenuHeld && mViewsValid && pinchHand >= 0 && (barDown || cornerDown)) {
-        StartGrab(barDown ? Grab::Move : Grab::Resize, pinchHand, pinchPosition, pinchX, pinchY);
+        StartGrab(barDown ? Grab::Move : Grab::Resize, pinchHand, pinchPose, pinchX, pinchY);
         if (mGrab != Grab::None) {
             sMenuHover = false;
             sCursorValid = true;
