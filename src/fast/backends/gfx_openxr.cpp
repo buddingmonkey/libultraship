@@ -445,7 +445,7 @@ bool GfxWindowBackendOpenXR::StartSession() {
     uint32_t height = 0;
     int32_t ignoredX = 0;
     int32_t ignoredY = 0;
-    GetDimensions(&width, &height, &ignoredX, &ignoredY);
+    GfxWindowBackendSDL2::GetDimensions(&width, &height, &ignoredX, &ignoredY);
     mGameWidth = width;
     mGameHeight = height;
 
@@ -1483,8 +1483,8 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
     // The pad reads SDL's touch device list, which SDL_PushEvent cannot reach, so the pinch goes
     // in there directly. ImGui reads mouse events, which is what SDL synthesizes from a touch on a
     // phone, so the menu is driven the same way here.
-    const int x = (int)(sPointerU * (float)mGameWidth);
-    const int y = (int)(sPointerV * (float)mGameHeight);
+    const int x = (int)(sPointerU * (float)mTexWidth);
+    const int y = (int)(sPointerV * (float)mTexHeight);
 
     // ImGui's SDL backend drops an event whose window it does not know, and a pushed event does
     // not carry one by itself.
@@ -1655,6 +1655,23 @@ void GfxWindowBackendOpenXR::SizeRender() {
     CreateGameTargets((uint32_t)lroundf((float)mGameWidth * wanted), (uint32_t)lroundf((float)mGameHeight * wanted));
     __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "the game draws %ux%u for a window %.0f pixels across",
                         mTexWidth, mTexHeight, covered);
+}
+
+// A headset hands the app a panel far larger than the part of the view the window covers: Quest
+// gives 4128 pixels across for a window worth about 1300 of them. SizeRender already draws the game
+// at the smaller size, but the window size the renderer and the menu read stayed the panel, so the
+// picture was scaled up to the panel to be composited and scaled back down to be placed. Report the
+// size the eye target really is, and both steps become a copy.
+//
+// Everything downstream is in these units: the menu layout, the menu scale, which is an angle over
+// a width, and the pointer, which pushes a mouse position. SizeRender still divides by the panel,
+// so nothing here feeds back into the size it picks.
+void GfxWindowBackendOpenXR::GetDimensions(uint32_t* width, uint32_t* height, int32_t* posX, int32_t* posY) {
+    GfxWindowBackendSDL2::GetDimensions(width, height, posX, posY);
+    if (mTexWidth > 0 && mTexHeight > 0) {
+        *width = mTexWidth;
+        *height = mTexHeight;
+    }
 }
 
 void GfxWindowBackendOpenXR::SizeWindow() {
@@ -2312,11 +2329,13 @@ static void RayMatrix(const XrView& eye, const XrVector3f& from, const XrVector3
     MulMatrix(eyeMatrix, model, mvp);
 }
 
-// The game has just drawn this eye into the default framebuffer; keep a copy to place later.
+// The game has just drawn this eye into the default framebuffer; keep a copy to place later. The
+// draw covers the corner the size of the eye target, which is the size GetDimensions reports, so
+// this is a copy and not a resample.
 void GfxWindowBackendOpenXR::PresentView(uint32_t view) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mGameFbo[view]);
-    glBlitFramebuffer(0, 0, mGameWidth, mGameHeight, 0, 0, mTexWidth, mTexHeight, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glBlitFramebuffer(0, 0, mTexWidth, mTexHeight, 0, 0, mTexWidth, mTexHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -2560,7 +2579,7 @@ void GfxWindowBackendOpenXR::SwapBuffersBegin() {
     // The picture as the game drew it, in the coordinates the debug pointer is aimed in.
     if (mCurrentView == 0 && DebugCapture::Pending()) {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        DebugCapture::WriteBoundFramebuffer("panel", mGameWidth, mGameHeight);
+        DebugCapture::WriteBoundFramebuffer("panel", mTexWidth, mTexHeight);
     }
 #endif
 
@@ -2586,6 +2605,9 @@ void GfxWindowBackendOpenXR::Teardown() {
             glDeleteTextures(1, &mGameTex[view]);
             mGameTex[view] = 0;
         }
+        // The reported window size falls back to the panel while there is no eye target.
+        mTexWidth = 0;
+        mTexHeight = 0;
         if (mSwapchain[view] != XR_NULL_HANDLE) {
             xrDestroySwapchain(mSwapchain[view]);
             mSwapchain[view] = XR_NULL_HANDLE;

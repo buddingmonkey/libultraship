@@ -35,6 +35,7 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
 
     void Init(const char* gameName, const char* apiName, bool startFullScreen, uint32_t width, uint32_t height,
               int32_t posX, int32_t posY) override;
+    void GetDimensions(uint32_t* width, uint32_t* height, int32_t* posX, int32_t* posY) override;
     void GetActiveWindowRefreshRate(uint32_t* refreshRate) override;
     std::vector<float> GetSupportedRefreshRates() override;
     bool SetRefreshRate(float rate) override;
