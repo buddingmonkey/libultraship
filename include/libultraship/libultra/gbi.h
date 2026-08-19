@@ -197,6 +197,7 @@
 #define G_SETTILESIZE_INTERP 0x45
 #define G_SETTARGETINTERPINDEX 0x46
 #define G_SETTILESIZE_LERP 0x4a
+#define G_TEXBATCH 0x4d
 
 /*
  * The following commands are the "generated" RDP commands; the user
@@ -2760,6 +2761,15 @@ typedef union Gfx {
 
 #define gsSPInvalidateTexCache() \
     { _SHIFTL(G_INVALTEXCACHE, 24, 8), 0 }
+
+// Merges the draws that follow into one draw call per texture; draws inside the span reorder.
+#define gSPTextureBatch(pkt, on)                    \
+    _DW({                                           \
+        Gfx* _g = (Gfx*)(pkt);                      \
+                                                    \
+        _g->words.w0 = _SHIFTL(G_TEXBATCH, 24, 8);  \
+        _g->words.w1 = (unsigned int)(on);          \
+    })
 
 #define gSPRegisterBlendedTex(pkt, timg, mask, replc)    \
     {                                                    \
