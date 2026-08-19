@@ -1702,6 +1702,14 @@ void GfxWindowBackendOpenXR::PlaceWindow() {
                    mAnchorPose.position.y + normal.y * mWindowRadius,
                    mAnchorPose.position.z + normal.z * mWindowRadius };
     mAnchorValid = true;
+
+    // A window put low stands upright, so its apex holds the height of the glass and the head is
+    // above it: the picture is then drawn as one looked down into. Take the rise the window is
+    // placed with out of the parallax, and the content faces the user as it is put there. Only
+    // what the head does after this puts any rise back, which is what a peek over the sill is.
+    if (mViewsValid) {
+        mParallaxRise = ToWindowAxes(HeadPosition()).y;
+    }
 }
 
 // A spatial anchor holds a pose through SLAM itself, so the window stays put even when the
@@ -1928,7 +1936,7 @@ void GfxWindowBackendOpenXR::BeginRenderView(uint32_t view) {
         mono ? XrVector3f{ 0.5f * (left.x + right.x), 0.5f * (left.y + right.y), 0.5f * (left.z + right.z) } : eye;
     const XrVector3f offset = ToWindowAxes(world);
     sViewGeometry.eyeOffset[0] = offset.x * acrossGlass;
-    sViewGeometry.eyeOffset[1] = offset.y * acrossGlass;
+    sViewGeometry.eyeOffset[1] = (offset.y - mParallaxRise) * acrossGlass;
     sViewGeometry.eyeOffset[2] = offset.z * alongNormal;
     sViewGeometry.windowDistance = sGlassDepth;
     sViewGeometryValid = true;
