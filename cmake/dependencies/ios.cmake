@@ -148,4 +148,7 @@ target_sources(ImGui
 target_include_directories(ImGui PRIVATE ${metalcpp_SOURCE_DIR})
 target_compile_definitions(ImGui PUBLIC IMGUI_IMPL_METAL_CPP)
 
-target_link_libraries(ImGui PUBLIC SDL2::SDL2-static SDL2::SDL2main)
+target_link_libraries(ImGui PUBLIC SDL2::SDL2-static)
+if(TARGET SDL2::SDL2main)
+    target_link_libraries(ImGui PUBLIC SDL2::SDL2main)
+endif()
