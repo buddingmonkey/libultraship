@@ -3,6 +3,7 @@
 #include <chrono>
 
 #include <spdlog/spdlog.h>
+#include <imgui_internal.h>
 
 #include "fast/Fast3dWindow.h"
 #include "ship/Context.h"
@@ -318,17 +319,11 @@ void Fast3dGui::ImGuiWMNewFrame() {
             ImGui::GetIO().DeltaTime = VisionOSDeltaTime();
 
             {
-                // Says once what the ImGui item hook offered, so the mask can be judged from a log.
-                static size_t sReportedRects = 0;
+                static size_t sReported = SIZE_MAX;
                 const size_t collected = GetVisionOSTrackingRectCount();
-                if (collected > sReportedRects) {
-                    sReportedRects = collected;
+                if (collected != sReported) {
+                    sReported = collected;
                     SPDLOG_INFO("visionOS: {} ImGui items offered as tracking areas", collected);
-                    for (size_t i = 0; i < collected; ++i) {
-                        const VisionOSTrackingRect rect = GetVisionOSTrackingRect(i);
-                        SPDLOG_INFO("visionOS:   item {} id {} rect {:.0f},{:.0f} to {:.0f},{:.0f}", i,
-                                    rect.Identifier, rect.MinX, rect.MinY, rect.MaxX, rect.MaxY);
-                    }
                 }
             }
             BeginVisionOSTrackingRects();
@@ -337,7 +332,17 @@ void Fast3dGui::ImGuiWMNewFrame() {
             if (pointer.Valid) {
                 ImGui::GetIO().AddMousePosEvent(pointer.X, pointer.Y);
             }
-            ImGui::GetIO().AddMouseButtonEvent(0, pointer.Valid && pointer.Pressed);
+            const bool pressed = pointer.Valid && pointer.Pressed;
+            ImGui::GetIO().AddMouseButtonEvent(0, pressed);
+
+            static bool sWasPressed = false;
+            if (pressed != sWasPressed) {
+                sWasPressed = pressed;
+                ImGuiContext* context = ImGui::GetCurrentContext();
+                SPDLOG_INFO("visionOS: pointer {} at {:.0f},{:.0f}; imgui mouse {:.0f},{:.0f} hovered {} active {}",
+                            pressed ? "down" : "up", pointer.X, pointer.Y, ImGui::GetIO().MousePos.x,
+                            ImGui::GetIO().MousePos.y, context->HoveredId, context->ActiveId);
+            }
             break;
         }
 #endif
