@@ -298,6 +298,24 @@ void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb
         return;
     }
 
+    ImGuiWindow* window = ctx != nullptr ? ctx->CurrentWindow : nullptr;
+    if (window == nullptr) {
+        return;
+    }
+
+    // The window itself and its title bar come through ItemAdd the same way a button does. Neither
+    // is something to press, and the window covers everything inside it.
+    if (id == window->ID || id == window->MoveId) {
+        return;
+    }
+
+    // A modal takes every click, so nothing behind it can be pressed. This is the rule ImGui uses
+    // itself, and without it the implicit debug window offers items under the dimmed screen.
+    ImGuiWindow* modal = ImGui::GetTopMostPopupModal();
+    if (modal != nullptr && !ImGui::IsWindowWithinBeginStackOf(window, modal)) {
+        return;
+    }
+
     Fast::VisionOSTrackingRect rect{};
     rect.MinX = bb.Min.x;
     rect.MinY = bb.Min.y;
