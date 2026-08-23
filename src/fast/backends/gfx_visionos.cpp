@@ -6,11 +6,17 @@
 #include <SDL_events.h>
 #include <spdlog/spdlog.h>
 
+#include <cmath>
+
+#include "fast/backends/gfx_metal.h"
+
 namespace Fast {
 
 namespace {
 VisionOSCompositor gCompositor = { nullptr, nullptr, 0, 0 };
 MTL::Texture* gGameTexture = nullptr;
+GfxRenderingAPIMetal* gTestRenderer = nullptr;
+bool gTestRendererFailed = false;
 } // namespace
 
 void SetVisionOSCompositor(void* device, void* commandQueue, uint32_t width, uint32_t height) {
@@ -42,6 +48,32 @@ void* GetVisionOSGameTexture() {
         SPDLOG_ERROR("visionOS: the game texture was not made");
     }
     return gGameTexture;
+}
+
+void RenderVisionOSTestPattern(uint64_t frameIndex) {
+    MTL::Texture* target = static_cast<MTL::Texture*>(GetVisionOSGameTexture());
+    if (target == nullptr || gTestRendererFailed) {
+        return;
+    }
+
+    if (gTestRenderer == nullptr) {
+        gTestRenderer = new GfxRenderingAPIMetal();
+        if (!gTestRenderer->MetalInitExternal(static_cast<MTL::Device*>(gCompositor.Device),
+                                              static_cast<MTL::CommandQueue*>(gCompositor.CommandQueue), target)) {
+            SPDLOG_ERROR("visionOS: the external Metal target did not come up");
+            gTestRendererFailed = true;
+            return;
+        }
+        gTestRenderer->Init();
+    }
+
+    const double phase = static_cast<double>(frameIndex % 180) / 180.0 * 2.0 * M_PI;
+    gTestRenderer->SetExternalClearColor(0.5 + 0.45 * std::sin(phase), 0.10,
+                                         0.5 + 0.45 * std::sin(phase + M_PI), 1.0);
+    gTestRenderer->StartFrame();
+    gTestRenderer->StartDrawToFramebuffer(0, 0.0f);
+    gTestRenderer->ClearFramebuffer(true, true);
+    gTestRenderer->EndFrame();
 }
 
 void GfxWindowBackendVisionOS::Init(const char* gameName, const char* apiName, bool startFullScreen, uint32_t width,
