@@ -13,6 +13,7 @@
 #include "fast/backends/gfx_direct3d11.h"
 #include "fast/backends/gfx_window_manager_api.h"
 #include "fast/backends/gfx_openxr.h"
+#include "fast/backends/gfx_visionos.h"
 
 #include "fast/Fast3dGui.h"
 
@@ -32,7 +33,9 @@ Fast3dWindow::Fast3dWindow(std::shared_ptr<Ship::Gui> gui, std::shared_ptr<FastM
 #ifdef _WIN32
     AddAvailableWindowBackend(WindowBackend::FAST3D_DXGI_DX11);
 #endif
-#ifdef __APPLE__
+#ifdef __VISIONOS__
+    AddAvailableWindowBackend(WindowBackend::FAST3D_VISIONOS_METAL);
+#elif defined(__APPLE__)
     if (Metal_IsSupported()) {
         AddAvailableWindowBackend(WindowBackend::FAST3D_SDL_METAL);
     }
@@ -140,7 +143,10 @@ uint16_t Fast3dWindow::GetPixelDepth(float x, float y) {
 }
 
 void Fast3dWindow::InitWindowManager() {
-#ifdef ENABLE_OPENXR
+#if defined(__VISIONOS__)
+    // The compositor owns the display, so there is nothing for the player to choose.
+    SetWindowBackend(WindowBackend::FAST3D_VISIONOS_METAL);
+#elif defined(ENABLE_OPENXR)
     // The backend falls back to the flat panel by itself when no session comes up.
     SetWindowBackend(WindowBackend::FAST3D_OPENXR_OPENGL);
 #else
@@ -166,7 +172,12 @@ void Fast3dWindow::InitWindowManager() {
             mWindowManagerApi = new GfxWindowBackendSDL2();
             break;
 #endif
-#ifdef __APPLE__
+#ifdef __VISIONOS__
+        case WindowBackend::FAST3D_VISIONOS_METAL:
+            mRenderingApi = new GfxRenderingAPIMetal();
+            mWindowManagerApi = new GfxWindowBackendVisionOS();
+            break;
+#elif defined(__APPLE__)
         case WindowBackend::FAST3D_SDL_METAL:
             mRenderingApi = new GfxRenderingAPIMetal();
             mWindowManagerApi = new GfxWindowBackendSDL2();
@@ -439,6 +450,7 @@ std::string Fast3dWindow::GetWindowBackendName() {
         case WindowBackend::FAST3D_SDL_OPENGL:
             return "OpenGL";
         case WindowBackend::FAST3D_SDL_METAL:
+        case WindowBackend::FAST3D_VISIONOS_METAL:
             return "Metal";
         default:
             return "";

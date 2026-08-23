@@ -24,6 +24,7 @@ enum WindowBackend {
     FAST3D_SDL_OPENGL = 2,
     FAST3D_SDL_METAL = 3,
     FAST3D_OPENXR_OPENGL = 4,
+    FAST3D_VISIONOS_METAL = 5,
 };
 
 class Fast3dWindow : public Ship::Window {
