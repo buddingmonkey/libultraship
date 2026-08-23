@@ -315,6 +315,8 @@ void Fast3dGui::ImGuiWMNewFrame() {
             ImGui::GetIO().DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
             ImGui::GetIO().DeltaTime = VisionOSDeltaTime();
 
+            BeginVisionOSTrackingRects();
+
             const VisionOSPointer pointer = GetVisionOSPointer();
             if (pointer.Valid) {
                 ImGui::GetIO().AddMousePosEvent(pointer.X, pointer.Y);

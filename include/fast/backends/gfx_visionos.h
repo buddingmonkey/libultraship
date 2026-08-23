@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 namespace Fast {
@@ -39,6 +40,20 @@ struct VisionOSPointer {
 
 void SetVisionOSPointer(VisionOSPointer pointer);
 VisionOSPointer GetVisionOSPointer();
+
+// One ImGui item that the system can highlight on gaze, in game texture pixels.
+struct VisionOSTrackingRect {
+    float MinX;
+    float MinY;
+    float MaxX;
+    float MaxY;
+    uint64_t Identifier;
+};
+
+void BeginVisionOSTrackingRects();
+void AddVisionOSTrackingRect(VisionOSTrackingRect rect);
+size_t GetVisionOSTrackingRectCount();
+VisionOSTrackingRect GetVisionOSTrackingRect(size_t index);
 
 } // namespace Fast
 
