@@ -190,6 +190,7 @@ if (LUS_APPLE_MOBILE)
         $<$<NOT:$<CONFIG:Debug>>:NDEBUG>
         SPDLOG_ACTIVE_LEVEL=${SPDLOG_MIN_CUTOFF}
         __IOS__
+        $<$<STREQUAL:${CMAKE_SYSTEM_NAME},visionOS>:__VISIONOS__>
     )
 
     set_xcode_property(${PROJECT_NAME} PRODUCT_BUNDLE_IDENTIFIER ${BUNDLE_ID} All)
