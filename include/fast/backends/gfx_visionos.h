@@ -18,6 +18,9 @@ void SetVisionOSCompositor(void* device, void* commandQueue, uint32_t width, uin
 VisionOSCompositor GetVisionOSCompositor();
 void* GetVisionOSGameTexture();
 
+// Proves that Fast3D owns the game texture before the game itself starts. Step 4 removes it.
+void RenderVisionOSTestPattern(uint64_t frameIndex);
+
 } // namespace Fast
 
 #ifdef __VISIONOS__

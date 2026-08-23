@@ -12,6 +12,8 @@
 
 #include <imgui_impl_sdl2.h>
 #include <simd/simd.h>
+#include <condition_variable>
+#include <mutex>
 
 static constexpr size_t kMaxVertexBufferPoolSize = 3;
 static constexpr size_t METAL_MAX_MULTISAMPLE_SAMPLE_COUNT = 8;
@@ -178,11 +180,23 @@ class GfxRenderingAPIMetal final : public GfxRenderingAPI {
     void SetupFloatingFrame();
     void RenderDrawData(ImDrawData* drawData);
     bool MetalInit(SDL_Renderer* renderer);
+    // visionOS hands over a device, a queue and a target texture, and has no drawable to present.
+    bool MetalInitExternal(MTL::Device* device, MTL::CommandQueue* queue, MTL::Texture* target);
+    bool MetalInitImGui();
+    void SetExternalClearColor(double red, double green, double blue, double alpha);
 
   private:
     bool NonUniformThreadGroupSupported();
     void SetupScreenFramebuffer(uint32_t width, uint32_t height);
+    void WaitForFreeFrame();
     // Elements that only need to be setup once
+    bool mExternalTarget = false;
+    bool mScreenFramebufferReady = false;
+    MTL::Texture* mExternalColorTexture = nullptr;
+    double mExternalClearColor[4] = { 0.0, 0.0, 0.0, 1.0 };
+    std::mutex mFrameThrottleMutex;
+    std::condition_variable mFrameThrottleSignal;
+    uint32_t mFramesInFlight = 0;
     SDL_Renderer* mRenderer;
     CA::MetalLayer* mLayer; // CA::MetalLayer*
     MTL::Device* mDevice;

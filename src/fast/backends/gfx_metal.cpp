@@ -29,6 +29,7 @@
 #include <Metal/Metal.hpp>
 
 #include <SDL_render.h>
+#include <TargetConditionals.h>
 #include <imgui_impl_metal.h>
 #include <spdlog/spdlog.h>
 #include <spdlog/fmt/fmt.h>
@@ -63,6 +64,15 @@ static MTL::SamplerAddressMode gfx_cm_to_metal(uint32_t val) {
 
 // MARK: - ImGui & SDL Wrappers
 
+static bool DepthClipModeSupported() {
+#if TARGET_OS_SIMULATOR
+    // The simulator's paravirtual GPU has no depth clamp, and Metal validation aborts on the call.
+    return false;
+#else
+    return true;
+#endif
+}
+
 bool GfxRenderingAPIMetal::NonUniformThreadGroupSupported() {
 #ifdef __IOS__
     // iOS devices with A11 or later support dispatch threads
@@ -95,9 +105,43 @@ bool GfxRenderingAPIMetal::MetalInit(SDL_Renderer* renderer) {
     return ImGui_ImplMetal_Init(mDevice);
 }
 
-static void SetupScreenFramebuffer(uint32_t width, uint32_t height);
+bool GfxRenderingAPIMetal::MetalInitExternal(MTL::Device* device, MTL::CommandQueue* queue, MTL::Texture* target) {
+    mExternalTarget = true;
+    mDevice = device;
+    mCommandQueue = queue;
+    mExternalColorTexture = target;
+
+    NS::AutoreleasePool* autorelease_pool = NS::AutoreleasePool::alloc()->init();
+    mReadbackQueue = mDevice->newCommandQueue();
+    for (size_t i = 0; i < kMaxVertexBufferPoolSize; i++) {
+        MTL::Buffer* new_buffer = mDevice->newBuffer(256 * 32 * 3 * sizeof(float) * 50, MTL::ResourceStorageModeShared);
+        mVertexBufferPool[i] = new_buffer;
+    }
+    autorelease_pool->release();
+    mNonUniformThreadgroupSupported = NonUniformThreadGroupSupported();
+
+    return mDevice != nullptr && mCommandQueue != nullptr && mExternalColorTexture != nullptr;
+}
+
+bool GfxRenderingAPIMetal::MetalInitImGui() {
+    return ImGui_ImplMetal_Init(mDevice);
+}
+
+void GfxRenderingAPIMetal::SetExternalClearColor(double red, double green, double blue, double alpha) {
+    mExternalClearColor[0] = red;
+    mExternalClearColor[1] = green;
+    mExternalClearColor[2] = blue;
+    mExternalClearColor[3] = alpha;
+}
 
 void GfxRenderingAPIMetal::NewFrame() {
+    if (mExternalTarget) {
+        SetupScreenFramebuffer(mExternalColorTexture->width(), mExternalColorTexture->height());
+        MTL::RenderPassDescriptor* external_render_pass = mFramebuffers[0].mRenderPassDescriptor;
+        ImGui_ImplMetal_NewFrame(external_render_pass);
+        return;
+    }
+
     int width, height;
     SDL_GetRendererOutputSize(mRenderer, &width, &height);
     SetupScreenFramebuffer(width, height);
@@ -567,7 +611,25 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
 void GfxRenderingAPIMetal::OnResize() {
 }
 
+void GfxRenderingAPIMetal::WaitForFreeFrame() {
+    std::unique_lock<std::mutex> lock(mFrameThrottleMutex);
+    if (!mFrameThrottleSignal.wait_for(lock, std::chrono::seconds(1),
+                                       [this] { return mFramesInFlight < kMaxVertexBufferPoolSize; })) {
+        SPDLOG_WARN("Metal: no frame retired in a second; going on with {} in flight", mFramesInFlight);
+    }
+    mFramesInFlight++;
+}
+
 void GfxRenderingAPIMetal::StartFrame() {
+    if (mExternalTarget) {
+        // nextDrawable used to bound how far the CPU could run ahead of the GPU. Nothing else
+        // stops a frame from writing the vertex buffer that the GPU still reads.
+        WaitForFreeFrame();
+        if (!mScreenFramebufferReady) {
+            SetupScreenFramebuffer(mExternalColorTexture->width(), mExternalColorTexture->height());
+        }
+    }
+
     mFrameUniforms.frameCount++;
     if (mFrameUniforms.frameCount > 150) {
         // No high values, as noise starts to look ugly
@@ -638,6 +700,15 @@ void GfxRenderingAPIMetal::EndFrame() {
         screen_framebuffer.mCommandBuffer->presentDrawable(mCurrentDrawable);
     }
     mCurrentVertexBufferPoolIndex = (mCurrentVertexBufferPoolIndex + 1) % kMaxVertexBufferPoolSize;
+    if (mExternalTarget) {
+        screen_framebuffer.mCommandBuffer->addCompletedHandler([this](MTL::CommandBuffer*) {
+            {
+                std::lock_guard<std::mutex> lock(mFrameThrottleMutex);
+                mFramesInFlight--;
+            }
+            mFrameThrottleSignal.notify_one();
+        });
+    }
     screen_framebuffer.mCommandBuffer->commit();
 
     // Now that commit has been called, retain the command buffer for GPU sync
@@ -678,6 +749,7 @@ void GfxRenderingAPIMetal::EndFrame() {
         fb.mLastZmodeDecal = -1;
     }
 
+    mScreenFramebufferReady = false;
     mFrameAutoreleasePool->release();
 }
 
@@ -705,9 +777,12 @@ int GfxRenderingAPIMetal::CreateFramebuffer() {
 }
 
 void GfxRenderingAPIMetal::SetupScreenFramebuffer(uint32_t width, uint32_t height) {
+    mScreenFramebufferReady = true;
     mCurrentDrawable = nullptr;
     const auto drawableT0 = std::chrono::steady_clock::now();
-    mCurrentDrawable = mLayer->nextDrawable();
+    if (!mExternalTarget) {
+        mCurrentDrawable = mLayer->nextDrawable();
+    }
 
     // The layer gives nothing back once its pool is empty, which is what an
     // off-screen frame leaves behind. Every metal-cpp call below is objc_msgSend
@@ -716,7 +791,7 @@ void GfxRenderingAPIMetal::SetupScreenFramebuffer(uint32_t width, uint32_t heigh
     // previous texture so the pass stays valid, and say so once: a nextDrawable
     // that never succeeds is a one-second stall per frame and needs to be
     // recognisable in a log.
-    if (mCurrentDrawable == nullptr) {
+    if (mCurrentDrawable == nullptr && !mExternalTarget) {
         static bool sNoDrawableReported = false;
         if (!sNoDrawableReported) {
             sNoDrawableReported = true;
@@ -727,14 +802,14 @@ void GfxRenderingAPIMetal::SetupScreenFramebuffer(uint32_t width, uint32_t heigh
         }
     }
 
-    bool msaa_enabled = Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gMSAAValue", 1) > 1;
-
     FramebufferMetal& fb = mFramebuffers[0];
     TextureDataMetal& tex = mTextures[fb.mTextureId];
 
     NS::AutoreleasePool* autorelease_pool = NS::AutoreleasePool::alloc()->init();
 
-    if (mCurrentDrawable != nullptr) {
+    if (mExternalTarget) {
+        tex.texture = mExternalColorTexture;
+    } else if (mCurrentDrawable != nullptr) {
         tex.texture = mCurrentDrawable->texture();
     }
 
@@ -742,6 +817,10 @@ void GfxRenderingAPIMetal::SetupScreenFramebuffer(uint32_t width, uint32_t heigh
     render_pass_descriptor->colorAttachments()->object(0)->setTexture(tex.texture);
     render_pass_descriptor->colorAttachments()->object(0)->setLoadAction(MTL::LoadActionLoad);
     render_pass_descriptor->colorAttachments()->object(0)->setStoreAction(MTL::StoreActionStore);
+    if (mExternalTarget) {
+        render_pass_descriptor->colorAttachments()->object(0)->setClearColor(MTL::ClearColor(
+            mExternalClearColor[0], mExternalClearColor[1], mExternalClearColor[2], mExternalClearColor[3]));
+    }
 
     tex.width = width;
     tex.height = height;
@@ -789,9 +868,11 @@ void GfxRenderingAPIMetal::UpdateFramebufferParameters(int fb_id, uint32_t width
     // Screen framebuffer is handled separately on a frame by frame basis
     // see `SetupScreenFramebuffer`.
     if (fb_id == 0) {
-        int width, height;
-        SDL_GetRendererOutputSize(mRenderer, &width, &height);
-        mLayer->setDrawableSize({ CGFloat(width), CGFloat(height) });
+        if (!mExternalTarget) {
+            int width, height;
+            SDL_GetRendererOutputSize(mRenderer, &width, &height);
+            mLayer->setDrawableSize({ CGFloat(width), CGFloat(height) });
+        }
 
         return;
     }
@@ -941,7 +1022,9 @@ void GfxRenderingAPIMetal::StartDrawToFramebuffer(int fb_id, float noise_scale) 
         fb.mCommandEncoder = fb.mCommandBuffer->renderCommandEncoder(fb.mRenderPassDescriptor);
         std::string fbce_label = fmt::format("FrameBuffer {} Command Encoder", fb_id);
         fb.mCommandEncoder->setLabel(NS::String::string(fbce_label.c_str(), NS::UTF8StringEncoding));
-        fb.mCommandEncoder->setDepthClipMode(MTL::DepthClipModeClamp);
+        if (DepthClipModeSupported()) {
+            fb.mCommandEncoder->setDepthClipMode(MTL::DepthClipModeClamp);
+        }
     }
 
     if (noise_scale != 0.0f) {
@@ -981,7 +1064,9 @@ void GfxRenderingAPIMetal::ClearFramebuffer(bool color, bool depth) {
 
     std::string fbce_label = fmt::format("FrameBuffer {} Command Encoder After Clear", mCurrentFramebuffer);
     framebuffer.mCommandEncoder->setLabel(NS::String::string(fbce_label.c_str(), NS::UTF8StringEncoding));
-    framebuffer.mCommandEncoder->setDepthClipMode(MTL::DepthClipModeClamp);
+    if (DepthClipModeSupported()) {
+        framebuffer.mCommandEncoder->setDepthClipMode(MTL::DepthClipModeClamp);
+    }
     framebuffer.mCommandEncoder->setViewport(*framebuffer.mViewport);
     framebuffer.mCommandEncoder->setScissorRect(*framebuffer.mScissorRect);
 
@@ -1008,9 +1093,10 @@ void GfxRenderingAPIMetal::ResolveMSAAColorBuffer(int fb_id_target, int fb_id_so
     int source_texture_id = mFramebuffers[fb_id_source].mTextureId;
     MTL::Texture* source_texture = mTextures[source_texture_id].texture;
 
+    // mTextures already holds what framebuffer zero draws into: the drawable texture, or the
+    // caller texture in external mode. Reading the drawable here crashes when there is none.
     int target_texture_id = mFramebuffers[fb_id_target].mTextureId;
-    MTL::Texture* target_texture =
-        target_texture_id == 0 ? mCurrentDrawable->texture() : mTextures[target_texture_id].texture;
+    MTL::Texture* target_texture = mTextures[target_texture_id].texture;
 
     // Workaround for detecting when transitioning to/from full screen mode.
     if (source_texture->width() != target_texture->width() || source_texture->height() != target_texture->height()) {
@@ -1192,7 +1278,9 @@ void GfxRenderingAPIMetal::CopyFramebuffer(int fb_dst_id, int fb_src_id, int src
 
     std::string fbce_label = fmt::format("FrameBuffer {} Command Encoder After Copy", fb_src_id);
     source_framebuffer.mCommandEncoder->setLabel(NS::String::string(fbce_label.c_str(), NS::UTF8StringEncoding));
-    source_framebuffer.mCommandEncoder->setDepthClipMode(MTL::DepthClipModeClamp);
+    if (DepthClipModeSupported()) {
+        source_framebuffer.mCommandEncoder->setDepthClipMode(MTL::DepthClipModeClamp);
+    }
     source_framebuffer.mCommandEncoder->setViewport(*source_framebuffer.mViewport);
     source_framebuffer.mCommandEncoder->setScissorRect(*source_framebuffer.mScissorRect);
 
