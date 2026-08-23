@@ -2,6 +2,8 @@
 
 #include <chrono>
 
+#include <spdlog/spdlog.h>
+
 #include "fast/Fast3dWindow.h"
 #include "ship/Context.h"
 #include "ship/config/ConsoleVariable.h"
@@ -315,6 +317,20 @@ void Fast3dGui::ImGuiWMNewFrame() {
             ImGui::GetIO().DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
             ImGui::GetIO().DeltaTime = VisionOSDeltaTime();
 
+            {
+                // Says once what the ImGui item hook offered, so the mask can be judged from a log.
+                static size_t sReportedRects = 0;
+                const size_t collected = GetVisionOSTrackingRectCount();
+                if (collected > sReportedRects) {
+                    sReportedRects = collected;
+                    SPDLOG_INFO("visionOS: {} ImGui items offered as tracking areas", collected);
+                    for (size_t i = 0; i < collected; ++i) {
+                        const VisionOSTrackingRect rect = GetVisionOSTrackingRect(i);
+                        SPDLOG_INFO("visionOS:   item {} id {} rect {:.0f},{:.0f} to {:.0f},{:.0f}", i,
+                                    rect.Identifier, rect.MinX, rect.MinY, rect.MaxX, rect.MaxY);
+                    }
+                }
+            }
             BeginVisionOSTrackingRects();
 
             const VisionOSPointer pointer = GetVisionOSPointer();
