@@ -175,7 +175,7 @@ void Fast3dWindow::InitWindowManager() {
 #ifdef __VISIONOS__
         case WindowBackend::FAST3D_VISIONOS_METAL:
             mRenderingApi = new GfxRenderingAPIMetal();
-            mWindowManagerApi = new GfxWindowBackendVisionOS();
+            mWindowManagerApi = new GfxWindowBackendVisionOS(static_cast<GfxRenderingAPIMetal*>(mRenderingApi));
             break;
 #elif defined(__APPLE__)
         case WindowBackend::FAST3D_SDL_METAL:

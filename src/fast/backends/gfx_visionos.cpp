@@ -8,16 +8,21 @@
 
 #include <cmath>
 
+#include "fast/Fast3dGui.h"
 #include "fast/backends/gfx_metal.h"
+#include "ship/Context.h"
 
 namespace Fast {
 
 namespace {
 VisionOSCompositor gCompositor = { nullptr, nullptr, 0, 0 };
 MTL::Texture* gGameTexture = nullptr;
-GfxRenderingAPIMetal* gTestRenderer = nullptr;
-bool gTestRendererFailed = false;
+VisionOSFrameHooks gFrameHooks = { nullptr, nullptr, nullptr };
 } // namespace
+
+void SetVisionOSFrameHooks(VisionOSFrameHooks hooks) {
+    gFrameHooks = hooks;
+}
 
 void SetVisionOSCompositor(void* device, void* commandQueue, uint32_t width, uint32_t height) {
     if (gGameTexture != nullptr && (gCompositor.Width != width || gCompositor.Height != height)) {
@@ -50,30 +55,8 @@ void* GetVisionOSGameTexture() {
     return gGameTexture;
 }
 
-void RenderVisionOSTestPattern(uint64_t frameIndex) {
-    MTL::Texture* target = static_cast<MTL::Texture*>(GetVisionOSGameTexture());
-    if (target == nullptr || gTestRendererFailed) {
-        return;
-    }
-
-    if (gTestRenderer == nullptr) {
-        gTestRenderer = new GfxRenderingAPIMetal();
-        if (!gTestRenderer->MetalInitExternal(static_cast<MTL::Device*>(gCompositor.Device),
-                                              static_cast<MTL::CommandQueue*>(gCompositor.CommandQueue), target)) {
-            SPDLOG_ERROR("visionOS: the external Metal target did not come up");
-            gTestRendererFailed = true;
-            return;
-        }
-        gTestRenderer->Init();
-    }
-
-    const double phase = static_cast<double>(frameIndex % 180) / 180.0 * 2.0 * M_PI;
-    gTestRenderer->SetExternalClearColor(0.5 + 0.45 * std::sin(phase), 0.10,
-                                         0.5 + 0.45 * std::sin(phase + M_PI), 1.0);
-    gTestRenderer->StartFrame();
-    gTestRenderer->StartDrawToFramebuffer(0, 0.0f);
-    gTestRenderer->ClearFramebuffer(true, true);
-    gTestRenderer->EndFrame();
+GfxWindowBackendVisionOS::GfxWindowBackendVisionOS(GfxRenderingAPIMetal* renderingApi)
+    : mRenderingApi(renderingApi) {
 }
 
 void GfxWindowBackendVisionOS::Init(const char* gameName, const char* apiName, bool startFullScreen, uint32_t width,
@@ -81,9 +64,42 @@ void GfxWindowBackendVisionOS::Init(const char* gameName, const char* apiName, b
     mWidth = gCompositor.Width != 0 ? gCompositor.Width : width;
     mHeight = gCompositor.Height != 0 ? gCompositor.Height : height;
     mFullScreen = true;
-    if (GetVisionOSGameTexture() == nullptr) {
+
+    MTL::Texture* target = static_cast<MTL::Texture*>(GetVisionOSGameTexture());
+    if (target == nullptr) {
         SPDLOG_ERROR("visionOS: the compositor was not published before the window came up");
+        return;
     }
+
+    // Interpreter::Init calls the rendering API's Init straight after this, and that reads the
+    // device, so the external target has to be handed over here.
+    if (mRenderingApi == nullptr ||
+        !mRenderingApi->MetalInitExternal(static_cast<MTL::Device*>(gCompositor.Device),
+                                          static_cast<MTL::CommandQueue*>(gCompositor.CommandQueue), target)) {
+        SPDLOG_ERROR("visionOS: the external Metal target did not come up");
+        return;
+    }
+
+    GuiWindowInitData windowImpl;
+    windowImpl.Backend = WindowBackend::FAST3D_VISIONOS_METAL;
+    windowImpl.VisionOS.Width = mWidth;
+    windowImpl.VisionOS.Height = mHeight;
+    std::dynamic_pointer_cast<Fast3dGui>(Ship::Context::GetRawInstance()->GetWindow()->GetGui())->Init(windowImpl);
+}
+
+bool GfxWindowBackendVisionOS::OpenFrame() {
+    if (gFrameHooks.OpenFrame == nullptr) {
+        return false;
+    }
+    mFrameOpen = gFrameHooks.OpenFrame();
+    return mFrameOpen;
+}
+
+uint32_t GfxWindowBackendVisionOS::BeginRenderFrame() {
+    if (!mFrameOpen) {
+        OpenFrame();
+    }
+    return 1;
 }
 
 void GfxWindowBackendVisionOS::Close() {
@@ -171,6 +187,16 @@ bool GfxWindowBackendVisionOS::IsFrameReady() {
 }
 
 void GfxWindowBackendVisionOS::SwapBuffersBegin() {
+    // A GUI-only frame reaches here without BeginRenderFrame, the same way the OpenXR backend has
+    // to open one late. Fast3D has already committed by now, so the shell makes its command buffer
+    // after ours and the screen samples this frame, not the one before it.
+    if (!mFrameOpen && !OpenFrame()) {
+        return;
+    }
+    if (gFrameHooks.CloseFrame != nullptr) {
+        gFrameHooks.CloseFrame();
+    }
+    mFrameOpen = false;
 }
 
 void GfxWindowBackendVisionOS::SwapBuffersEnd() {
@@ -200,6 +226,9 @@ bool GfxWindowBackendVisionOS::CanDisableVsync() {
 }
 
 bool GfxWindowBackendVisionOS::IsRunning() {
+    if (gFrameHooks.IsRunning != nullptr && !gFrameHooks.IsRunning()) {
+        mIsRunning = false;
+    }
     return mIsRunning;
 }
 
