@@ -28,6 +28,18 @@ struct VisionOSFrameHooks {
 
 void SetVisionOSFrameHooks(VisionOSFrameHooks hooks);
 
+// Where the gaze and pinch ray meets the room screen, in game texture pixels. The system gives a
+// ray only while a pinch is held, so there is no position to report before the press.
+struct VisionOSPointer {
+    float X;
+    float Y;
+    bool Valid;
+    bool Pressed;
+};
+
+void SetVisionOSPointer(VisionOSPointer pointer);
+VisionOSPointer GetVisionOSPointer();
+
 } // namespace Fast
 
 #ifdef __VISIONOS__
