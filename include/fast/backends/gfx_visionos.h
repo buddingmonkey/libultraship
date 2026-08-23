@@ -18,8 +18,15 @@ void SetVisionOSCompositor(void* device, void* commandQueue, uint32_t width, uin
 VisionOSCompositor GetVisionOSCompositor();
 void* GetVisionOSGameTexture();
 
-// Proves that Fast3D owns the game texture before the game itself starts. Step 4 removes it.
-void RenderVisionOSTestPattern(uint64_t frameIndex);
+// The shell owns the Compositor Services frame. It opens one when the backend asks, and closes it
+// after Fast3D has committed, so the screen samples the frame that was just drawn.
+struct VisionOSFrameHooks {
+    bool (*OpenFrame)();
+    void (*CloseFrame)();
+    bool (*IsRunning)();
+};
+
+void SetVisionOSFrameHooks(VisionOSFrameHooks hooks);
 
 } // namespace Fast
 
@@ -30,10 +37,13 @@ void RenderVisionOSTestPattern(uint64_t frameIndex);
 
 namespace Fast {
 
+class GfxRenderingAPIMetal;
+
 // visionOS has no window. The compositor decides the eye targets, so this backend reports one
 // fixed size, owns no drawable, and leaves every window and pointer operation harmless.
 class GfxWindowBackendVisionOS final : public GfxWindowBackend {
   public:
+    explicit GfxWindowBackendVisionOS(GfxRenderingAPIMetal* renderingApi);
     void Init(const char* gameName, const char* apiName, bool startFullScreen, uint32_t width, uint32_t height,
               int32_t posX, int32_t posY) override;
     void Close() override;
@@ -56,6 +66,7 @@ class GfxWindowBackendVisionOS final : public GfxWindowBackend {
     Ship::WindowRect GetPrimaryMonitorRect() override;
     void HandleEvents() override;
     bool IsFrameReady() override;
+    uint32_t BeginRenderFrame() override;
     void SwapBuffersBegin() override;
     void SwapBuffersEnd() override;
     double GetTime() override;
@@ -69,9 +80,13 @@ class GfxWindowBackendVisionOS final : public GfxWindowBackend {
     bool IsFullscreen() override;
 
   private:
+    bool OpenFrame();
+
+    GfxRenderingAPIMetal* mRenderingApi = nullptr;
     void (*mOnAllKeysUp)() = nullptr;
     uint32_t mWidth = 0;
     uint32_t mHeight = 0;
+    bool mFrameOpen = false;
 };
 
 } // namespace Fast

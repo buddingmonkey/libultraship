@@ -1,5 +1,7 @@
 #include "fast/Fast3dGui.h"
 
+#include <chrono>
+
 #include "fast/Fast3dWindow.h"
 #include "ship/Context.h"
 #include "ship/config/ConsoleVariable.h"
@@ -85,6 +87,22 @@ void Fast3dGui::HandleWindowEvents(Fast::WindowEvent event) {
     }
 }
 
+#ifdef __VISIONOS__
+// There is no platform backend to give ImGui a frame time, and ImGui needs one above zero.
+static float VisionOSDeltaTime() {
+    static std::chrono::steady_clock::time_point sLast{};
+    const auto now = std::chrono::steady_clock::now();
+    const float fallback = 1.0f / 90.0f;
+    if (sLast.time_since_epoch().count() == 0) {
+        sLast = now;
+        return fallback;
+    }
+    const float delta = std::chrono::duration<float>(now - sLast).count();
+    sLast = now;
+    return delta > 0.0f ? delta : fallback;
+}
+#endif
+
 void Fast3dGui::ImGuiWMInit() {
     switch (mImpl.Backend) {
         case WindowBackend::FAST3D_SDL_OPENGL:
@@ -161,6 +179,13 @@ void Fast3dGui::ImGuiBackendInit() {
             break;
         }
 #endif
+#ifdef __VISIONOS__
+        case WindowBackend::FAST3D_VISIONOS_METAL: {
+            GfxRenderingAPIMetal* api = (GfxRenderingAPIMetal*)mInterpreter.lock()->GetCurrentRenderingAPI();
+            api->MetalInitImGui();
+            break;
+        }
+#endif
 
 #ifdef ENABLE_DX11
         case WindowBackend::FAST3D_DXGI_DX11:
@@ -182,6 +207,9 @@ void Fast3dGui::ImGuiBackendShutdown() {
 #endif
 #if __APPLE__
         case WindowBackend::FAST3D_SDL_METAL:
+#ifdef __VISIONOS__
+        case WindowBackend::FAST3D_VISIONOS_METAL:
+#endif
             ImGui_ImplMetal_Shutdown();
             break;
 #endif
@@ -210,7 +238,11 @@ void Fast3dGui::ImGuiBackendNewFrame() {
 #endif
 
 #ifdef __APPLE__
-        case WindowBackend::FAST3D_SDL_METAL: {
+        case WindowBackend::FAST3D_SDL_METAL:
+#ifdef __VISIONOS__
+        case WindowBackend::FAST3D_VISIONOS_METAL:
+#endif
+        {
             GfxRenderingAPIMetal* api = (GfxRenderingAPIMetal*)mInterpreter.lock()->GetCurrentRenderingAPI();
             api->NewFrame();
             break;
@@ -264,6 +296,26 @@ void Fast3dGui::ImGuiWMNewFrame() {
             }
             break;
         }
+#ifdef __VISIONOS__
+        case WindowBackend::FAST3D_VISIONOS_METAL: {
+            // No SDL window means no platform backend, so nothing else fills these in. The size
+            // must equal the game texture, or RenderDrawData drops every ImGui frame.
+            auto interpreter = mInterpreter.lock();
+            uint32_t width = mImpl.VisionOS.Width;
+            uint32_t height = mImpl.VisionOS.Height;
+            if (interpreter != nullptr) {
+                int32_t posX = 0;
+                int32_t posY = 0;
+                interpreter->GetDimensions(&width, &height, &posX, &posY);
+            }
+            if (width > 0 && height > 0) {
+                ImGui::GetIO().DisplaySize = ImVec2((float)width, (float)height);
+            }
+            ImGui::GetIO().DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+            ImGui::GetIO().DeltaTime = VisionOSDeltaTime();
+            break;
+        }
+#endif
 #ifdef ENABLE_DX11
         case WindowBackend::FAST3D_DXGI_DX11:
             ImGui_ImplWin32_NewFrame();
@@ -293,7 +345,11 @@ void Fast3dGui::ImGuiRenderDrawData(ImDrawData* data) {
 #endif
 
 #ifdef __APPLE__
-        case WindowBackend::FAST3D_SDL_METAL: {
+        case WindowBackend::FAST3D_SDL_METAL:
+#ifdef __VISIONOS__
+        case WindowBackend::FAST3D_VISIONOS_METAL:
+#endif
+        {
             GfxRenderingAPIMetal* api = (GfxRenderingAPIMetal*)mInterpreter.lock()->GetCurrentRenderingAPI();
             api->RenderDrawData(data);
             break;
