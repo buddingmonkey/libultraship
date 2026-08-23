@@ -290,6 +290,14 @@ void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb
         return;
     }
 
+    // ImGui adds the window and the dock space as items too, and it adds them after their content.
+    // A full-size item would paint over every button in the mask, so leave those out. What is left
+    // keeps its submission order, which puts an inner item over the one that contains it.
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    if (bb.GetWidth() >= display.x * 0.9f && bb.GetHeight() >= display.y * 0.9f) {
+        return;
+    }
+
     Fast::VisionOSTrackingRect rect{};
     rect.MinX = bb.Min.x;
     rect.MinY = bb.Min.y;
