@@ -7,6 +7,7 @@
 #include <spdlog/spdlog.h>
 
 #include <cmath>
+#include <mutex>
 
 #include "fast/Fast3dGui.h"
 #include "fast/backends/gfx_metal.h"
@@ -18,10 +19,22 @@ namespace {
 VisionOSCompositor gCompositor = { nullptr, nullptr, 0, 0 };
 MTL::Texture* gGameTexture = nullptr;
 VisionOSFrameHooks gFrameHooks = { nullptr, nullptr, nullptr };
+VisionOSPointer gPointer{};
+std::mutex gPointerMutex;
 } // namespace
 
 void SetVisionOSFrameHooks(VisionOSFrameHooks hooks) {
     gFrameHooks = hooks;
+}
+
+void SetVisionOSPointer(VisionOSPointer pointer) {
+    std::lock_guard<std::mutex> lock(gPointerMutex);
+    gPointer = pointer;
+}
+
+VisionOSPointer GetVisionOSPointer() {
+    std::lock_guard<std::mutex> lock(gPointerMutex);
+    return gPointer;
 }
 
 void SetVisionOSCompositor(void* device, void* commandQueue, uint32_t width, uint32_t height) {

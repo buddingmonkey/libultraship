@@ -6,6 +6,7 @@
 #include "ship/Context.h"
 #include "ship/config/ConsoleVariable.h"
 #include "fast/backends/gfx_metal.h"
+#include "fast/backends/gfx_visionos.h"
 #include "fast/interpreter.h"
 #include "fast/backends/gfx_rendering_api.h"
 #include "fast/resource/type/Texture.h"
@@ -313,6 +314,12 @@ void Fast3dGui::ImGuiWMNewFrame() {
             }
             ImGui::GetIO().DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
             ImGui::GetIO().DeltaTime = VisionOSDeltaTime();
+
+            const VisionOSPointer pointer = GetVisionOSPointer();
+            if (pointer.Valid) {
+                ImGui::GetIO().AddMousePosEvent(pointer.X, pointer.Y);
+            }
+            ImGui::GetIO().AddMouseButtonEvent(0, pointer.Valid && pointer.Pressed);
             break;
         }
 #endif
