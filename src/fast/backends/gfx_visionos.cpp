@@ -8,6 +8,10 @@
 
 #include <cmath>
 #include <mutex>
+#include <vector>
+
+#include <imgui.h>
+#include <imgui_internal.h>
 
 #include "fast/Fast3dGui.h"
 #include "fast/backends/gfx_metal.h"
@@ -21,7 +25,24 @@ MTL::Texture* gGameTexture = nullptr;
 VisionOSFrameHooks gFrameHooks = { nullptr, nullptr, nullptr };
 VisionOSPointer gPointer{};
 std::mutex gPointerMutex;
+std::vector<VisionOSTrackingRect> gTrackingRects;
 } // namespace
+
+void BeginVisionOSTrackingRects() {
+    gTrackingRects.clear();
+}
+
+void AddVisionOSTrackingRect(VisionOSTrackingRect rect) {
+    gTrackingRects.push_back(rect);
+}
+
+size_t GetVisionOSTrackingRectCount() {
+    return gTrackingRects.size();
+}
+
+VisionOSTrackingRect GetVisionOSTrackingRect(size_t index) {
+    return gTrackingRects[index];
+}
 
 void SetVisionOSFrameHooks(VisionOSFrameHooks hooks) {
     gFrameHooks = hooks;
@@ -98,6 +119,9 @@ void GfxWindowBackendVisionOS::Init(const char* gameName, const char* apiName, b
     windowImpl.VisionOS.Width = mWidth;
     windowImpl.VisionOS.Height = mHeight;
     std::dynamic_pointer_cast<Fast3dGui>(Ship::Context::GetRawInstance()->GetWindow()->GetGui())->Init(windowImpl);
+    if (ImGui::GetCurrentContext() != nullptr) {
+        ImGui::GetCurrentContext()->TestEngineHookItems = true;
+    }
 }
 
 bool GfxWindowBackendVisionOS::OpenFrame() {
@@ -253,4 +277,36 @@ bool GfxWindowBackendVisionOS::IsFullscreen() {
     return true;
 }
 } // namespace Fast
+
+// ImGui calls these from ItemAdd when the test engine hooks are on. That is the only place which
+// reports every item rectangle, and a tracking area needs one rectangle per item.
+void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb,
+                                 const ImGuiLastItemData* itemData) {
+    // An item with no ID cannot be interacted with; plain text is the common case.
+    if (id == 0 || bb.GetWidth() <= 0.0f || bb.GetHeight() <= 0.0f) {
+        return;
+    }
+    if (itemData != nullptr && (itemData->ItemFlags & ImGuiItemFlags_Disabled) != 0) {
+        return;
+    }
+
+    Fast::VisionOSTrackingRect rect{};
+    rect.MinX = bb.Min.x;
+    rect.MinY = bb.Min.y;
+    rect.MaxX = bb.Max.x;
+    rect.MaxY = bb.Max.y;
+    rect.Identifier = id;
+    Fast::AddVisionOSTrackingRect(rect);
+}
+
+void ImGuiTestEngineHook_ItemInfo(ImGuiContext* ctx, ImGuiID id, const char* label, ImGuiItemStatusFlags flags) {
+}
+
+void ImGuiTestEngineHook_Log(ImGuiContext* ctx, const char* fmt, ...) {
+}
+
+const char* ImGuiTestEngine_FindItemDebugLabel(ImGuiContext* ctx, ImGuiID id) {
+    return nullptr;
+}
+
 #endif
