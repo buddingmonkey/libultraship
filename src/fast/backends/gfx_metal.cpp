@@ -123,6 +123,12 @@ bool GfxRenderingAPIMetal::MetalInitExternal(MTL::Device* device, MTL::CommandQu
     return mDevice != nullptr && mCommandQueue != nullptr && mExternalColorTexture != nullptr;
 }
 
+void GfxRenderingAPIMetal::MetalSetExternalTarget(MTL::Texture* target) {
+    if (target != nullptr) {
+        mExternalColorTexture = target;
+    }
+}
+
 bool GfxRenderingAPIMetal::MetalInitImGui() {
     return ImGui_ImplMetal_Init(mDevice);
 }

@@ -17,7 +17,11 @@ struct VisionOSCompositor {
 
 void SetVisionOSCompositor(void* device, void* commandQueue, uint32_t width, uint32_t height);
 VisionOSCompositor GetVisionOSCompositor();
-void* GetVisionOSGameTexture();
+// One per eye. Both are drawn from the same compositor frame, so they cannot be the same texture.
+void* GetVisionOSGameTexture(int eye);
+
+// How many views the drawable has this frame. One image for both eyes below two.
+void SetVisionOSViewCount(uint32_t views);
 
 // The shell owns the Compositor Services frame. It opens one when the backend asks, and closes it
 // after Fast3D has committed, so the screen samples the frame that was just drawn.
@@ -138,6 +142,7 @@ class GfxWindowBackendVisionOS final : public GfxWindowBackend {
     void (*mOnAllKeysUp)() = nullptr;
     uint32_t mWidth = 0;
     uint32_t mHeight = 0;
+    uint32_t mViewsThisFrame = 1;
     bool mFrameOpen = false;
 };
 
