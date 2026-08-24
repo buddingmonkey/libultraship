@@ -46,9 +46,6 @@ void PushVisionOSPointer(VisionOSPointer pointer);
 bool PeekVisionOSPointer(VisionOSPointer* pointer);
 void PopVisionOSPointer();
 
-void SetVisionOSItemLabel(uint64_t identifier, const char* label);
-const char* GetVisionOSItemLabel(uint64_t identifier);
-
 // One rectangle of the tracking mask, in game texture pixels. An identifier of zero is a window,
 // which takes no tracking area and only hides what is behind it.
 struct VisionOSTrackingRect {

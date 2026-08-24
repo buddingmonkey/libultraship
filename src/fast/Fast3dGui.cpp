@@ -348,35 +348,13 @@ void Fast3dGui::ImGuiWMNewFrame() {
                         sY = wantY;
                         ImGui::GetIO().AddMousePosEvent(sX, sY);
                     } else {
-                        const bool wanted = wantValid && next.Pressed;
-                        if (wanted != sPressed) {
-                            sPressed = wanted;
-                            ImGuiContext* context = ImGui::GetCurrentContext();
-                            SPDLOG_INFO("visionOS: pointer {} at {:.0f},{:.0f} area {} '{}'; hovered {} '{}'",
-                                        sPressed ? "down" : "up", sX, sY, next.Identifier,
-                                        GetVisionOSItemLabel(next.Identifier), context->HoveredId,
-                                        GetVisionOSItemLabel(context->HoveredId));
-                        }
+                        sPressed = wantValid && next.Pressed;
                         PopVisionOSPointer();
                     }
                 }
                 ImGui::GetIO().AddMouseButtonEvent(0, sPressed);
             }
 
-            {
-                static size_t sReported = SIZE_MAX;
-                const size_t collected = GetVisionOSTrackingRectCount();
-                if (collected != sReported) {
-                    sReported = collected;
-                    SPDLOG_INFO("visionOS: {} ImGui items offered as tracking areas", collected);
-                    for (size_t i = 0; i < collected; ++i) {
-                        const VisionOSTrackingRect rect = GetVisionOSTrackingRect(i);
-                        SPDLOG_INFO("visionOS:   [{}] {:.0f},{:.0f} to {:.0f},{:.0f} id {} '{}'", i, rect.MinX,
-                                    rect.MinY, rect.MaxX, rect.MaxY, rect.Identifier,
-                                    rect.Identifier != 0 ? GetVisionOSItemLabel(rect.Identifier) : "window");
-                    }
-                }
-            }
             BeginVisionOSTrackingRects();
 
             break;

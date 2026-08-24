@@ -10,8 +10,6 @@
 #include <cmath>
 #include <deque>
 #include <mutex>
-#include <string>
-#include <unordered_map>
 #include <vector>
 
 #include <imgui.h>
@@ -29,8 +27,6 @@ MTL::Texture* gGameTexture = nullptr;
 VisionOSFrameHooks gFrameHooks = { nullptr, nullptr, nullptr };
 std::deque<VisionOSPointer> gPointerQueue;
 std::mutex gPointerMutex;
-std::unordered_map<uint64_t, std::string> gItemLabels;
-
 // An item as ImGui reported it, with what the mask needs to put it in order later.
 struct PendingTrackingRect {
     VisionOSTrackingRect Rect;
@@ -115,17 +111,6 @@ bool PeekVisionOSPointer(VisionOSPointer* pointer) {
     }
     *pointer = gPointerQueue.front();
     return true;
-}
-
-void SetVisionOSItemLabel(uint64_t identifier, const char* label) {
-    if (label != nullptr && gItemLabels.size() < 512) {
-        gItemLabels[identifier] = label;
-    }
-}
-
-const char* GetVisionOSItemLabel(uint64_t identifier) {
-    const auto found = gItemLabels.find(identifier);
-    return found != gItemLabels.end() ? found->second.c_str() : "?";
 }
 
 void PopVisionOSPointer() {
@@ -423,7 +408,6 @@ void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb
 }
 
 void ImGuiTestEngineHook_ItemInfo(ImGuiContext* ctx, ImGuiID id, const char* label, ImGuiItemStatusFlags flags) {
-    Fast::SetVisionOSItemLabel(id, label);
 }
 
 void ImGuiTestEngineHook_Log(ImGuiContext* ctx, const char* fmt, ...) {
