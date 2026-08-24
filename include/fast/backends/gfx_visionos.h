@@ -25,6 +25,9 @@ struct VisionOSFrameHooks {
     bool (*OpenFrame)();
     void (*CloseFrame)();
     bool (*IsRunning)();
+    // The layer state is the only lifecycle signal here, and it must be read even while the app
+    // is off screen, when no frame is opened at all.
+    void (*PollState)();
 };
 
 void SetVisionOSFrameHooks(VisionOSFrameHooks hooks);

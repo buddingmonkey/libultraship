@@ -24,7 +24,7 @@ namespace Fast {
 namespace {
 VisionOSCompositor gCompositor = { nullptr, nullptr, 0, 0 };
 MTL::Texture* gGameTexture = nullptr;
-VisionOSFrameHooks gFrameHooks = { nullptr, nullptr, nullptr };
+VisionOSFrameHooks gFrameHooks = { nullptr, nullptr, nullptr, nullptr };
 std::deque<VisionOSPointer> gPointerQueue;
 std::mutex gPointerMutex;
 // An item as ImGui reported it, with what the mask needs to put it in order later.
@@ -276,6 +276,12 @@ Ship::WindowRect GfxWindowBackendVisionOS::GetPrimaryMonitorRect() {
 }
 
 void GfxWindowBackendVisionOS::HandleEvents() {
+    // The main loop calls this every pass, including the passes it spends off screen, so this is
+    // where the shell can report a pause, a resume or an invalidated layer.
+    if (gFrameHooks.PollState != nullptr) {
+        gFrameHooks.PollState();
+    }
+
     // SDL has no video here, but the control deck still reads controller add and remove from
     // the same queue, and only a pump puts them there.
     SDL_PumpEvents();
