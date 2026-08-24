@@ -373,7 +373,7 @@ void Fast3dGui::ImGuiWMNewFrame() {
                         const VisionOSTrackingRect rect = GetVisionOSTrackingRect(i);
                         SPDLOG_INFO("visionOS:   [{}] {:.0f},{:.0f} to {:.0f},{:.0f} id {} '{}'", i, rect.MinX,
                                     rect.MinY, rect.MaxX, rect.MaxY, rect.Identifier,
-                                    GetVisionOSItemLabel(rect.Identifier));
+                                    rect.Identifier != 0 ? GetVisionOSItemLabel(rect.Identifier) : "window");
                     }
                 }
             }
