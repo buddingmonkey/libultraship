@@ -7,7 +7,10 @@
 #include <spdlog/spdlog.h>
 
 #include <cmath>
+#include <deque>
 #include <mutex>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <imgui.h>
@@ -23,8 +26,9 @@ namespace {
 VisionOSCompositor gCompositor = { nullptr, nullptr, 0, 0 };
 MTL::Texture* gGameTexture = nullptr;
 VisionOSFrameHooks gFrameHooks = { nullptr, nullptr, nullptr };
-VisionOSPointer gPointer{};
+std::deque<VisionOSPointer> gPointerQueue;
 std::mutex gPointerMutex;
+std::unordered_map<uint64_t, std::string> gItemLabels;
 std::vector<VisionOSTrackingRect> gTrackingRects;
 } // namespace
 
@@ -48,14 +52,42 @@ void SetVisionOSFrameHooks(VisionOSFrameHooks hooks) {
     gFrameHooks = hooks;
 }
 
-void SetVisionOSPointer(VisionOSPointer pointer) {
+void PushVisionOSPointer(VisionOSPointer pointer) {
     std::lock_guard<std::mutex> lock(gPointerMutex);
-    gPointer = pointer;
+    // Only a change of the button needs its own step. Anything else is the same press moving, so
+    // keep the newest place and hold the queue to the two steps a pinch really has.
+    if (!gPointerQueue.empty() && gPointerQueue.back().Pressed == pointer.Pressed) {
+        gPointerQueue.back() = pointer;
+        return;
+    }
+    gPointerQueue.push_back(pointer);
 }
 
-VisionOSPointer GetVisionOSPointer() {
+bool PeekVisionOSPointer(VisionOSPointer* pointer) {
     std::lock_guard<std::mutex> lock(gPointerMutex);
-    return gPointer;
+    if (gPointerQueue.empty()) {
+        return false;
+    }
+    *pointer = gPointerQueue.front();
+    return true;
+}
+
+void SetVisionOSItemLabel(uint64_t identifier, const char* label) {
+    if (label != nullptr && gItemLabels.size() < 512) {
+        gItemLabels[identifier] = label;
+    }
+}
+
+const char* GetVisionOSItemLabel(uint64_t identifier) {
+    const auto found = gItemLabels.find(identifier);
+    return found != gItemLabels.end() ? found->second.c_str() : "?";
+}
+
+void PopVisionOSPointer() {
+    std::lock_guard<std::mutex> lock(gPointerMutex);
+    if (!gPointerQueue.empty()) {
+        gPointerQueue.pop_front();
+    }
 }
 
 void SetVisionOSCompositor(void* device, void* commandQueue, uint32_t width, uint32_t height) {
@@ -316,16 +348,26 @@ void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb
         return;
     }
 
+    // ItemAdd calls this hook before it tests the clip rectangle, so a row scrolled out of a list
+    // still arrives, at its full size. Those rows come after the rows in view, and the mask takes
+    // the last one written, so the bottom row of a long list covered every row above it.
+    ImRect visible = bb;
+    visible.ClipWith(window->ClipRect);
+    if (visible.GetWidth() <= 0.0f || visible.GetHeight() <= 0.0f) {
+        return;
+    }
+
     Fast::VisionOSTrackingRect rect{};
-    rect.MinX = bb.Min.x;
-    rect.MinY = bb.Min.y;
-    rect.MaxX = bb.Max.x;
-    rect.MaxY = bb.Max.y;
+    rect.MinX = visible.Min.x;
+    rect.MinY = visible.Min.y;
+    rect.MaxX = visible.Max.x;
+    rect.MaxY = visible.Max.y;
     rect.Identifier = id;
     Fast::AddVisionOSTrackingRect(rect);
 }
 
 void ImGuiTestEngineHook_ItemInfo(ImGuiContext* ctx, ImGuiID id, const char* label, ImGuiItemStatusFlags flags) {
+    Fast::SetVisionOSItemLabel(id, label);
 }
 
 void ImGuiTestEngineHook_Log(ImGuiContext* ctx, const char* fmt, ...) {

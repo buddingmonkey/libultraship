@@ -34,12 +34,20 @@ void SetVisionOSFrameHooks(VisionOSFrameHooks hooks);
 struct VisionOSPointer {
     float X;
     float Y;
+    uint64_t Identifier; ///< The tracking area the system aimed at, which is the ImGui item id.
     bool Valid;
     bool Pressed;
 };
 
-void SetVisionOSPointer(VisionOSPointer pointer);
-VisionOSPointer GetVisionOSPointer();
+// The system reports a ray only at the moment of a pinch, so a press and a new position arrive
+// together. ImGui must take the position first, or the press lands on whatever was under the last
+// one. Keep the samples in order and let the reader take one step per frame.
+void PushVisionOSPointer(VisionOSPointer pointer);
+bool PeekVisionOSPointer(VisionOSPointer* pointer);
+void PopVisionOSPointer();
+
+void SetVisionOSItemLabel(uint64_t identifier, const char* label);
+const char* GetVisionOSItemLabel(uint64_t identifier);
 
 // One ImGui item that the system can highlight on gaze, in game texture pixels.
 struct VisionOSTrackingRect {
