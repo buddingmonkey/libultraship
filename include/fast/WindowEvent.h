@@ -27,6 +27,10 @@ typedef union {
     struct {
         void* Input; ///< GX2 input structure pointer.
     } Gx2;
+    struct {
+        int Scancode; ///< SDL_Scancode, which is also the HID usage the Game Controller framework reports.
+        bool Pressed;
+    } VisionOS;
 } WindowEvent;
 
 } // namespace Fast
