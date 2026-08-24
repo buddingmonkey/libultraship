@@ -318,6 +318,50 @@ void Fast3dGui::ImGuiWMNewFrame() {
             ImGui::GetIO().DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
             ImGui::GetIO().DeltaTime = VisionOSDeltaTime();
 
+            // Take the pointer before the list is cleared, so the tracking area the system aimed at
+            // can still be looked up among this frame's items.
+            {
+                static float sX = -FLT_MAX;
+                static float sY = -FLT_MAX;
+                static bool sPressed = false;
+                VisionOSPointer next{};
+                if (PeekVisionOSPointer(&next)) {
+                    float wantX = next.X;
+                    float wantY = next.Y;
+                    bool wantValid = next.Valid;
+                    // The system already decided which item it aimed at, and it drew the highlight
+                    // for that item. Take its answer, so the press cannot land somewhere else.
+                    if (next.Identifier != 0) {
+                        for (size_t i = 0; i < GetVisionOSTrackingRectCount(); ++i) {
+                            const VisionOSTrackingRect rect = GetVisionOSTrackingRect(i);
+                            if (rect.Identifier == next.Identifier) {
+                                wantX = (rect.MinX + rect.MaxX) * 0.5f;
+                                wantY = (rect.MinY + rect.MaxY) * 0.5f;
+                                wantValid = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (wantValid && (wantX != sX || wantY != sY)) {
+                        sX = wantX;
+                        sY = wantY;
+                        ImGui::GetIO().AddMousePosEvent(sX, sY);
+                    } else {
+                        const bool wanted = wantValid && next.Pressed;
+                        if (wanted != sPressed) {
+                            sPressed = wanted;
+                            ImGuiContext* context = ImGui::GetCurrentContext();
+                            SPDLOG_INFO("visionOS: pointer {} at {:.0f},{:.0f} area {}; hovered {} '{}'",
+                                        sPressed ? "down" : "up", sX, sY, next.Identifier, context->HoveredId,
+                                        GetVisionOSItemLabel(context->HoveredId));
+                        }
+                        PopVisionOSPointer();
+                    }
+                }
+                ImGui::GetIO().AddMouseButtonEvent(0, sPressed);
+            }
+
             {
                 static size_t sReported = SIZE_MAX;
                 const size_t collected = GetVisionOSTrackingRectCount();
@@ -328,21 +372,6 @@ void Fast3dGui::ImGuiWMNewFrame() {
             }
             BeginVisionOSTrackingRects();
 
-            const VisionOSPointer pointer = GetVisionOSPointer();
-            if (pointer.Valid) {
-                ImGui::GetIO().AddMousePosEvent(pointer.X, pointer.Y);
-            }
-            const bool pressed = pointer.Valid && pointer.Pressed;
-            ImGui::GetIO().AddMouseButtonEvent(0, pressed);
-
-            static bool sWasPressed = false;
-            if (pressed != sWasPressed) {
-                sWasPressed = pressed;
-                ImGuiContext* context = ImGui::GetCurrentContext();
-                SPDLOG_INFO("visionOS: pointer {} at {:.0f},{:.0f}; imgui mouse {:.0f},{:.0f} hovered {} active {}",
-                            pressed ? "down" : "up", pointer.X, pointer.Y, ImGui::GetIO().MousePos.x,
-                            ImGui::GetIO().MousePos.y, context->HoveredId, context->ActiveId);
-            }
             break;
         }
 #endif
