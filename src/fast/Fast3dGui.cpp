@@ -18,6 +18,7 @@
 
 #ifdef __APPLE__
 #include <SDL_hints.h>
+#include <SDL_keyboard.h>
 #include <SDL_video.h>
 #include <imgui_impl_metal.h>
 #include <imgui_impl_sdl2.h>
@@ -41,6 +42,12 @@
 
 // NOLINTNEXTLINE
 IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+#endif
+
+#ifdef __VISIONOS__
+// imgui's SDL2 platform backend is never started here, because there is no SDL window, but its key
+// table is public and it stays right as imgui changes.
+ImGuiKey ImGui_ImplSDL2_KeyEventToImGuiKey(SDL_Keycode keycode, SDL_Scancode scancode);
 #endif
 
 namespace Fast {
@@ -71,6 +78,87 @@ bool Fast3dGui::SupportsViewports() {
     return true;
 }
 
+#ifdef __VISIONOS__
+// SDL fills its keymap inside SDL_VideoInit, which this build never runs, so name the key the way
+// SDL's own default table does: ASCII where the key has one, and the masked scancode otherwise.
+static SDL_Keycode VisionOSKeycode(SDL_Scancode scancode) {
+    if (scancode >= SDL_SCANCODE_A && scancode <= SDL_SCANCODE_Z) {
+        return SDLK_a + (scancode - SDL_SCANCODE_A);
+    }
+    if (scancode >= SDL_SCANCODE_1 && scancode <= SDL_SCANCODE_9) {
+        return SDLK_1 + (scancode - SDL_SCANCODE_1);
+    }
+    switch (scancode) {
+        case SDL_SCANCODE_0:
+            return SDLK_0;
+        case SDL_SCANCODE_RETURN:
+            return SDLK_RETURN;
+        case SDL_SCANCODE_ESCAPE:
+            return SDLK_ESCAPE;
+        case SDL_SCANCODE_BACKSPACE:
+            return SDLK_BACKSPACE;
+        case SDL_SCANCODE_TAB:
+            return SDLK_TAB;
+        case SDL_SCANCODE_SPACE:
+            return SDLK_SPACE;
+        default:
+            return SDL_SCANCODE_TO_KEYCODE(scancode);
+    }
+}
+
+// A US layout, which is what the keycode above describes. Anything else needs the layout the
+// system holds, and the Game Controller framework does not report one.
+static char VisionOSCharacter(SDL_Keycode keycode, bool shift) {
+    static const char plain[] = "1234567890-=[]\\;',./`";
+    static const char shifted[] = "!@#$%^&*()_+{}|:\"<>?~";
+    if (keycode >= SDLK_a && keycode <= SDLK_z) {
+        return shift ? static_cast<char>(keycode - SDLK_a + 'A') : static_cast<char>(keycode);
+    }
+    if (keycode == SDLK_SPACE) {
+        return ' ';
+    }
+    for (size_t i = 0; plain[i] != '\0'; ++i) {
+        if (plain[i] == keycode) {
+            return shift ? shifted[i] : plain[i];
+        }
+    }
+    return '\0';
+}
+
+static void VisionOSHandleKey(int rawScancode, bool pressed) {
+    if (rawScancode <= 0 || rawScancode >= SDL_NUM_SCANCODES || ImGui::GetCurrentContext() == nullptr) {
+        return;
+    }
+    const SDL_Scancode scancode = static_cast<SDL_Scancode>(rawScancode);
+    const SDL_Keycode keycode = VisionOSKeycode(scancode);
+    const ImGuiKey key = ::ImGui_ImplSDL2_KeyEventToImGuiKey(keycode, scancode);
+    if (key == ImGuiKey_None) {
+        return;
+    }
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddKeyEvent(key, pressed);
+
+    // imgui only reads a queued key back at the next frame, so shift is counted here instead. A
+    // shift and the letter after it can arrive in the same batch.
+    static bool sLeftShift = false;
+    static bool sRightShift = false;
+    if (scancode == SDL_SCANCODE_LSHIFT) {
+        sLeftShift = pressed;
+    } else if (scancode == SDL_SCANCODE_RSHIFT) {
+        sRightShift = pressed;
+    }
+
+    if (!pressed || !io.WantTextInput) {
+        return;
+    }
+    const char character = VisionOSCharacter(keycode, sLeftShift || sRightShift);
+    if (character != '\0') {
+        io.AddInputCharacter(static_cast<unsigned int>(character));
+    }
+}
+#endif
+
 void Fast3dGui::HandleWindowEvents(Fast::WindowEvent event) {
     switch (mImpl.Backend) {
         case WindowBackend::FAST3D_SDL_OPENGL:
@@ -84,6 +172,11 @@ void Fast3dGui::HandleWindowEvents(Fast::WindowEvent event) {
         case WindowBackend::FAST3D_DXGI_DX11:
             ImGui_ImplWin32_WndProcHandler(static_cast<HWND>(event.Win32.Handle), event.Win32.Msg, event.Win32.Param1,
                                            event.Win32.Param2);
+            break;
+#endif
+#ifdef __VISIONOS__
+        case WindowBackend::FAST3D_VISIONOS_METAL:
+            VisionOSHandleKey(event.VisionOS.Scancode, event.VisionOS.Pressed);
             break;
 #endif
         default:

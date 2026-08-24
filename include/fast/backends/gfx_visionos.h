@@ -49,6 +49,11 @@ void PushVisionOSPointer(VisionOSPointer pointer);
 bool PeekVisionOSPointer(VisionOSPointer* pointer);
 void PopVisionOSPointer();
 
+// A hardware keyboard reaches visionOS through the Game Controller framework. SDL keeps its
+// keyboard in the video driver, and this build has no video, so SDL never sees one. The Game
+// Controller key code is the HID usage, which is what an SDL scancode is.
+void PushVisionOSKey(int scancode, bool pressed);
+
 // One rectangle of the tracking mask, in game texture pixels. An identifier of zero is a window,
 // which takes no tracking area and only hides what is behind it.
 struct VisionOSTrackingRect {

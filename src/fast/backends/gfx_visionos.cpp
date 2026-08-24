@@ -27,6 +27,12 @@ MTL::Texture* gGameTexture = nullptr;
 VisionOSFrameHooks gFrameHooks = { nullptr, nullptr, nullptr, nullptr };
 std::deque<VisionOSPointer> gPointerQueue;
 std::mutex gPointerMutex;
+struct PendingKey {
+    int Scancode;
+    bool Pressed;
+};
+std::deque<PendingKey> gKeyQueue;
+std::mutex gKeyMutex;
 // An item as ImGui reported it, with what the mask needs to put it in order later.
 struct PendingTrackingRect {
     VisionOSTrackingRect Rect;
@@ -102,6 +108,11 @@ void PushVisionOSPointer(VisionOSPointer pointer) {
         return;
     }
     gPointerQueue.push_back(pointer);
+}
+
+void PushVisionOSKey(int scancode, bool pressed) {
+    std::lock_guard<std::mutex> lock(gKeyMutex);
+    gKeyQueue.push_back({ scancode, pressed });
 }
 
 bool PeekVisionOSPointer(VisionOSPointer* pointer) {
@@ -280,6 +291,24 @@ void GfxWindowBackendVisionOS::HandleEvents() {
     // where the shell can report a pause, a resume or an invalidated layer.
     if (gFrameHooks.PollState != nullptr) {
         gFrameHooks.PollState();
+    }
+
+    // The Game Controller framework reports a key on a queue of its own, so take the whole batch
+    // here, on the thread that owns ImGui.
+    std::deque<PendingKey> keys;
+    {
+        std::lock_guard<std::mutex> lock(gKeyMutex);
+        keys.swap(gKeyQueue);
+    }
+    if (!keys.empty()) {
+        auto gui = std::dynamic_pointer_cast<Fast3dGui>(Ship::Context::GetRawInstance()->GetWindow()->GetGui());
+        if (gui != nullptr) {
+            for (const PendingKey& key : keys) {
+                WindowEvent event;
+                event.VisionOS = { key.Scancode, key.Pressed };
+                gui->HandleWindowEvents(event);
+            }
+        }
     }
 
     // SDL has no video here, but the control deck still reads controller add and remove from
