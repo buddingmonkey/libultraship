@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <deque>
+#include <limits>
 #include <mutex>
 #include <vector>
 
@@ -17,6 +18,7 @@
 
 #include "fast/Fast3dGui.h"
 #include "fast/backends/gfx_metal.h"
+#include "fast/backends/gfx_xr_view.h"
 #include "ship/Context.h"
 
 namespace Fast {
@@ -41,7 +43,97 @@ struct PendingTrackingRect {
 };
 std::vector<PendingTrackingRect> gPendingRects;
 std::vector<VisionOSTrackingRect> gTrackingRects;
+
+// The window in the room, in the units gfx_xr_view.h asks for. The model is the one the OpenXR
+// backend uses; only the window differs, because this one is a fixed quad and not an angular size
+// the player can resize. See xr-window-depth-model before changing the gain.
+constexpr float kWindowDepthMax = 700.0f;
+constexpr float kWindowDepthMin = 1.0f;
+constexpr float kWindowDepthMargin = 0.9f;
+constexpr float kWindowDepthRelease = 2.0f;
+constexpr float kDioramaDepth = 2.0f;
+constexpr float kRefreshRate = 90.0f;
+// The half-angle the window covers across, before the game has loaded a projection to ask for its
+// own. About 61 degrees, which is what Banjo-Kazooie asks for once it runs. ApplyXrProjection only
+// reports the tangents on a frame it already had a window for, so without a value to start from
+// the two would wait on each other forever.
+constexpr float kTanHalfWidthDefault = 0.59f;
+
+struct VisionOSEye {
+    float X;
+    float Y;
+    float Z;
+    bool Valid;
+};
+VisionOSEye gEyes[2] = {};
+float gScreenHalfWidth = 0.0f;
+float gScreenRange = 0.0f;
+float gTanHalfWidth = kTanHalfWidthDefault;
+float gTanHalfHeight = 0.0f;
+float gSceneNear = std::numeric_limits<float>::max();
+float gGlassDepth = kWindowDepthMax;
+bool gFlatProjection = false;
+int gViewIndex = 0;
+uint32_t gViewCount = 1;
+XrViewGeometry gViewGeometry = {};
+bool gViewGeometryValid = false;
+
+// In at once, so nothing is ever left standing in front of the window; out slowly, so one near
+// object in one frame does not throw the world back and hold it there.
+void MoveGlass() {
+    float target = gSceneNear * kWindowDepthMargin;
+    if (target > kWindowDepthMax) {
+        target = kWindowDepthMax;
+    } else if (target < kWindowDepthMin) {
+        target = kWindowDepthMin;
+    }
+    if (target < gGlassDepth) {
+        gGlassDepth = target;
+    } else {
+        gGlassDepth += (target - gGlassDepth) * (1.0f - expf(-1.0f / (kRefreshRate * kWindowDepthRelease)));
+    }
+    gSceneNear = std::numeric_limits<float>::max();
+}
 } // namespace
+
+void SetVisionOSScreen(float halfWidthMeters, float rangeMeters) {
+    gScreenHalfWidth = halfWidthMeters;
+    gScreenRange = rangeMeters;
+}
+
+void SetVisionOSEye(int view, float x, float y, float z) {
+    if (view < 0 || view >= 2) {
+        return;
+    }
+    gEyes[view] = { x, y, z, true };
+}
+
+bool GetXrViewGeometry(XrViewGeometry* geometry) {
+    if (!gViewGeometryValid || gFlatProjection) {
+        return false;
+    }
+    *geometry = gViewGeometry;
+    return true;
+}
+
+void SetXrViewTangents(float tanHalfWidth, float tanHalfHeight) {
+    gTanHalfWidth = tanHalfWidth;
+    gTanHalfHeight = tanHalfHeight;
+}
+
+void SetXrSceneNear(float units) {
+    if (units < gSceneNear) {
+        gSceneNear = units;
+    }
+}
+
+void SetXrFlatProjection(bool flat) {
+    gFlatProjection = flat;
+}
+
+int GetXrViewIndex() {
+    return gViewIndex;
+}
 
 void BeginVisionOSTrackingRects() {
     gPendingRects.clear();
@@ -209,7 +301,50 @@ uint32_t GfxWindowBackendVisionOS::BeginRenderFrame() {
     if (!mFrameOpen) {
         OpenFrame();
     }
-    return 1;
+    MoveGlass();
+    return gViewCount;
+}
+
+// The eye offset converts against the glass itself, so a point on the glass lands on the same spot
+// for both eyes. The gain then sets how deep the world reads: it compresses every disparity so the
+// farthest thing the game draws sits kDioramaDepth meters behind the window. It stays under one,
+// so the eyes cannot be made to diverge. Along the normal the plain scale stands, so the apex of
+// the frustum reaches the glass exactly when the nose does.
+void GfxWindowBackendVisionOS::BeginRenderView(uint32_t view) {
+    gViewIndex = static_cast<int>(view);
+    gViewGeometryValid = false;
+    if (view >= gViewCount || gScreenHalfWidth <= 0.0f || gScreenRange <= 0.0f || gTanHalfWidth <= 0.0f) {
+        return;
+    }
+
+    // One image for both eyes is drawn from between them, not from either one. The simulator hands
+    // out a single view, so there is not always a second eye to be between.
+    const bool mono = gViewCount < 2 && gEyes[0].Valid && gEyes[1].Valid;
+    if (!gEyes[view].Valid) {
+        return;
+    }
+    const float eyeX = mono ? 0.5f * (gEyes[0].X + gEyes[1].X) : gEyes[view].X;
+    const float eyeY = mono ? 0.5f * (gEyes[0].Y + gEyes[1].Y) : gEyes[view].Y;
+    const float eyeZ = mono ? 0.5f * (gEyes[0].Z + gEyes[1].Z) : gEyes[view].Z;
+
+    const float gain = kDioramaDepth / (gScreenRange + kDioramaDepth);
+    const float acrossGlass = gain * gGlassDepth * gTanHalfWidth / gScreenHalfWidth;
+    const float alongNormal = gGlassDepth / gScreenRange;
+
+    gViewGeometry.eyeOffset[0] = eyeX * acrossGlass;
+    gViewGeometry.eyeOffset[1] = eyeY * acrossGlass;
+    // The shell reports z towards the viewer, and the model wants how far the head has come off
+    // the range the window hangs at.
+    gViewGeometry.eyeOffset[2] = (eyeZ - gScreenRange) * alongNormal;
+    gViewGeometry.windowDistance = gGlassDepth;
+    gViewGeometryValid = true;
+
+    static int sReport = 0;
+    if (sReport++ % 120 == 0) {
+        SPDLOG_INFO("visionOS: view {} eye {:.3f} {:.3f} {:.3f} m tan {:.3f} glass {:.1f} offset {:.2f} {:.2f} {:.2f}",
+                    view, eyeX, eyeY, eyeZ, gTanHalfWidth, gGlassDepth, gViewGeometry.eyeOffset[0],
+                    gViewGeometry.eyeOffset[1], gViewGeometry.eyeOffset[2]);
+    }
 }
 
 void GfxWindowBackendVisionOS::Close() {

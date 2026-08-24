@@ -49,6 +49,14 @@ void PushVisionOSPointer(VisionOSPointer pointer);
 bool PeekVisionOSPointer(VisionOSPointer* pointer);
 void PopVisionOSPointer();
 
+// The room screen, in meters: half its width, and how far it hangs from the viewer. The window
+// camera model needs both to turn an eye offset in meters into the game units it works in.
+void SetVisionOSScreen(float halfWidthMeters, float rangeMeters);
+
+// Where an eye is, in meters, in the room screen's own axes: x right, y up, z towards the viewer.
+// The shell owns where the screen stands, so it does the world to screen part.
+void SetVisionOSEye(int view, float x, float y, float z);
+
 // A hardware keyboard reaches visionOS through the Game Controller framework. SDL keeps its
 // keyboard in the video driver, and this build has no video, so SDL never sees one. The Game
 // Controller key code is the HID usage, which is what an SDL scancode is.
@@ -110,6 +118,7 @@ class GfxWindowBackendVisionOS final : public GfxWindowBackend {
     void HandleEvents() override;
     bool IsFrameReady() override;
     uint32_t BeginRenderFrame() override;
+    void BeginRenderView(uint32_t view) override;
     void SwapBuffersBegin() override;
     void SwapBuffersEnd() override;
     double GetTime() override;
