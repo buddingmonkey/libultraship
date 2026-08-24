@@ -137,6 +137,12 @@ if (ENABLE_OPENXR)
     target_link_libraries(libultraship PRIVATE openxr_loader EGL)
 endif()
 
+# The window in the room, which is a camera model and not an API. Both headset backends fill the
+# same numbers through gfx_xr_view.h, so the interpreter must not ask which one is present.
+if (ENABLE_OPENXR OR CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+    target_compile_definitions(libultraship PUBLIC ENABLE_XR_WINDOW)
+endif()
+
 # An Android device gives up neither a screenshot nor a log of its own. These tools let the app
 # hand a frame out and take a controller state in. They are for bring-up, never for a release.
 if (ENABLE_DEBUG_TOOLS AND CMAKE_SYSTEM_NAME STREQUAL "Android")

@@ -1673,7 +1673,7 @@ void Interpreter::GfxSpMatrix(uint8_t parameters, const int32_t* addr) {
 }
 
 void Interpreter::ApplyXrProjection() {
-#ifdef ENABLE_OPENXR
+#ifdef ENABLE_XR_WINDOW
     mXrProjection = false;
 
     XrViewGeometry view;
@@ -1745,7 +1745,7 @@ void Interpreter::ApplyXrProjection() {
 #endif
 }
 
-#ifdef ENABLE_OPENXR
+#ifdef ENABLE_XR_WINDOW
 float Interpreter::XrVisibleDepth(struct LoadedVertex* const vertices[3]) const {
     float depth;
 
@@ -2096,7 +2096,7 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
         }
     }
 
-#ifdef ENABLE_OPENXR
+#ifdef ENABLE_XR_WINDOW
     // A rectangle carries screen coordinates, not a place in the world, so it is not something the
     // window has to stay in front of.
     if (mXrProjection && mXrSceneDepth && !is_rect && !mFbActive) {
@@ -4455,14 +4455,14 @@ bool gfx_set_fb_handler_custom(F3DGfx** cmd0) {
 }
 
 bool gfx_xr_flat_projection_handler_custom(F3DGfx** cmd0) {
-#ifdef ENABLE_OPENXR
+#ifdef ENABLE_XR_WINDOW
     SetXrFlatProjection((*cmd0)->words.w1 != 0);
 #endif
     return false;
 }
 
 bool gfx_xr_scene_depth_handler_custom(F3DGfx** cmd0) {
-#ifdef ENABLE_OPENXR
+#ifdef ENABLE_XR_WINDOW
     mInstance.lock()->mXrSceneDepth = (*cmd0)->words.w1 != 0;
 #endif
     return false;
@@ -5313,7 +5313,7 @@ void Interpreter::BindFbTexture(int slot, int fbId) {
 
 // The right eye's pass reads and writes its own half of a stereo framebuffer pair.
 int Interpreter::StereoFbForCurrentView(int fbId) {
-#ifdef ENABLE_OPENXR
+#ifdef ENABLE_XR_WINDOW
     if (GetXrViewIndex() == 1) {
         auto it = mStereoFbRight.find(fbId);
         if (it != mStereoFbRight.end()) {
