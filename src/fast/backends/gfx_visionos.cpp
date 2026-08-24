@@ -52,7 +52,7 @@ constexpr float kWindowDepthMin = 1.0f;
 constexpr float kWindowDepthMargin = 0.9f;
 constexpr float kWindowDepthRelease = 2.0f;
 constexpr float kDioramaDepth = 2.0f;
-constexpr float kRefreshRate = 90.0f;
+constexpr uint32_t kRefreshRateDefault = 90;
 // The half-angle the window covers across, before the game has loaded a projection to ask for its
 // own. About 61 degrees, which is what Banjo-Kazooie asks for once it runs. ApplyXrProjection only
 // reports the tangents on a frame it already had a window for, so without a value to start from
@@ -75,6 +75,7 @@ float gGlassDepth = kWindowDepthMax;
 bool gFlatProjection = false;
 int gViewIndex = 0;
 uint32_t gViewCount = 1;
+uint32_t gRefreshRate = kRefreshRateDefault;
 XrViewGeometry gViewGeometry = {};
 bool gViewGeometryValid = false;
 
@@ -90,7 +91,8 @@ void MoveGlass() {
     if (target < gGlassDepth) {
         gGlassDepth = target;
     } else {
-        gGlassDepth += (target - gGlassDepth) * (1.0f - expf(-1.0f / (kRefreshRate * kWindowDepthRelease)));
+        gGlassDepth +=
+            (target - gGlassDepth) * (1.0f - expf(-1.0f / (static_cast<float>(gRefreshRate) * kWindowDepthRelease)));
     }
     gSceneNear = std::numeric_limits<float>::max();
 }
@@ -261,6 +263,12 @@ void* GetVisionOSGameTexture(int eye) {
     return gGameTextures[eye];
 }
 
+void SetVisionOSRefreshRate(uint32_t hz) {
+    if (hz >= 30 && hz <= 240) {
+        gRefreshRate = hz;
+    }
+}
+
 void SetVisionOSViewCount(uint32_t views) {
     gViewCount = views >= 2 ? 2 : 1;
 }
@@ -360,9 +368,11 @@ void GfxWindowBackendVisionOS::BeginRenderView(uint32_t view) {
 
     static int sReport = 0;
     if (sReport++ % 120 == 0) {
-        SPDLOG_INFO("visionOS: view {} eye {:.3f} {:.3f} {:.3f} m tan {:.3f} glass {:.1f} offset {:.2f} {:.2f} {:.2f}",
-                    view, eyeX, eyeY, eyeZ, gTanHalfWidth, gGlassDepth, gViewGeometry.eyeOffset[0],
-                    gViewGeometry.eyeOffset[1], gViewGeometry.eyeOffset[2]);
+        SPDLOG_INFO(
+            "visionOS: view {} of {} at {} Hz, eye {:.3f} {:.3f} {:.3f} m tan {:.3f} glass {:.1f} offset {:.2f} "
+            "{:.2f} {:.2f}",
+            view, gViewCount, gRefreshRate, eyeX, eyeY, eyeZ, gTanHalfWidth, gGlassDepth,
+            gViewGeometry.eyeOffset[0], gViewGeometry.eyeOffset[1], gViewGeometry.eyeOffset[2]);
     }
 }
 
@@ -391,7 +401,7 @@ void GfxWindowBackendVisionOS::SetFullscreen(bool fullscreen) {
 }
 
 void GfxWindowBackendVisionOS::GetActiveWindowRefreshRate(uint32_t* refreshRate) {
-    *refreshRate = 90;
+    *refreshRate = gRefreshRate;
 }
 
 void GfxWindowBackendVisionOS::SetCursorVisibility(bool visible) {

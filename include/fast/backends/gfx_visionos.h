@@ -20,6 +20,11 @@ VisionOSCompositor GetVisionOSCompositor();
 // One per eye. Both are drawn from the same compositor frame, so they cannot be the same texture.
 void* GetVisionOSGameTexture(int eye);
 
+// The cadence the compositor is actually presenting at. No Compositor Services call reports the
+// panel rate and none can ask for one, so the shell measures it from the presentation times and
+// the app follows whatever it is given.
+void SetVisionOSRefreshRate(uint32_t hz);
+
 // How many views the drawable has this frame. One image for both eyes below two.
 void SetVisionOSViewCount(uint32_t views);
 
