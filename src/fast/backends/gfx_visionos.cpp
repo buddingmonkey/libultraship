@@ -341,6 +341,12 @@ void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb
         return;
     }
 
+    // EndChild reports the whole child window as one item, after every row inside it. The mask keeps
+    // the last value written, so that rectangle covered every row of a list box.
+    if (ctx->WithinEndChildID != 0) {
+        return;
+    }
+
     // A modal takes every click, so nothing behind it can be pressed. This is the rule ImGui uses
     // itself, and without it the implicit debug window offers items under the dimmed screen.
     ImGuiWindow* modal = ImGui::GetTopMostPopupModal();
@@ -348,9 +354,8 @@ void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb
         return;
     }
 
-    // ItemAdd calls this hook before it tests the clip rectangle, so a row scrolled out of a list
-    // still arrives, at its full size. Those rows come after the rows in view, and the mask takes
-    // the last one written, so the bottom row of a long list covered every row above it.
+    // ItemAdd calls this hook before it tests the clip rectangle, so an item scrolled out of view
+    // still arrives, at its full size.
     ImRect visible = bb;
     visible.ClipWith(window->ClipRect);
     if (visible.GetWidth() <= 0.0f || visible.GetHeight() <= 0.0f) {
