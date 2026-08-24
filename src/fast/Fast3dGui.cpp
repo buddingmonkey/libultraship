@@ -10,6 +10,7 @@
 #include "ship/config/ConsoleVariable.h"
 #include "fast/backends/gfx_metal.h"
 #include "fast/backends/gfx_visionos.h"
+#include "fast/backends/gfx_xr_view.h"
 #include "fast/interpreter.h"
 #include "fast/backends/gfx_rendering_api.h"
 #include "fast/resource/type/Texture.h"
@@ -417,8 +418,13 @@ void Fast3dGui::ImGuiWMNewFrame() {
                 static float sX = -FLT_MAX;
                 static float sY = -FLT_MAX;
                 static bool sPressed = false;
+                static bool sHavePos = false;
+                // The whole display list runs once per eye, so this is reached twice a frame in
+                // stereo. The pointer must still take one step a frame, or a press and the position
+                // it belongs to arrive together again and ImGui takes the item that was under the
+                // one before. Both eyes are then given the same state, so their frames agree.
                 VisionOSPointer next{};
-                if (PeekVisionOSPointer(&next)) {
+                if (GetXrViewIndex() == 0 && PeekVisionOSPointer(&next)) {
                     float wantX = next.X;
                     float wantY = next.Y;
                     bool wantValid = next.Valid;
@@ -439,11 +445,14 @@ void Fast3dGui::ImGuiWMNewFrame() {
                     if (wantValid && (wantX != sX || wantY != sY)) {
                         sX = wantX;
                         sY = wantY;
-                        ImGui::GetIO().AddMousePosEvent(sX, sY);
+                        sHavePos = true;
                     } else {
                         sPressed = wantValid && next.Pressed;
                         PopVisionOSPointer();
                     }
+                }
+                if (sHavePos) {
+                    ImGui::GetIO().AddMousePosEvent(sX, sY);
                 }
                 ImGui::GetIO().AddMouseButtonEvent(0, sPressed);
             }
