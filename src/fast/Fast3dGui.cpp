@@ -352,8 +352,9 @@ void Fast3dGui::ImGuiWMNewFrame() {
                         if (wanted != sPressed) {
                             sPressed = wanted;
                             ImGuiContext* context = ImGui::GetCurrentContext();
-                            SPDLOG_INFO("visionOS: pointer {} at {:.0f},{:.0f} area {}; hovered {} '{}'",
-                                        sPressed ? "down" : "up", sX, sY, next.Identifier, context->HoveredId,
+                            SPDLOG_INFO("visionOS: pointer {} at {:.0f},{:.0f} area {} '{}'; hovered {} '{}'",
+                                        sPressed ? "down" : "up", sX, sY, next.Identifier,
+                                        GetVisionOSItemLabel(next.Identifier), context->HoveredId,
                                         GetVisionOSItemLabel(context->HoveredId));
                         }
                         PopVisionOSPointer();
@@ -368,6 +369,12 @@ void Fast3dGui::ImGuiWMNewFrame() {
                 if (collected != sReported) {
                     sReported = collected;
                     SPDLOG_INFO("visionOS: {} ImGui items offered as tracking areas", collected);
+                    for (size_t i = 0; i < collected; ++i) {
+                        const VisionOSTrackingRect rect = GetVisionOSTrackingRect(i);
+                        SPDLOG_INFO("visionOS:   [{}] {:.0f},{:.0f} to {:.0f},{:.0f} id {} '{}'", i, rect.MinX,
+                                    rect.MinY, rect.MaxX, rect.MaxY, rect.Identifier,
+                                    GetVisionOSItemLabel(rect.Identifier));
+                    }
                 }
             }
             BeginVisionOSTrackingRects();
