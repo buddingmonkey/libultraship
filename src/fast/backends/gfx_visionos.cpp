@@ -6,6 +6,7 @@
 #include <SDL_events.h>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <cmath>
 #include <deque>
 #include <mutex>
@@ -29,15 +30,59 @@ VisionOSFrameHooks gFrameHooks = { nullptr, nullptr, nullptr };
 std::deque<VisionOSPointer> gPointerQueue;
 std::mutex gPointerMutex;
 std::unordered_map<uint64_t, std::string> gItemLabels;
+
+// An item as ImGui reported it, with what the mask needs to put it in order later.
+struct PendingTrackingRect {
+    VisionOSTrackingRect Rect;
+    const ImGuiWindow* Window;
+    float Area;
+};
+std::vector<PendingTrackingRect> gPendingRects;
 std::vector<VisionOSTrackingRect> gTrackingRects;
 } // namespace
 
 void BeginVisionOSTrackingRects() {
-    gTrackingRects.clear();
+    gPendingRects.clear();
 }
 
-void AddVisionOSTrackingRect(VisionOSTrackingRect rect) {
-    gTrackingRects.push_back(rect);
+void EndVisionOSTrackingRects() {
+    gTrackingRects.clear();
+    ImGuiContext* ctx = ImGui::GetCurrentContext();
+    if (ctx == nullptr) {
+        return;
+    }
+
+    // The mask has to answer what ImGui answers: which window is in front here, then which item in
+    // that window. Order of submission decides neither, so a container that ImGui reports after its
+    // content cannot cover it, and a future widget cannot bring the same fault back.
+    std::stable_sort(gPendingRects.begin(), gPendingRects.end(),
+                     [](const PendingTrackingRect& a, const PendingTrackingRect& b) { return a.Area > b.Area; });
+
+    // ctx->Windows is back to front, with a child after its parent, which is the order the mask
+    // needs. ImGui skips the same windows in FindHoveredWindowEx.
+    for (const ImGuiWindow* window : ctx->Windows) {
+        if (!window->WasActive || window->Hidden || (window->Flags & ImGuiWindowFlags_NoMouseInputs) != 0) {
+            continue;
+        }
+
+        // A window takes the hover from everything behind it, so it hides it in the mask as well.
+        const ImRect outer = window->OuterRectClipped;
+        if (outer.GetWidth() > 0.0f && outer.GetHeight() > 0.0f) {
+            VisionOSTrackingRect blank{};
+            blank.MinX = outer.Min.x;
+            blank.MinY = outer.Min.y;
+            blank.MaxX = outer.Max.x;
+            blank.MaxY = outer.Max.y;
+            gTrackingRects.push_back(blank);
+        }
+
+        // The largest item goes down first, so the smallest item that holds a point wins it.
+        for (const PendingTrackingRect& pending : gPendingRects) {
+            if (pending.Window == window) {
+                gTrackingRects.push_back(pending.Rect);
+            }
+        }
+    }
 }
 
 size_t GetVisionOSTrackingRectCount() {
@@ -256,6 +301,10 @@ bool GfxWindowBackendVisionOS::IsFrameReady() {
 }
 
 void GfxWindowBackendVisionOS::SwapBuffersBegin() {
+    // ImGui has ended its frame by now, so the window order is settled and the mask can be put in
+    // order. The shell rasterizes it inside CloseFrame.
+    EndVisionOSTrackingRects();
+
     // A GUI-only frame reaches here without BeginRenderFrame, the same way the OpenXR backend has
     // to open one late. Fast3D has already committed by now, so the shell makes its command buffer
     // after ours and the screen samples this frame, not the one before it.
@@ -311,7 +360,8 @@ bool GfxWindowBackendVisionOS::IsFullscreen() {
 } // namespace Fast
 
 // ImGui calls these from ItemAdd when the test engine hooks are on. That is the only place which
-// reports every item rectangle, and a tracking area needs one rectangle per item.
+// reports every item rectangle, and a tracking area needs one rectangle per item. The hook only
+// collects; EndVisionOSTrackingRects puts the rectangles in order.
 void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb,
                                  const ImGuiLastItemData* itemData) {
     // An item with no ID cannot be interacted with; plain text is the common case.
@@ -322,9 +372,8 @@ void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb
         return;
     }
 
-    // ImGui adds the window and the dock space as items too, and it adds them after their content.
-    // A full-size item would paint over every button in the mask, so leave those out. What is left
-    // keeps its submission order, which puts an inner item over the one that contains it.
+    // A full-size item, such as a dock space, is a place to put content, not a place to press. It
+    // would give the whole screen one gaze highlight.
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     if (bb.GetWidth() >= display.x * 0.9f && bb.GetHeight() >= display.y * 0.9f) {
         return;
@@ -341,8 +390,8 @@ void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb
         return;
     }
 
-    // EndChild reports the whole child window as one item, after every row inside it. The mask keeps
-    // the last value written, so that rectangle covered every row of a list box.
+    // EndChild reports the whole child window as one item of the parent. ImGui never hovers it,
+    // because the child is the window in front there, so it is not a place to press either.
     if (ctx->WithinEndChildID != 0) {
         return;
     }
@@ -362,13 +411,15 @@ void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb
         return;
     }
 
-    Fast::VisionOSTrackingRect rect{};
-    rect.MinX = visible.Min.x;
-    rect.MinY = visible.Min.y;
-    rect.MaxX = visible.Max.x;
-    rect.MaxY = visible.Max.y;
-    rect.Identifier = id;
-    Fast::AddVisionOSTrackingRect(rect);
+    Fast::PendingTrackingRect pending{};
+    pending.Rect.MinX = visible.Min.x;
+    pending.Rect.MinY = visible.Min.y;
+    pending.Rect.MaxX = visible.Max.x;
+    pending.Rect.MaxY = visible.Max.y;
+    pending.Rect.Identifier = id;
+    pending.Window = window;
+    pending.Area = visible.GetWidth() * visible.GetHeight();
+    Fast::gPendingRects.push_back(pending);
 }
 
 void ImGuiTestEngineHook_ItemInfo(ImGuiContext* ctx, ImGuiID id, const char* label, ImGuiItemStatusFlags flags) {

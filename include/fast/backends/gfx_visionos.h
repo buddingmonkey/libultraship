@@ -49,7 +49,8 @@ void PopVisionOSPointer();
 void SetVisionOSItemLabel(uint64_t identifier, const char* label);
 const char* GetVisionOSItemLabel(uint64_t identifier);
 
-// One ImGui item that the system can highlight on gaze, in game texture pixels.
+// One rectangle of the tracking mask, in game texture pixels. An identifier of zero is a window,
+// which takes no tracking area and only hides what is behind it.
 struct VisionOSTrackingRect {
     float MinX;
     float MinY;
@@ -58,8 +59,10 @@ struct VisionOSTrackingRect {
     uint64_t Identifier;
 };
 
+// The mask is collected while ImGui builds the frame and put in order after ImGui ends it, because
+// the window order is only correct then.
 void BeginVisionOSTrackingRects();
-void AddVisionOSTrackingRect(VisionOSTrackingRect rect);
+void EndVisionOSTrackingRects();
 size_t GetVisionOSTrackingRectCount();
 VisionOSTrackingRect GetVisionOSTrackingRect(size_t index);
 
