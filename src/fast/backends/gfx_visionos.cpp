@@ -25,7 +25,7 @@ namespace Fast {
 
 namespace {
 VisionOSCompositor gCompositor = { nullptr, nullptr, 0, 0 };
-MTL::Texture* gGameTexture = nullptr;
+MTL::Texture* gGameTextures[2] = { nullptr, nullptr };
 VisionOSFrameHooks gFrameHooks = { nullptr, nullptr, nullptr, nullptr };
 std::deque<VisionOSPointer> gPointerQueue;
 std::mutex gPointerMutex;
@@ -224,9 +224,13 @@ void PopVisionOSPointer() {
 }
 
 void SetVisionOSCompositor(void* device, void* commandQueue, uint32_t width, uint32_t height) {
-    if (gGameTexture != nullptr && (gCompositor.Width != width || gCompositor.Height != height)) {
-        gGameTexture->release();
-        gGameTexture = nullptr;
+    if (gCompositor.Width != width || gCompositor.Height != height) {
+        for (MTL::Texture*& texture : gGameTextures) {
+            if (texture != nullptr) {
+                texture->release();
+                texture = nullptr;
+            }
+        }
     }
     gCompositor = { device, commandQueue, width, height };
 }
@@ -235,9 +239,12 @@ VisionOSCompositor GetVisionOSCompositor() {
     return gCompositor;
 }
 
-void* GetVisionOSGameTexture() {
-    if (gGameTexture != nullptr) {
-        return gGameTexture;
+void* GetVisionOSGameTexture(int eye) {
+    if (eye < 0 || eye >= 2) {
+        return nullptr;
+    }
+    if (gGameTextures[eye] != nullptr) {
+        return gGameTextures[eye];
     }
     if (gCompositor.Device == nullptr || gCompositor.Width == 0 || gCompositor.Height == 0) {
         return nullptr;
@@ -247,11 +254,15 @@ void* GetVisionOSGameTexture() {
         MTL::PixelFormatBGRA8Unorm, gCompositor.Width, gCompositor.Height, false);
     descriptor->setUsage(MTL::TextureUsageRenderTarget | MTL::TextureUsageShaderRead);
     descriptor->setStorageMode(MTL::StorageModePrivate);
-    gGameTexture = static_cast<MTL::Device*>(gCompositor.Device)->newTexture(descriptor);
-    if (gGameTexture == nullptr) {
-        SPDLOG_ERROR("visionOS: the game texture was not made");
+    gGameTextures[eye] = static_cast<MTL::Device*>(gCompositor.Device)->newTexture(descriptor);
+    if (gGameTextures[eye] == nullptr) {
+        SPDLOG_ERROR("visionOS: the game texture for eye {} was not made", eye);
     }
-    return gGameTexture;
+    return gGameTextures[eye];
+}
+
+void SetVisionOSViewCount(uint32_t views) {
+    gViewCount = views >= 2 ? 2 : 1;
 }
 
 GfxWindowBackendVisionOS::GfxWindowBackendVisionOS(GfxRenderingAPIMetal* renderingApi)
@@ -264,7 +275,7 @@ void GfxWindowBackendVisionOS::Init(const char* gameName, const char* apiName, b
     mHeight = gCompositor.Height != 0 ? gCompositor.Height : height;
     mFullScreen = true;
 
-    MTL::Texture* target = static_cast<MTL::Texture*>(GetVisionOSGameTexture());
+    MTL::Texture* target = static_cast<MTL::Texture*>(GetVisionOSGameTexture(0));
     if (target == nullptr) {
         SPDLOG_ERROR("visionOS: the compositor was not published before the window came up");
         return;
@@ -302,7 +313,8 @@ uint32_t GfxWindowBackendVisionOS::BeginRenderFrame() {
         OpenFrame();
     }
     MoveGlass();
-    return gViewCount;
+    mViewsThisFrame = gViewCount;
+    return mViewsThisFrame;
 }
 
 // The eye offset converts against the glass itself, so a point on the glass lands on the same spot
@@ -313,6 +325,13 @@ uint32_t GfxWindowBackendVisionOS::BeginRenderFrame() {
 void GfxWindowBackendVisionOS::BeginRenderView(uint32_t view) {
     gViewIndex = static_cast<int>(view);
     gViewGeometryValid = false;
+
+    // NewFrame points framebuffer zero at whatever the external target is, once per view, so the
+    // eye only has to be chosen here.
+    if (mRenderingApi != nullptr) {
+        mRenderingApi->MetalSetExternalTarget(static_cast<MTL::Texture*>(GetVisionOSGameTexture(gViewIndex)));
+    }
+
     if (view >= gViewCount || gScreenHalfWidth <= 0.0f || gScreenRange <= 0.0f || gTanHalfWidth <= 0.0f) {
         return;
     }
@@ -461,9 +480,18 @@ void GfxWindowBackendVisionOS::SwapBuffersBegin() {
     EndVisionOSTrackingRects();
 
     // A GUI-only frame reaches here without BeginRenderFrame, the same way the OpenXR backend has
-    // to open one late. Fast3D has already committed by now, so the shell makes its command buffer
-    // after ours and the screen samples this frame, not the one before it.
-    if (!mFrameOpen && !OpenFrame()) {
+    // to open one late. It asked for no views, so it is a frame of one and both eyes read it.
+    if (!mFrameOpen) {
+        if (!OpenFrame()) {
+            return;
+        }
+        mViewsThisFrame = 1;
+        gViewIndex = 0;
+    }
+
+    // The compositor frame holds both eyes. Close it when the last one has committed, so the shell
+    // makes its command buffer after ours and the screen samples this frame, not the one before it.
+    if (gViewIndex + 1 < static_cast<int>(mViewsThisFrame)) {
         return;
     }
     if (gFrameHooks.CloseFrame != nullptr) {
