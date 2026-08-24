@@ -264,9 +264,13 @@ void* GetVisionOSGameTexture(int eye) {
 }
 
 void SetVisionOSRefreshRate(uint32_t hz) {
-    if (hz >= 30 && hz <= 240) {
-        gRefreshRate = hz;
+    if (hz < 30 || hz > 240 || hz == gRefreshRate) {
+        return;
     }
+    // The only report of the panel rate there is. Compositor Services never states it, so without
+    // this line nothing says whether the app is holding 90, 96 or 120.
+    SPDLOG_INFO("visionOS: presenting at {} Hz", hz);
+    gRefreshRate = hz;
 }
 
 void SetVisionOSViewCount(uint32_t views) {
@@ -366,14 +370,6 @@ void GfxWindowBackendVisionOS::BeginRenderView(uint32_t view) {
     gViewGeometry.windowDistance = gGlassDepth;
     gViewGeometryValid = true;
 
-    static int sReport = 0;
-    if (sReport++ % 120 == 0) {
-        SPDLOG_INFO(
-            "visionOS: view {} of {} at {} Hz, eye {:.3f} {:.3f} {:.3f} m tan {:.3f} glass {:.1f} offset {:.2f} "
-            "{:.2f} {:.2f}",
-            view, gViewCount, gRefreshRate, eyeX, eyeY, eyeZ, gTanHalfWidth, gGlassDepth,
-            gViewGeometry.eyeOffset[0], gViewGeometry.eyeOffset[1], gViewGeometry.eyeOffset[2]);
-    }
 }
 
 void GfxWindowBackendVisionOS::Close() {
