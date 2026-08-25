@@ -2,7 +2,7 @@
 
 #include "gfx_window_manager_api.h"
 namespace Fast {
-class GfxWindowBackendSDL2 final : public GfxWindowBackend {
+class GfxWindowBackendSDL2 : public GfxWindowBackend {
   public:
     GfxWindowBackendSDL2() = default;
     ~GfxWindowBackendSDL2() override;

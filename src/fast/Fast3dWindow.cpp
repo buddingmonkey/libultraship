@@ -12,6 +12,7 @@
 #include "fast/backends/gfx_direct3d_common.h"
 #include "fast/backends/gfx_direct3d11.h"
 #include "fast/backends/gfx_window_manager_api.h"
+#include "fast/backends/gfx_openxr.h"
 
 #include "fast/Fast3dGui.h"
 
@@ -35,6 +36,9 @@ Fast3dWindow::Fast3dWindow(std::shared_ptr<Ship::Gui> gui, std::shared_ptr<FastM
     if (Metal_IsSupported()) {
         AddAvailableWindowBackend(WindowBackend::FAST3D_SDL_METAL);
     }
+#endif
+#ifdef ENABLE_OPENXR
+    AddAvailableWindowBackend(WindowBackend::FAST3D_OPENXR_OPENGL);
 #endif
 #ifdef ENABLE_OPENGL
     AddAvailableWindowBackend(WindowBackend::FAST3D_SDL_OPENGL);
@@ -136,13 +140,24 @@ uint16_t Fast3dWindow::GetPixelDepth(float x, float y) {
 }
 
 void Fast3dWindow::InitWindowManager() {
+#ifdef ENABLE_OPENXR
+    // The backend falls back to the flat panel by itself when no session comes up.
+    SetWindowBackend(WindowBackend::FAST3D_OPENXR_OPENGL);
+#else
     SetWindowBackend(GetSavedWindowBackend());
+#endif
 
     switch (GetWindowBackend()) {
 #ifdef ENABLE_DX11
         case WindowBackend::FAST3D_DXGI_DX11:
             mWindowManagerApi = new GfxWindowBackendDXGI();
             mRenderingApi = new GfxRenderingAPIDX11(static_cast<GfxWindowBackendDXGI*>(mWindowManagerApi));
+            break;
+#endif
+#ifdef ENABLE_OPENXR
+        case WindowBackend::FAST3D_OPENXR_OPENGL:
+            mRenderingApi = new GfxRenderingAPIOGL();
+            mWindowManagerApi = new GfxWindowBackendOpenXR();
             break;
 #endif
 #ifdef ENABLE_OPENGL
@@ -206,18 +221,40 @@ bool Fast3dWindow::DrawAndRunGraphicsCommands(Gfx* commands, const std::unordere
     auto gui = wnd->GetGui();
     // Setup mouse state manager
     wnd->GetMouseStateManager()->StartFrame();
-    // Setup of the backend frames and draw initial Window and GUI menus
-    gui->StartDraw();
-    // Setup game framebuffers to match available window space
-    mInterpreter->StartFrame();
-    // Execute the games gfx commands
-    mInterpreter->Run(commands, mtxReplacements);
-    // Renders the game frame buffer to the final window and finishes the GUI
-    gui->EndDraw();
-    // Finalize swap buffers
-    mInterpreter->EndFrame();
+    // A headset asks for the frame once per eye; every other backend asks for it once
+    const uint32_t views = BeginRenderFrame();
+    for (uint32_t view = 0; view < views; view++) {
+        BeginRenderView(view);
+        // Setup of the backend frames and draw initial Window and GUI menus
+        gui->StartDraw();
+        // Setup game framebuffers to match available window space
+        mInterpreter->StartFrame();
+        // Execute the games gfx commands
+        mInterpreter->Run(commands, mtxReplacements);
+        // Renders the game frame buffer to the final window and finishes the GUI
+        gui->EndDraw();
+        // Finalize swap buffers
+        mInterpreter->EndFrame();
+    }
 
     return true;
+}
+
+uint32_t Fast3dWindow::BeginRenderFrame() {
+    return mWindowManagerApi->BeginRenderFrame();
+}
+
+void Fast3dWindow::BeginRenderView(uint32_t view) {
+    mWindowManagerApi->BeginRenderView(view);
+    mRenderingApi->HoldFrameNoise(view > 0);
+}
+
+std::vector<float> Fast3dWindow::GetSupportedRefreshRates() {
+    return mWindowManagerApi->GetSupportedRefreshRates();
+}
+
+bool Fast3dWindow::SetRefreshRate(float rate) {
+    return mWindowManagerApi->SetRefreshRate(rate);
 }
 
 void Fast3dWindow::HandleEvents() {

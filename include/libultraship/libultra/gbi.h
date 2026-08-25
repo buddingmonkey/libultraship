@@ -197,6 +197,8 @@
 #define G_SETTILESIZE_INTERP 0x45
 #define G_SETTARGETINTERPINDEX 0x46
 #define G_SETTILESIZE_LERP 0x4a
+#define G_XR_FLATPROJ 0x4b
+#define G_XR_SCENEDEPTH 0x4c
 
 /*
  * The following commands are the "generated" RDP commands; the user
@@ -2760,6 +2762,29 @@ typedef union Gfx {
 
 #define gsSPInvalidateTexCache() \
     { _SHIFTL(G_INVALTEXCACHE, 24, 8), 0 }
+
+// Holds the draws that follow on the headset's window plane, so a HUD element the game places in
+// front of the camera does not take the off-axis frustum and float in the room. Does nothing
+// without a headset.
+#define gSPXrFlatProjection(pkt, on)                  \
+    _DW({                                             \
+        Gfx* _g = (Gfx*)(pkt);                        \
+                                                      \
+        _g->words.w0 = _SHIFTL(G_XR_FLATPROJ, 24, 8); \
+        _g->words.w1 = (unsigned int)(on);            \
+    })
+
+// Keeps the draws that follow out of the measurement of how near the scene comes to the viewer.
+// The headset holds its window in front of the nearest thing the game draws, and something that
+// sits in front of what it decorates and lasts a moment, like a particle, must not pull the whole
+// window in with it. Does nothing without a headset.
+#define gSPXrSceneDepth(pkt, on)                        \
+    _DW({                                               \
+        Gfx* _g = (Gfx*)(pkt);                          \
+                                                        \
+        _g->words.w0 = _SHIFTL(G_XR_SCENEDEPTH, 24, 8); \
+        _g->words.w1 = (unsigned int)(on);              \
+    })
 
 #define gSPRegisterBlendedTex(pkt, timg, mask, replc)    \
     {                                                    \

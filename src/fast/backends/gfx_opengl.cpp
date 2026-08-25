@@ -769,7 +769,13 @@ void GfxRenderingAPIOGL::OnResize() {
 }
 
 void GfxRenderingAPIOGL::StartFrame() {
-    mFrameCount++;
+    if (!mFrameNoiseHeld) {
+        mFrameCount++;
+    }
+}
+
+void GfxRenderingAPIOGL::HoldFrameNoise(bool hold) {
+    mFrameNoiseHeld = hold;
 }
 
 void GfxRenderingAPIOGL::EndFrame() {
@@ -954,27 +960,19 @@ void GfxRenderingAPIOGL::CopyFramebuffer(int fb_dst_id, int fb_src_id, int srcX0
     FramebufferOGL src = mFrameBuffers[fb_src_id];
     const FramebufferOGL& dst = mFrameBuffers[fb_dst_id];
 
-    // Adjust y values for non-inverted source frame buffers because opengl uses bottom left for origin
-    if (!src.invertY) {
-        int temp = srcY1 - srcY0;
-        srcY1 = src.height - srcY0;
-        srcY0 = srcY1 - temp;
-    }
-
-    // Flip the y values
-    if (src.invertY != dst.invertY) {
-        std::swap(srcY0, srcY1);
-    }
-
     // Disabled for blit
     if (mLastScissorEnabled != 0) {
         mLastScissorEnabled = 0;
         glDisable(GL_SCISSOR_TEST);
     }
 
-    // For msaa enabled buffers we can't perform a scaled blit to a simple sample buffer
-    // First do an unscaled blit to a msaa resolved buffer
-    if (src.height != dst.height && src.width != dst.width && src.msaa_level > 1) {
+    // A multisampled source only supports an equal, unflipped blit, so resolve it first and copy
+    // from the resolved buffer. A flipped or scaled resolve is an error the driver may enforce.
+    if (src.msaa_level > 1) {
+        // The resolve moves the samples, not the rows, so the copy keeps the orientation of the
+        // buffer that was drawn, not the flag on the buffer it lands in.
+        const bool src_invertY = src.invertY;
+
         // Start with the main buffer (0) as the msaa resolved buffer
         int fb_resolve_id = 0;
         FramebufferOGL fb_resolve = mFrameBuffers[fb_resolve_id];
@@ -993,6 +991,19 @@ void GfxRenderingAPIOGL::CopyFramebuffer(int fb_dst_id, int fb_src_id, int srcX0
         // Switch source buffer to the resolved sample
         fb_src_id = fb_resolve_id;
         src = fb_resolve;
+        src.invertY = src_invertY;
+    }
+
+    // Adjust y values for non-inverted source frame buffers because opengl uses bottom left for origin
+    if (!src.invertY) {
+        int temp = srcY1 - srcY0;
+        srcY1 = src.height - srcY0;
+        srcY0 = srcY1 - temp;
+    }
+
+    // Flip the y values
+    if (src.invertY != dst.invertY) {
+        std::swap(srcY0, srcY1);
     }
 
     glBindFramebuffer(GL_READ_FRAMEBUFFER, src.fbo);

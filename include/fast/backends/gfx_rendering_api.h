@@ -52,6 +52,10 @@ class GfxRenderingAPI {
     virtual void Init() = 0;
     virtual void OnResize() = 0;
     virtual void StartFrame() = 0;
+    // Keeps the noise pattern still over the next frames. A stereo pass draws the same frame once
+    // per eye, and noise that differs between the eyes sparkles.
+    virtual void HoldFrameNoise(bool hold) {
+    }
     virtual void EndFrame() = 0;
     virtual void FinishRender() = 0;
     virtual int CreateFramebuffer() = 0;

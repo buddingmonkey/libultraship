@@ -70,4 +70,19 @@ if (NOT ${libzip_FOUND})
     list(APPEND ADDITIONAL_LIB_INCLUDES ${libzip_SOURCE_DIR}/lib ${libzip_BINARY_DIR})
 endif()
 
+#=================== OpenXR ===================
+if (ENABLE_OPENXR)
+    set(BUILD_TESTS OFF)
+    set(BUILD_API_LAYERS OFF)
+    set(BUILD_CONFORMANCE_TESTS OFF)
+    set(DYNAMIC_LOADER OFF)
+    FetchContent_Declare(
+        OpenXR
+        GIT_REPOSITORY https://github.com/KhronosGroup/OpenXR-SDK.git
+        GIT_TAG release-1.1.62
+        OVERRIDE_FIND_PACKAGE
+    )
+    FetchContent_MakeAvailable(OpenXR)
+endif()
+
 target_link_libraries(ImGui PUBLIC SDL2::SDL2)

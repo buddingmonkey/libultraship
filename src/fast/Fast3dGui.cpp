@@ -223,9 +223,28 @@ void Fast3dGui::ImGuiBackendNewFrame() {
 
 void Fast3dGui::ImGuiWMNewFrame() {
     switch (mImpl.Backend) {
-        case WindowBackend::FAST3D_SDL_OPENGL:
+        case WindowBackend::FAST3D_SDL_OPENGL: {
             ImGui_ImplSDL2_NewFrame();
+#ifdef ENABLE_OPENXR
+            // ImGui's SDL2 backend takes the display size from the window. A headset window is a
+            // rectangle in the room, and the backend draws the eye it is on at the size of that
+            // rectangle, not at the size of the panel SDL holds. Take the size the window backend
+            // reports so the menu is laid out and drawn in the same units the picture is.
+            auto interpreter = mInterpreter.lock();
+            if (interpreter != nullptr) {
+                uint32_t width = 0;
+                uint32_t height = 0;
+                int32_t posX = 0;
+                int32_t posY = 0;
+                interpreter->GetDimensions(&width, &height, &posX, &posY);
+                if (width > 0 && height > 0) {
+                    ImGui::GetIO().DisplaySize = ImVec2((float)width, (float)height);
+                    ImGui::GetIO().DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+                }
+            }
+#endif
             break;
+        }
         case WindowBackend::FAST3D_SDL_METAL: {
             ImGui_ImplSDL2_NewFrame();
 

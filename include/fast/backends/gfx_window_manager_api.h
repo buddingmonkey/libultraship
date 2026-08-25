@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <vector>
 #include "ship/window/Window.h"
 namespace Fast {
 class GfxWindowBackend {
@@ -16,6 +17,15 @@ class GfxWindowBackend {
     virtual void SetFullscreenChangedCallback(void (*mOnFullscreenChanged)(bool is_now_fullscreen)) = 0;
     virtual void SetFullscreen(bool fullscreen) = 0;
     virtual void GetActiveWindowRefreshRate(uint32_t* refreshRate) = 0;
+    // Rates the display can be driven at, and a request for one of them. Only a headset answers;
+    // a desktop window takes the rate the monitor is already set to. The caller picks, because
+    // only it knows what its own logic rate divides into.
+    virtual std::vector<float> GetSupportedRefreshRates() {
+        return {};
+    }
+    virtual bool SetRefreshRate(float rate) {
+        return false;
+    }
     virtual void SetCursorVisibility(bool visability) = 0;
     virtual void SetMousePos(int32_t posX, int32_t posY) = 0;
     virtual void GetMousePos(int32_t* x, int32_t* y) = 0;
@@ -29,6 +39,14 @@ class GfxWindowBackend {
     virtual Ship::WindowRect GetPrimaryMonitorRect() = 0;
     virtual void HandleEvents() = 0;
     virtual bool IsFrameReady() = 0;
+    // How many views the caller must draw the frame into, and which one it is about to draw. A
+    // headset backend answers two and takes the eye pose from the view; everything else answers
+    // one and ignores the rest.
+    virtual uint32_t BeginRenderFrame() {
+        return 1;
+    }
+    virtual void BeginRenderView(uint32_t view) {
+    }
     virtual void SwapBuffersBegin() = 0;
     virtual void SwapBuffersEnd() = 0;
     virtual double GetTime() = 0;

@@ -408,6 +408,11 @@ class Interpreter {
     // of reading from CPU memory — giving full GPU resolution with no readback.
     void RegisterFbTexture(const void* cpuAddr, int fbId);
     void UnregisterFbTexture(const void* cpuAddr);
+    // Pair a framebuffer with a second one for the right eye. On the second view of a stereo
+    // frame, a copy into or a texture bind of fbId goes to rightFbId instead, so each eye keeps
+    // its own capture.
+    void RegisterStereoFbPair(int fbId, int rightFbId);
+    int StereoFbForCurrentView(int fbId);
 
     void SetNativeDimensions(float width, float height);
     void SetResolutionMultiplier(float multiplier);
@@ -443,6 +448,14 @@ class Interpreter {
     void SetResolvedResourceCacheEnabled(bool enabled);
 
     void GfxSpMatrix(uint8_t params, const int32_t* addr);
+    // Swaps the game's perspective for an off-axis frustum from the tracked eye to a window fixed
+    // in the room. The game's own view stays where it is; only the apex of the frustum moves.
+    void ApplyXrProjection();
+#ifdef ENABLE_OPENXR
+    // Depth from the viewpoint to the nearest part of the triangle that reaches the screen. A
+    // corner that misses the screen must not count: the glass would sit at it for nothing.
+    float XrVisibleDepth(struct LoadedVertex* const vertices[3]) const;
+#endif
     void GfxSpPopMatrix(uint32_t count);
     void GfxSpVertex(size_t numVertices, size_t destIndex, const F3DVtx* vertices);
     void GfxSpModifyVertex(uint16_t vtxIdx, uint8_t where, uint32_t val);
@@ -539,6 +552,16 @@ class Interpreter {
     std::map<int, FBInfo>::iterator mActiveFrameBuffer;
     std::map<int, FBInfo> mFrameBuffers;
 
+    // Whether the draws that follow count toward how near the scene comes to the viewer. A pass
+    // that sits in front of what it decorates turns it off, so the window does not lurch forward.
+    bool mXrSceneDepth = true;
+
+    // Set while the off-axis frustum of a headset stands in for the game's projection, with the
+    // two numbers that turn a clip w back into a depth from the viewpoint.
+    bool mXrProjection{};
+    float mXrEyeZ{};
+    float mXrNearPlane{};
+
     int mGameFb{};             // game_framebuffer;
     int mGameFbMsaaResolved{}; // game_framebuffer_msaa_resolved;
 
@@ -546,6 +569,7 @@ class Interpreter {
     std::unordered_map<std::pair<float, float>, uint16_t, hash_pair_ff> mGetPixelDepthCached; // get_pixel_depth_cached;
     std::map<std::string, MaskedTextureEntry, std::less<>> mMaskedTextures;
     std::unordered_map<uintptr_t, int> mFbTextures; // CPU addr -> GPU FB id
+    std::unordered_map<int, int> mStereoFbRight;    // GPU FB id -> right-eye GPU FB id
 
     const std::unordered_map<Mtx*, MtxF>* mCurMtxReplacements;
     bool mMarkerOn; // This was originally a debug feature. Now it seems to control s2dex?

@@ -23,6 +23,7 @@ enum WindowBackend {
     FAST3D_DXGI_DX11 = 1,
     FAST3D_SDL_OPENGL = 2,
     FAST3D_SDL_METAL = 3,
+    FAST3D_OPENXR_OPENGL = 4,
 };
 
 class Fast3dWindow : public Ship::Window {
@@ -82,6 +83,15 @@ class Fast3dWindow : public Ship::Window {
     void SetRendererUCode(UcodeHandlers ucode);
     void EnableSRGBMode();
     bool DrawAndRunGraphicsCommands(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtxReplacements);
+
+    // How many views the frame must be drawn into, and which one is next. A port that expands
+    // DrawAndRunGraphicsCommands itself has to loop over these to reach a headset.
+    uint32_t BeginRenderFrame();
+    void BeginRenderView(uint32_t view);
+
+    // Rates the display can be driven at, and a request for one of them. Empty off a headset.
+    std::vector<float> GetSupportedRefreshRates();
+    bool SetRefreshRate(float rate);
 
     std::weak_ptr<Interpreter> GetInterpreterWeak() const;
 

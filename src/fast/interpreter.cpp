@@ -31,6 +31,7 @@
 #include "fast/lus_gbi.h"
 #include "fast/backends/gfx_window_manager_api.h"
 #include "fast/backends/gfx_rendering_api.h"
+#include "fast/backends/gfx_xr_view.h"
 
 #include "ship/window/gui/Gui.h"
 #include "ship/resource/ResourceManager.h"
@@ -1267,7 +1268,7 @@ void Interpreter::ImportTexture(int i, int tile, bool importReplacement) {
         auto fbIt = mFbTextures.find((uintptr_t)origAddr);
         if (fbIt != mFbTextures.end()) {
             Flush();
-            mRapi->SelectTextureFb(fbIt->second);
+            mRapi->SelectTextureFb(StereoFbForCurrentView(fbIt->second));
             mRdp->textures_changed[i] = false;
             return;
         }
@@ -1517,6 +1518,7 @@ void Interpreter::GfxSpMatrix(uint8_t parameters, const int32_t* addr) {
     if (parameters & mtx_projection) {
         if (parameters & mtx_load) {
             memcpy(mRsp->P_matrix, matrix, sizeof(matrix));
+            ApplyXrProjection();
         } else {
             MatrixMul(mRsp->P_matrix, matrix, mRsp->P_matrix);
         }
@@ -1538,6 +1540,141 @@ void Interpreter::GfxSpMatrix(uint8_t parameters, const int32_t* addr) {
     }
     MatrixMul(mRsp->MP_matrix, mRsp->modelview_matrix_stack[mRsp->modelview_matrix_stack_size - 1], mRsp->P_matrix);
 }
+
+void Interpreter::ApplyXrProjection() {
+#ifdef ENABLE_OPENXR
+    mXrProjection = false;
+
+    XrViewGeometry view;
+    // An offscreen buffer holds a portrait, a map or a mirror, none of which is the room's window.
+    if (mFbActive || !GetXrViewGeometry(&view)) {
+        return;
+    }
+
+    float(&p)[4][4] = mRsp->P_matrix;
+    if (p[2][3] == 0.0f) {
+        return; // guOrtho, which the game uses for its flat passes
+    }
+
+    // A projection matrix survives any uniform scale, and guPerspective applies one, so divide it
+    // out before reading the planes back off the matrix.
+    const float unit = -1.0f / p[2][3];
+    const float depthScale = p[2][2] * unit;
+    const float depthBias = p[3][2] * unit;
+    const float tanHalfWidth = 1.0f / (p[0][0] * unit);
+    const float tanHalfHeight = 1.0f / (p[1][1] * unit);
+    if (depthScale >= -1.0f || depthBias >= 0.0f || tanHalfWidth <= 0.0f || tanHalfHeight <= 0.0f) {
+        return;
+    }
+    const float nearPlane = depthBias / (depthScale - 1.0f);
+    const float farPlane = depthBias / (depthScale + 1.0f);
+
+    // AdjXForAspectRatio widens the picture after the projection, so the window is wider than the
+    // matrix alone says.
+    SetXrViewTangents(tanHalfWidth * mCurDimensions.aspect_ratio * 0.75f, tanHalfHeight);
+
+    // The window keeps the size the game's own frustum gives it at the viewpoint, so the framing
+    // does not change; the head only moves the apex of the frustum away from the center.
+    const float halfWidth = view.windowDistance * tanHalfWidth;
+    const float halfHeight = view.windowDistance * tanHalfHeight;
+    const float eyeX = view.eyeOffset[0];
+    const float eyeY = view.eyeOffset[1];
+    const float eyeZ = view.windowDistance + view.eyeOffset[2];
+    if (eyeZ < 0.1f * view.windowDistance) {
+        return; // the head has reached the glass
+    }
+
+    const float left = (-halfWidth - eyeX) * nearPlane / eyeZ;
+    const float right = (halfWidth - eyeX) * nearPlane / eyeZ;
+    const float bottom = (-halfHeight - eyeY) * nearPlane / eyeZ;
+    const float top = (halfHeight - eyeY) * nearPlane / eyeZ;
+
+    const float scaleX = 2.0f * nearPlane / (right - left);
+    const float scaleY = 2.0f * nearPlane / (top - bottom);
+    const float shearX = (right + left) / (right - left);
+    const float shearY = (top + bottom) / (top - bottom);
+    const float depth = (farPlane + nearPlane) / (nearPlane - farPlane);
+    const float offset = 2.0f * farPlane * nearPlane / (nearPlane - farPlane);
+
+    memset(p, 0, sizeof(p));
+    p[0][0] = scaleX;
+    p[1][1] = scaleY;
+    p[2][0] = shearX;
+    p[2][1] = shearY;
+    p[2][2] = depth;
+    p[2][3] = -1.0f;
+    p[3][0] = -eyeX * scaleX - view.eyeOffset[2] * shearX;
+    p[3][1] = -eyeY * scaleY - view.eyeOffset[2] * shearY;
+    p[3][2] = -view.eyeOffset[2] * depth + offset;
+    p[3][3] = view.eyeOffset[2];
+
+    mXrProjection = true;
+    mXrEyeZ = view.eyeOffset[2];
+    mXrNearPlane = nearPlane;
+#endif
+}
+
+#ifdef ENABLE_OPENXR
+float Interpreter::XrVisibleDepth(struct LoadedVertex* const vertices[3]) const {
+    float depth;
+
+    // A triangle that sits on the screen whole, which most do, answers with its nearest corner.
+    if (((vertices[0]->clip_rej | vertices[1]->clip_rej | vertices[2]->clip_rej) & 15) == 0) {
+        depth = vertices[0]->w;
+        for (int i = 1; i < 3; i++) {
+            if (vertices[i]->w < depth) {
+                depth = vertices[i]->w;
+            }
+        }
+    } else {
+        // The clip w runs linearly across the triangle, so the nearest point of the part that
+        // reaches the screen is a corner of that part. Five cuts leave at most eight corners.
+        float poly[2][8][4];
+        int count = 3;
+        for (int i = 0; i < 3; i++) {
+            poly[0][i][0] = vertices[i]->x;
+            poly[0][i][1] = vertices[i]->y;
+            poly[0][i][2] = vertices[i]->z;
+            poly[0][i][3] = vertices[i]->w;
+        }
+        for (int plane = 0; plane < 5; plane++) {
+            const int axis = plane >> 1;
+            const float sign = (plane & 1) != 0 ? -1.0f : 1.0f;
+            const float(*in)[4] = poly[plane & 1];
+            float(*out)[4] = poly[(plane & 1) ^ 1];
+            int kept = 0;
+            for (int i = 0; i < count; i++) {
+                const float* a = in[i];
+                const float* b = in[(i + 1) % count];
+                const float da = a[3] + sign * a[axis];
+                const float db = b[3] + sign * b[axis];
+                if (da >= 0.0f && kept < 8) {
+                    memcpy(out[kept++], a, sizeof(float) * 4);
+                }
+                if ((da >= 0.0f) != (db >= 0.0f) && kept < 8) {
+                    const float t = da / (da - db);
+                    for (int k = 0; k < 4; k++) {
+                        out[kept][k] = a[k] + t * (b[k] - a[k]);
+                    }
+                    kept++;
+                }
+            }
+            count = kept;
+            if (count < 3) {
+                return std::numeric_limits<float>::max(); // nothing of it reaches the screen
+            }
+        }
+        depth = poly[1][0][3];
+        for (int i = 1; i < count; i++) {
+            if (poly[1][i][3] < depth) {
+                depth = poly[1][i][3];
+            }
+        }
+    }
+
+    return (depth < mXrNearPlane ? mXrNearPlane : depth) - mXrEyeZ;
+}
+#endif
 
 void Interpreter::GfxSpPopMatrix(uint32_t count) {
     while (count--) {
@@ -1827,6 +1964,14 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
             return;
         }
     }
+
+#ifdef ENABLE_OPENXR
+    // A rectangle carries screen coordinates, not a place in the world, so it is not something the
+    // window has to stay in front of.
+    if (mXrProjection && mXrSceneDepth && !is_rect && !mFbActive) {
+        SetXrSceneNear(XrVisibleDepth(v_arr));
+    }
+#endif
 
     // depth_test is set when the fragment has a depth value to compare (either from vertex Z via
     // RSP G_ZBUFFER, or from the prim-depth register via G_ZS_PRIM) and Z_CMP is requested.
@@ -4136,6 +4281,20 @@ bool gfx_set_fb_handler_custom(F3DGfx** cmd0) {
     return false;
 }
 
+bool gfx_xr_flat_projection_handler_custom(F3DGfx** cmd0) {
+#ifdef ENABLE_OPENXR
+    SetXrFlatProjection((*cmd0)->words.w1 != 0);
+#endif
+    return false;
+}
+
+bool gfx_xr_scene_depth_handler_custom(F3DGfx** cmd0) {
+#ifdef ENABLE_OPENXR
+    mInstance.lock()->mXrSceneDepth = (*cmd0)->words.w1 != 0;
+#endif
+    return false;
+}
+
 bool gfx_reset_fb_handler_custom(F3DGfx** cmd0) {
     Interpreter* gfx = mInstance.lock().get();
     gfx->Flush();
@@ -4229,7 +4388,7 @@ bool gfx_set_timg_fb_handler_custom(F3DGfx** cmd0) {
     F3DGfx* cmd = *cmd0;
 
     gfx->Flush();
-    gfx->mRapi->SelectTextureFb((uint32_t)cmd->words.w1);
+    gfx->mRapi->SelectTextureFb((uint32_t)gfx->StereoFbForCurrentView((int)cmd->words.w1));
     gfx->mRdp->textures_changed[0] = false;
     gfx->mRdp->textures_changed[1] = false;
     return false;
@@ -4725,6 +4884,8 @@ static constexpr UcodeHandler otrHandlers = {
     { RDP_G_LOADBLOCK_WIDE, { "G_LOADBLOCK_WIDE", gfx_load_block_wide_handler_rdp } }, // RDP_G_LOADBLOCK_WIDE (-15)
     { RDP_G_VTX_WIDE, { "G_VTX_WIDE", gfx_vtx_handler_f3dex2 } },                      // RDP_G_VTX_WIDE (-16)
     { RDP_G_TRI1_WIDE, { "G_TRI1_WIDE", gfx_tri1_handler_f3dex2 } },                   // RDP_G_TRI1_WIDE (-17)
+    { RDP_G_XR_FLATPROJ, { "G_XR_FLATPROJ", gfx_xr_flat_projection_handler_custom } },  // RDP_G_XR_FLATPROJ (0x4b)
+    { RDP_G_XR_SCENEDEPTH, { "G_XR_SCENEDEPTH", gfx_xr_scene_depth_handler_custom } }, // RDP_G_XR_SCENEDEPTH (0x4c)
 };
 
 static constexpr UcodeHandler f3dex2Handlers = {
@@ -4929,6 +5090,7 @@ void Interpreter::SpReset() {
     while (!mShaderStack.empty()) {
         mShaderStack.pop();
     }
+    mXrProjection = false;
     mRsp->modelview_matrix_stack_size = 1;
     mRsp->current_num_lights = 2;
     mRsp->lights_changed = true;
@@ -4948,6 +5110,23 @@ void Interpreter::RegisterFbTexture(const void* cpuAddr, int fbId) {
 
 void Interpreter::UnregisterFbTexture(const void* cpuAddr) {
     mFbTextures.erase((uintptr_t)cpuAddr);
+}
+
+void Interpreter::RegisterStereoFbPair(int fbId, int rightFbId) {
+    mStereoFbRight[fbId] = rightFbId;
+}
+
+// The right eye's pass reads and writes its own half of a stereo framebuffer pair.
+int Interpreter::StereoFbForCurrentView(int fbId) {
+#ifdef ENABLE_OPENXR
+    if (GetXrViewIndex() == 1) {
+        auto it = mStereoFbRight.find(fbId);
+        if (it != mStereoFbRight.end()) {
+            return it->second;
+        }
+    }
+#endif
+    return fbId;
 }
 
 void Interpreter::GetDimensions(uint32_t* width, uint32_t* height, int32_t* posX, int32_t* posY) {
@@ -5130,6 +5309,7 @@ void Interpreter::RunGuiOnly() {
 
 void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_replacements) {
     SpReset();
+    mXrSceneDepth = true;
 
     mGetPixelDepthPending.clear();
     mGetPixelDepthCached.clear();
@@ -5242,6 +5422,8 @@ void Interpreter::CopyFrameBuffer(int fb_dst_id, int fb_src_id, bool copyOnce, b
     if (copyOnce && hasCopiedPtr != nullptr && *hasCopiedPtr) {
         return;
     }
+
+    fb_dst_id = StereoFbForCurrentView(fb_dst_id);
 
     if (fb_src_id == 0 && mRendersToFb) {
         // read from the framebuffer we've been rendering to
@@ -5496,6 +5678,10 @@ extern "C" void gfx_shader_cache_clear() {
     instance->mPrevCombiner = Fast::mInstance.lock().get()->mColorCombinerPool.end();
     instance->mRenderingState.mShaderProgram = nullptr;
     instance->mRapi->ClearShaderCache();
+}
+
+extern "C" void gfx_register_stereo_fb_pair(int fbId, int rightFbId) {
+    Fast::mInstance.lock().get()->RegisterStereoFbPair(fbId, rightFbId);
 }
 
 extern "C" void gfx_register_fb_texture(const void* cpuAddr, int fbId) {
