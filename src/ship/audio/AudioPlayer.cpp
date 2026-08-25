@@ -76,6 +76,22 @@ bool AudioPlayer::SetAudioChannels(AudioChannelsSetting channels) {
     return DoInit();
 }
 
+void AudioPlayer::DowngradeAudioChannels(AudioChannelsSetting channels) {
+    if (mAudioSettings.ChannelSetting == channels) {
+        return;
+    }
+
+    SPDLOG_WARN("Audio device could not provide {}, falling back to {}",
+                AudioChannelsSettingName(mAudioSettings.ChannelSetting), AudioChannelsSettingName(channels));
+
+    mAudioSettings.ChannelSetting = channels;
+
+    // Play() only matrix decodes in audioMatrix51, so the decoder is dead weight otherwise.
+    if (channels != AudioChannelsSetting::audioMatrix51) {
+        mSoundMatrixDecoder.reset();
+    }
+}
+
 int32_t AudioPlayer::GetNumOutputChannels() const {
     switch (mAudioSettings.ChannelSetting) {
         case AudioChannelsSetting::audioMatrix51:

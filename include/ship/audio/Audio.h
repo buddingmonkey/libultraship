@@ -42,6 +42,17 @@ class Audio {
     /** @brief Returns the currently active AudioPlayer instance. */
     std::shared_ptr<AudioPlayer> GetAudioPlayer();
 
+    /**
+     * @brief Releases the output device while the application is not in the foreground.
+     *
+     * Forwards to the active AudioPlayer, or does nothing when there is none. Backends
+     * that do not need it inherit no-ops, so this is safe to call on any platform.
+     */
+    void SuspendPlayback();
+
+    /** @brief Reclaims the output device released by SuspendPlayback(). */
+    void ResumePlayback();
+
     /** @brief Returns the identifier of the currently active audio backend. */
     AudioBackend GetCurrentAudioBackend();
 

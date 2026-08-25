@@ -13,8 +13,13 @@ if (NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
     list(FILTER Source_Files__Audio EXCLUDE REGEX "audio/WasapiAudioPlayer.*")
 endif()
 
-if (NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+if (NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     list(FILTER Source_Files__Audio EXCLUDE REGEX "audio/CoreAudioAudioPlayer.*")
+endif()
+
+# AVAudioSession setup for the iOS RemoteIO unit; macOS has no session to configure.
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    list(APPEND Source_Files__Audio ${CMAKE_CURRENT_SOURCE_DIR}/audio/CoreAudioSession.mm)
 endif()
 
 source_group("audio" FILES ${Source_Files__Audio})
