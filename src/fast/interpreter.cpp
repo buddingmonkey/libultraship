@@ -1,5 +1,8 @@
 #define NOMINMAX
 
+#if defined(ENABLE_DEBUG_TOOLS) && defined(__ANDROID__)
+#include <android/log.h>
+#endif
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -135,6 +138,19 @@ void GfxSetInstance(std::shared_ptr<Interpreter> gfx) {
 // N64 prim_depth is 15-bit (0 near, 0x7FFF far).
 static constexpr float N64_PRIM_DEPTH_MAX = 32767.0f;
 
+#ifdef ENABLE_DEBUG_TOOLS
+// Which state change ended each batch inside the marked (particle) bracket. Indices:
+// 0 depth, 1 decal, 2 viewport, 3 scissor, 4 texture, 5 samplerFb, 6 sampler, 7 shader,
+// 8 alpha, 9 tri-cap.
+#define MARKED_FLUSH_CAUSE(idx) \
+    do { \
+        if (!mXrSceneDepth && mBufVboNumTris > 0) \
+            mMarkedFlushCauses[idx]++; \
+    } while (0)
+#else
+#define MARKED_FLUSH_CAUSE(idx)
+#endif
+
 // Park the buffered triangles under the texture they were built against.
 void Interpreter::FlushToBucket() {
     if (mBufVboLen == 0) {
@@ -182,6 +198,13 @@ void Interpreter::DrainBuckets() {
             mRapi->DrawTriangles(bucket.vbo.data() + tri * floatsPerTri, count * floatsPerTri, count);
             tri += count;
             mDrawCallCount++;
+#ifdef ENABLE_DEBUG_TOOLS
+            mDrawTextures.insert(bucket.node);
+            if (!mXrSceneDepth) {
+                mMarkedDrawCount++;
+                mMarkedTextures.insert(bucket.node);
+            }
+#endif
         }
         bucket.vbo.clear();
         bucket.numTris = 0;
@@ -200,6 +223,14 @@ void Interpreter::Flush() {
         mBufVboLen = 0;
         mBufVboNumTris = 0;
         mDrawCallCount++;
+#ifdef ENABLE_DEBUG_TOOLS
+        const void* bound = mRenderingState.mTextures[0];
+        mDrawTextures.insert(bound);
+        if (!mXrSceneDepth) {
+            mMarkedDrawCount++;
+            mMarkedTextures.insert(bound);
+        }
+#endif
     }
 }
 
@@ -2081,6 +2112,7 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
     bool depth_mask = (mRdp->other_mode_l & Z_UPD) == Z_UPD;
     uint8_t depth_test_and_mask = (depth_test ? 1 : 0) | (depth_mask ? 2 : 0);
     if (depth_test_and_mask != mRenderingState.depth_test_and_mask) {
+        MARKED_FLUSH_CAUSE(0);
         Flush();
         mRapi->SetDepthTestAndMask(depth_test, depth_mask);
         mRenderingState.depth_test_and_mask = depth_test_and_mask;
@@ -2088,6 +2120,7 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
 
     bool zmode_decal = (mRdp->other_mode_l & ZMODE_DEC) == ZMODE_DEC;
     if (zmode_decal != mRenderingState.decal_mode) {
+        MARKED_FLUSH_CAUSE(1);
         Flush();
         mRapi->SetZmodeDecal(zmode_decal);
         mRenderingState.decal_mode = zmode_decal;
@@ -2095,11 +2128,13 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
 
     if (mRdp->viewport_or_scissor_changed) {
         if (memcmp(&mRdp->viewport, &mRenderingState.viewport, sizeof(mRdp->viewport)) != 0) {
+            MARKED_FLUSH_CAUSE(2);
             Flush();
             mRapi->SetViewport(mRdp->viewport.x, mRdp->viewport.y, mRdp->viewport.width, mRdp->viewport.height);
             mRenderingState.viewport = mRdp->viewport;
         }
         if (memcmp(&mRdp->scissor, &mRenderingState.scissor, sizeof(mRdp->scissor)) != 0) {
+            MARKED_FLUSH_CAUSE(3);
             Flush();
             mRapi->SetScissor(mRdp->scissor.x, mRdp->scissor.y, mRdp->scissor.width, mRdp->scissor.height);
             mRenderingState.scissor = mRdp->scissor;
@@ -2223,6 +2258,7 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
                     }
                 }
                 if (!bucketed) {
+                    MARKED_FLUSH_CAUSE(4);
                     Flush();
                     ImportTexture(i, tile, false);
                     if (mRdp->loaded_texture[i].masked) {
@@ -2318,6 +2354,7 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
             if (mRenderingState.mTextures[i] == nullptr) {
                 FbTextureSlot& fbSlot = mRenderingState.mFbTextures[i];
                 if (fbSlot.bound && (linear_filter != fbSlot.linearFilter || cms != fbSlot.cms || cmt != fbSlot.cmt)) {
+                    MARKED_FLUSH_CAUSE(5);
                     Flush();
                     mRapi->SetSamplerParameters(i, linear_filter, cms, cmt);
                     fbSlot.linearFilter = linear_filter;
@@ -2329,6 +2366,7 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
 
             if (linear_filter != mRenderingState.mTextures[i]->second.linear_filter ||
                 cms != mRenderingState.mTextures[i]->second.cms || cmt != mRenderingState.mTextures[i]->second.cmt) {
+                MARKED_FLUSH_CAUSE(6);
                 Flush();
 
                 // Set the same sampler params on the blended texture. Needed for opengl.
@@ -2350,12 +2388,14 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
             LookupOrCreateShaderProgram(comb->shader_id0, comb->shader_id1 | tm * SHADER_OPT(TEXEL0_CLAMP_S));
     }
     if (prg != mRenderingState.mShaderProgram) {
+        MARKED_FLUSH_CAUSE(7);
         Flush();
         mRapi->UnloadShader(mRenderingState.mShaderProgram);
         mRapi->LoadShader(prg);
         mRenderingState.mShaderProgram = prg;
     }
     if (use_alpha != mRenderingState.alpha_blend) {
+        MARKED_FLUSH_CAUSE(8);
         Flush();
         mRapi->SetUseAlpha(use_alpha);
         mRenderingState.alpha_blend = use_alpha;
@@ -2549,6 +2589,7 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
 
     if (++mBufVboNumTris == MAX_TRI_BUFFER) {
         // if (++mBufVbo_num_tris == 1) {
+        MARKED_FLUSH_CAUSE(9);
         Flush();
     }
 }
