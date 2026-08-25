@@ -42,7 +42,13 @@ void Context::DestroyInstance() {
 
 Context::~Context() {
     SPDLOG_TRACE("destruct context");
-    GetWindow()->SaveWindowToConfig();
+    // A context is assembled in stages -- CreateUninitializedInstance() followed by individual
+    // Init* calls -- and an early exit can destroy one before every stage has run. The extractor
+    // flow quits before GameEngine::FinishInit() reaches InitLogging(), for example, leaving
+    // mLogger null. Each member is checked rather than assumed present.
+    if (mWindow != nullptr) {
+        mWindow->SaveWindowToConfig();
+    }
     // Explicitly destructing everything so that logging is done last.
     mAudio = nullptr;
     mWindow = nullptr;
@@ -59,9 +65,13 @@ Context::~Context() {
     mScriptLoader = nullptr;
     mKeystore = nullptr;
 #endif
-    GetConfig()->Save();
+    if (mConfig != nullptr) {
+        mConfig->Save();
+    }
     mConfig = nullptr;
-    mLogger->flush();
+    if (mLogger != nullptr) {
+        mLogger->flush();
+    }
     mLogger = nullptr;
 #ifndef _DEBUG
     mLogThreadPool = nullptr;
