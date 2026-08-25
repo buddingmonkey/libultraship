@@ -497,6 +497,7 @@ void Interpreter::ShaderCacheClear() {
 bool Interpreter::TextureCacheLookup(int i, const TextureCacheKey& key) {
     TextureCacheMap::iterator it = mTextureCache.map.find(key);
     TextureCacheNode** n = &mRenderingState.mTextures[i];
+    mRenderingState.mFbTextures[i].bound = false;
 
     if (it != mTextureCache.map.end()) {
         mRapi->SelectTexture(i, it->second.texture_id);
@@ -1341,9 +1342,7 @@ void Interpreter::ImportTexture(int i, int tile, bool importReplacement) {
         auto fbIt = mFbTextures.find((uintptr_t)binding.fbAddr);
         if (fbIt != mFbTextures.end()) {
             Flush();
-            mRapi->SelectTextureFb(StereoFbForCurrentView(fbIt->second));
-            // SelectTextureFb binds outside the texture cache, so the slot no longer holds a node.
-            mRenderingState.mTextures[0] = nullptr;
+            BindFbTexture(0, StereoFbForCurrentView(fbIt->second));
             mRdp->textures_changed[i] = false;
             return;
         }
@@ -2236,11 +2235,20 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
                 cmt &= ~G_TX_CLAMP;
             }
 
+            bool linear_filter = (mRdp->other_mode_h & (3U << G_MDSFT_TEXTFILT)) != G_TF_POINT;
+
             if (mRenderingState.mTextures[i] == nullptr) {
+                FbTextureSlot& fbSlot = mRenderingState.mFbTextures[i];
+                if (fbSlot.bound && (linear_filter != fbSlot.linearFilter || cms != fbSlot.cms || cmt != fbSlot.cmt)) {
+                    Flush();
+                    mRapi->SetSamplerParameters(i, linear_filter, cms, cmt);
+                    fbSlot.linearFilter = linear_filter;
+                    fbSlot.cms = cms;
+                    fbSlot.cmt = cmt;
+                }
                 continue;
             }
 
-            bool linear_filter = (mRdp->other_mode_h & (3U << G_MDSFT_TEXTFILT)) != G_TF_POINT;
             if (linear_filter != mRenderingState.mTextures[i]->second.linear_filter ||
                 cms != mRenderingState.mTextures[i]->second.cms || cmt != mRenderingState.mTextures[i]->second.cmt) {
                 Flush();
@@ -4434,9 +4442,7 @@ bool gfx_set_timg_fb_handler_custom(F3DGfx** cmd0) {
     F3DGfx* cmd = *cmd0;
 
     gfx->Flush();
-    gfx->mRapi->SelectTextureFb((uint32_t)gfx->StereoFbForCurrentView((int)cmd->words.w1));
-    // SelectTextureFb binds outside the texture cache, so the slot no longer holds a node.
-    gfx->mRenderingState.mTextures[0] = nullptr;
+    gfx->BindFbTexture(0, gfx->StereoFbForCurrentView((int)cmd->words.w1));
     gfx->mRdp->textures_changed[0] = false;
     gfx->mRdp->textures_changed[1] = false;
     return false;
@@ -4932,7 +4938,7 @@ static constexpr UcodeHandler otrHandlers = {
     { RDP_G_LOADBLOCK_WIDE, { "G_LOADBLOCK_WIDE", gfx_load_block_wide_handler_rdp } }, // RDP_G_LOADBLOCK_WIDE (-15)
     { RDP_G_VTX_WIDE, { "G_VTX_WIDE", gfx_vtx_handler_f3dex2 } },                      // RDP_G_VTX_WIDE (-16)
     { RDP_G_TRI1_WIDE, { "G_TRI1_WIDE", gfx_tri1_handler_f3dex2 } },                   // RDP_G_TRI1_WIDE (-17)
-    { RDP_G_XR_FLATPROJ, { "G_XR_FLATPROJ", gfx_xr_flat_projection_handler_custom } },  // RDP_G_XR_FLATPROJ (0x4b)
+    { RDP_G_XR_FLATPROJ, { "G_XR_FLATPROJ", gfx_xr_flat_projection_handler_custom } }, // RDP_G_XR_FLATPROJ (0x4b)
     { RDP_G_XR_SCENEDEPTH, { "G_XR_SCENEDEPTH", gfx_xr_scene_depth_handler_custom } }, // RDP_G_XR_SCENEDEPTH (0x4c)
 };
 
@@ -5162,6 +5168,18 @@ void Interpreter::UnregisterFbTexture(const void* cpuAddr) {
 
 void Interpreter::RegisterStereoFbPair(int fbId, int rightFbId) {
     mStereoFbRight[fbId] = rightFbId;
+}
+
+// Bind a framebuffer as the texture of a slot. The bind goes around the texture cache, so the slot
+// keeps no node and the sampler state moves here. 0xFF is not a wrap mode, so the first triangle
+// after the bind always sets the parameters on the framebuffer this slot now holds.
+void Interpreter::BindFbTexture(int slot, int fbId) {
+    mRapi->SelectTextureFb(fbId);
+    mRenderingState.mTextures[slot] = nullptr;
+    FbTextureSlot& fbSlot = mRenderingState.mFbTextures[slot];
+    if (!fbSlot.bound || fbSlot.fbId != fbId) {
+        fbSlot = { true, fbId, false, 0xFF, 0xFF };
+    }
 }
 
 // The right eye's pass reads and writes its own half of a stereo framebuffer pair.

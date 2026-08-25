@@ -359,6 +359,15 @@ struct ColorCombiner {
     uint8_t shader_input_mapping[2][7];
 };
 
+// A framebuffer binds outside the texture cache, so its slot holds no node to carry the sampler
+// state a cached texture keeps in its own.
+struct FbTextureSlot {
+    bool bound;
+    int fbId;
+    bool linearFilter;
+    uint8_t cms, cmt;
+};
+
 struct RenderingState {
     uint8_t depth_test_and_mask; // 1: depth test, 2: depth mask
     bool decal_mode;
@@ -366,6 +375,7 @@ struct RenderingState {
     struct XYWidthHeight viewport, scissor;
     struct ShaderProgram* mShaderProgram;
     TextureCacheNode* mTextures[SHADER_MAX_TEXTURES];
+    FbTextureSlot mFbTextures[SHADER_MAX_TEXTURES];
 };
 
 struct FBInfo {
@@ -424,6 +434,7 @@ class Interpreter {
     // its own capture.
     void RegisterStereoFbPair(int fbId, int rightFbId);
     int StereoFbForCurrentView(int fbId);
+    void BindFbTexture(int slot, int fbId);
 
     void SetNativeDimensions(float width, float height);
     void SetResolutionMultiplier(float multiplier);
