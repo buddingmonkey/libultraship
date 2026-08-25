@@ -135,7 +135,65 @@ void GfxSetInstance(std::shared_ptr<Interpreter> gfx) {
 // N64 prim_depth is 15-bit (0 near, 0x7FFF far).
 static constexpr float N64_PRIM_DEPTH_MAX = 32767.0f;
 
+// Park the buffered triangles under the texture they were built against.
+void Interpreter::FlushToBucket() {
+    if (mBufVboLen == 0) {
+        return;
+    }
+    const TextureCacheNode* node = mRenderingState.mTextures[0];
+    const uint32_t texId = node != nullptr ? node->second.texture_id : 0;
+    PendingBucket* bucket = nullptr;
+    for (size_t k = 0; k < mPendingBucketsUsed; k++) {
+        if (mPendingBuckets[k].textureId == texId) {
+            bucket = &mPendingBuckets[k];
+            break;
+        }
+    }
+    if (bucket == nullptr) {
+        if (mPendingBucketsUsed == mPendingBuckets.size()) {
+            mPendingBuckets.emplace_back();
+        }
+        bucket = &mPendingBuckets[mPendingBucketsUsed++];
+        bucket->textureId = texId;
+        bucket->node = node;
+    }
+    bucket->vbo.insert(bucket->vbo.end(), mBufVbo, mBufVbo + mBufVboLen);
+    bucket->numTris += mBufVboNumTris;
+    mBufVboLen = 0;
+    mBufVboNumTris = 0;
+}
+
+// One draw per texture, before any other state change, in batches the backends are sized for.
+void Interpreter::DrainBuckets() {
+    if (mPendingBucketsUsed == 0) {
+        return;
+    }
+    mRapi->SetCurrentPrimDepth((float)mRdp->prim_depth / N64_PRIM_DEPTH_MAX);
+    for (size_t k = 0; k < mPendingBucketsUsed; k++) {
+        PendingBucket& bucket = mPendingBuckets[k];
+        if (bucket.numTris == 0) {
+            continue;
+        }
+        mRapi->SelectTexture(0, bucket.textureId);
+        const size_t floatsPerTri = bucket.vbo.size() / bucket.numTris;
+        size_t tri = 0;
+        while (tri < bucket.numTris) {
+            const size_t count = std::min(bucket.numTris - tri, MAX_TRI_BUFFER);
+            mRapi->DrawTriangles(bucket.vbo.data() + tri * floatsPerTri, count * floatsPerTri, count);
+            tri += count;
+            mDrawCallCount++;
+        }
+        bucket.vbo.clear();
+        bucket.numTris = 0;
+    }
+    mPendingBucketsUsed = 0;
+    if (mRenderingState.mTextures[0] != nullptr) {
+        mRapi->SelectTexture(0, mRenderingState.mTextures[0]->second.texture_id);
+    }
+}
+
 void Interpreter::Flush() {
+    DrainBuckets();
     if (mBufVboLen > 0) {
         mRapi->SetCurrentPrimDepth((float)mRdp->prim_depth / N64_PRIM_DEPTH_MAX);
         mRapi->DrawTriangles(mBufVbo, mBufVboLen, mBufVboNumTris);
@@ -2146,13 +2204,33 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
             // re-loads the same texture for every copy it draws, so a flush here would end the
             // batch on every one of them.
             if (mRdp->textures_changed[i] && !TextureBindingUnchanged(i, tile)) {
-                Flush();
-                ImportTexture(i, tile, false);
-                if (mRdp->loaded_texture[i].masked) {
-                    ImportTextureMask(SHADER_FIRST_MASK_TEXTURE + i, tile);
+                bool bucketed = false;
+                if (mTextureBatch && i == 0 && mRenderingState.mTextures[0] != nullptr &&
+                    !mRdp->loaded_texture[i].masked && !mRdp->loaded_texture[i].blended) {
+                    TextureBinding nb;
+                    if (BuildTextureBinding(tile, false, nb) &&
+                        (nb.fbAddr == nullptr || mFbTextures.find((uintptr_t)nb.fbAddr) == mFbTextures.end())) {
+                        TextureCacheMap::iterator it = mTextureCache.map.find(nb.key);
+                        if (it != mTextureCache.map.end()) {
+                            FlushToBucket();
+                            mRapi->SelectTexture(0, it->second.texture_id);
+                            mRenderingState.mTextures[0] = &*it;
+                            mRenderingState.mFbTextures[0].bound = false;
+                            mTextureCache.lru.splice(mTextureCache.lru.end(), mTextureCache.lru,
+                                                     it->second.lru_location);
+                            bucketed = true;
+                        }
+                    }
                 }
-                if (mRdp->loaded_texture[i].blended) {
-                    ImportTexture(SHADER_FIRST_REPLACEMENT_TEXTURE + i, tile, true);
+                if (!bucketed) {
+                    Flush();
+                    ImportTexture(i, tile, false);
+                    if (mRdp->loaded_texture[i].masked) {
+                        ImportTextureMask(SHADER_FIRST_MASK_TEXTURE + i, tile);
+                    }
+                    if (mRdp->loaded_texture[i].blended) {
+                        ImportTexture(SHADER_FIRST_REPLACEMENT_TEXTURE + i, tile, true);
+                    }
                 }
             }
             mRdp->textures_changed[i] = false;
@@ -4349,6 +4427,15 @@ bool gfx_xr_scene_depth_handler_custom(F3DGfx** cmd0) {
     return false;
 }
 
+bool gfx_texture_batch_handler_custom(F3DGfx** cmd0) {
+    Interpreter* gfx = mInstance.lock().get();
+    if ((*cmd0)->words.w1 == 0) {
+        gfx->Flush();
+    }
+    gfx->mTextureBatch = (*cmd0)->words.w1 != 0;
+    return false;
+}
+
 bool gfx_reset_fb_handler_custom(F3DGfx** cmd0) {
     Interpreter* gfx = mInstance.lock().get();
     gfx->Flush();
@@ -4940,6 +5027,7 @@ static constexpr UcodeHandler otrHandlers = {
     { RDP_G_TRI1_WIDE, { "G_TRI1_WIDE", gfx_tri1_handler_f3dex2 } },                   // RDP_G_TRI1_WIDE (-17)
     { RDP_G_XR_FLATPROJ, { "G_XR_FLATPROJ", gfx_xr_flat_projection_handler_custom } }, // RDP_G_XR_FLATPROJ (0x4b)
     { RDP_G_XR_SCENEDEPTH, { "G_XR_SCENEDEPTH", gfx_xr_scene_depth_handler_custom } }, // RDP_G_XR_SCENEDEPTH (0x4c)
+    { RDP_G_TEXBATCH, { "G_TEXBATCH", gfx_texture_batch_handler_custom } },            // RDP_G_TEXBATCH (0x4d)
 };
 
 static constexpr UcodeHandler f3dex2Handlers = {

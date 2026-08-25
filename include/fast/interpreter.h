@@ -566,6 +566,18 @@ class Interpreter {
     size_t mBufVboLen{};
     size_t mBufVboNumTris{};
     uint32_t mDrawCallCount{}; // draws issued since the port last cleared it
+    // One bucket per texture inside a gSPTextureBatch span; drained as one draw each.
+    struct PendingBucket {
+        uint32_t textureId{};
+        const void* node{};
+        std::vector<float> vbo;
+        size_t numTris{};
+    };
+    std::vector<PendingBucket> mPendingBuckets;
+    size_t mPendingBucketsUsed{};
+    bool mTextureBatch = false;
+    void FlushToBucket();
+    void DrainBuckets();
     GfxWindowBackend* mWapi = nullptr;
     GfxRenderingAPI* mRapi = nullptr;
     std::shared_ptr<GfxDebugger> mGfxDebugger;

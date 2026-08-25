@@ -77,6 +77,7 @@ constexpr int8_t RDP_G_TRI1_WIDE = OPCODE(0x49);
 constexpr int8_t RDP_G_SETTILESIZE_LERP = OPCODE(0x4a);
 constexpr int8_t RDP_G_XR_FLATPROJ = OPCODE(0x4b);
 constexpr int8_t RDP_G_XR_SCENEDEPTH = OPCODE(0x4c);
+constexpr int8_t RDP_G_TEXBATCH = OPCODE(0x4d);
 
 /*
  * The following commands are the "generated" RDP commands; the user
