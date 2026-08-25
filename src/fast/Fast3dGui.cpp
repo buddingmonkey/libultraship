@@ -224,9 +224,27 @@ void Fast3dGui::ImGuiBackendNewFrame() {
 void Fast3dGui::ImGuiWMNewFrame() {
     switch (mImpl.Backend) {
         case WindowBackend::FAST3D_SDL_OPENGL:
-        case WindowBackend::FAST3D_SDL_METAL:
             ImGui_ImplSDL2_NewFrame();
             break;
+        case WindowBackend::FAST3D_SDL_METAL: {
+            ImGui_ImplSDL2_NewFrame();
+
+            // ImGui's SDL2 backend derives DisplayFramebufferScale from SDL_GL_GetDrawableSize().
+            // UIKit only implements that for GL views -- given a Metal view it falls through to
+            // SDL_GetWindowSize(), which reports points, so the scale comes out 1.0 on a 2x/3x iOS
+            // display instead of 2.0/3.0. GfxRenderingAPIMetal::RenderDrawData() then finds
+            // DisplaySize * scale disagreeing with its pixel-sized screen texture and drops every
+            // ImGui frame, leaving nothing but the cleared framebuffer on screen.
+            SDL_Window* metalWindow = static_cast<SDL_Window*>(mImpl.Metal.Window);
+            int pixelWidth = 0, pixelHeight = 0, pointWidth = 0, pointHeight = 0;
+            SDL_Metal_GetDrawableSize(metalWindow, &pixelWidth, &pixelHeight);
+            SDL_GetWindowSize(metalWindow, &pointWidth, &pointHeight);
+            if (pixelWidth > 0 && pixelHeight > 0 && pointWidth > 0 && pointHeight > 0) {
+                ImGui::GetIO().DisplayFramebufferScale =
+                    ImVec2(static_cast<float>(pixelWidth) / pointWidth, static_cast<float>(pixelHeight) / pointHeight);
+            }
+            break;
+        }
 #ifdef ENABLE_DX11
         case WindowBackend::FAST3D_DXGI_DX11:
             ImGui_ImplWin32_NewFrame();
