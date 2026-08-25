@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <cstring>
 
 #include <map>
 #include <unordered_map>
@@ -65,14 +66,17 @@ void GfxRenderingAPIOGL::SetPerDrawUniforms() {
     glUniform1f(mCurrentShaderProgram->prim_depth_location, mCurrentPrimDepth);
 
     if (mCurrentShaderProgram->usedTextures[0] || mCurrentShaderProgram->usedTextures[1]) {
+        // A shader that samples one texture links these arrays at size one; GLES rejects the overrun.
+        const GLsizei count = mCurrentShaderProgram->usedTextures[1] ? 2 : 1;
+
         GLint filtering[2] = { textures[mCurrentTextureIds[0]].filtering, textures[mCurrentTextureIds[1]].filtering };
-        glUniform1iv(mCurrentShaderProgram->texture_filtering_location, 2, filtering);
+        glUniform1iv(mCurrentShaderProgram->texture_filtering_location, count, filtering);
 
         GLint width[2] = { textures[mCurrentTextureIds[0]].width, textures[mCurrentTextureIds[1]].width };
-        glUniform1iv(mCurrentShaderProgram->texture_width_location, 2, width);
+        glUniform1iv(mCurrentShaderProgram->texture_width_location, count, width);
 
         GLint height[2] = { textures[mCurrentTextureIds[0]].height, textures[mCurrentTextureIds[1]].height };
-        glUniform1iv(mCurrentShaderProgram->texture_height_location, 2, height);
+        glUniform1iv(mCurrentShaderProgram->texture_height_location, count, height);
     }
 }
 
@@ -288,7 +292,7 @@ std::string GfxRenderingAPIOGL::BuildFsShader(const CCFeatures& cc_features) {
         { "texture", "texture" },
         { "vOutColor", "vOutColor" },
 #elif defined(USE_OPENGLES)
-        { "GLSL_VERSION", "#version 300 es\nprecision mediump float;" },
+        { "GLSL_VERSION", "#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;" },
         { "attr", "in" },
         { "opengles", true },
         { "core_opengl", false },
@@ -587,6 +591,8 @@ void GfxRenderingAPIOGL::UploadTexture(const uint8_t* rgba32_buf, uint32_t width
 #define GL_MIRROR_CLAMP_TO_EDGE 0x8743
 #endif
 
+static bool sHasMirrorClampToEdge = true;
+
 static uint32_t gfx_cm_to_opengl(uint32_t val) {
     switch (val) {
         case G_TX_NOMIRROR | G_TX_CLAMP:
@@ -594,7 +600,8 @@ static uint32_t gfx_cm_to_opengl(uint32_t val) {
         case G_TX_MIRROR | G_TX_WRAP:
             return GL_MIRRORED_REPEAT;
         case G_TX_MIRROR | G_TX_CLAMP:
-            return GL_MIRROR_CLAMP_TO_EDGE;
+            // Without GL_EXT_texture_mirror_clamp_to_edge the enum is invalid and the previous wrap mode stays.
+            return sHasMirrorClampToEdge ? GL_MIRROR_CLAMP_TO_EDGE : GL_MIRRORED_REPEAT;
         case G_TX_NOMIRROR | G_TX_WRAP:
             return GL_REPEAT;
     }
@@ -741,6 +748,21 @@ void GfxRenderingAPIOGL::Init() {
     mPixelDepthRbSize = 1;
 
     glGetIntegerv(GL_MAX_SAMPLES, &mMaxMsaaLevel);
+
+#ifdef USE_OPENGLES
+    {
+        GLint numExtensions = 0;
+        glGetIntegerv(GL_NUM_EXTENSIONS, &numExtensions);
+        sHasMirrorClampToEdge = false;
+        for (GLint i = 0; i < numExtensions; i++) {
+            const char* extension = (const char*)glGetStringi(GL_EXTENSIONS, i);
+            if (extension != nullptr && strstr(extension, "texture_mirror_clamp_to_edge") != nullptr) {
+                sHasMirrorClampToEdge = true;
+                break;
+            }
+        }
+    }
+#endif
 }
 
 void GfxRenderingAPIOGL::OnResize() {
@@ -1029,7 +1051,7 @@ GfxRenderingAPIOGL::GetPixelDepth(int fb_id, const std::set<std::pair<float, flo
     // When looking up one value and the framebuffer is single-sampled, we can read pixels directly
     // Otherwise we need to blit first to a new buffer then read it
     if (coordinates.size() == 1 && fb.msaa_level <= 1) {
-        uint32_t depth_stencil_value;
+        uint32_t depth_stencil_value = 0;
         glBindFramebuffer(GL_FRAMEBUFFER, fb.fbo);
         int x = coordinates.begin()->first;
         int y = coordinates.begin()->second;
