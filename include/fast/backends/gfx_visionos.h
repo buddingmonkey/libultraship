@@ -58,9 +58,19 @@ void PushVisionOSPointer(VisionOSPointer pointer);
 bool PeekVisionOSPointer(VisionOSPointer* pointer);
 void PopVisionOSPointer();
 
-// The room screen, in meters: half its width, and how far it hangs from the viewer. The window
-// camera model needs both to turn an eye offset in meters into the game units it works in.
-void SetVisionOSScreen(float halfWidthMeters, float rangeMeters);
+// The room screen, in meters. The backend owns the size and the range, because the menu writes them
+// through gfx_xr_view.h and the window camera model reads them; the shell owns only where the
+// screen stands in the room.
+struct VisionOSWindow {
+    float HalfWidth;
+    float HalfHeight;
+    float Range;
+};
+
+VisionOSWindow GetVisionOSWindow();
+
+// True once after the menu asks for the window to come back in front of the viewer.
+bool TakeVisionOSRecenter();
 
 // Where an eye is, in meters, in the room screen's own axes: x right, y up, z towards the viewer.
 // The shell owns where the screen stands, so it does the world to screen part.
