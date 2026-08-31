@@ -81,6 +81,11 @@ float GetVisionOSPictureAspect();
 // True once after the menu asks for the window to come back in front of the viewer.
 bool TakeVisionOSRecenter();
 
+// Where the head stood when the window was placed, across and up, in the screen's own axes. The
+// picture faces the viewer from there, and only what the head does afterwards is parallax. The
+// range in VisionOSWindow does the same for the third axis, and sets the depth scale as well.
+void SetVisionOSParallaxReference(float across, float rise);
+
 // Where an eye is, in meters, in the room screen's own axes: x right, y up, z towards the viewer.
 // The shell owns where the screen stands, so it does the world to screen part.
 void SetVisionOSEye(int view, float x, float y, float z);

@@ -86,6 +86,8 @@ struct VisionOSEye {
 VisionOSEye gEyes[2] = {};
 VisionOSWindow gShellWindow = {};
 bool gShellWindowValid = false;
+float gParallaxAcross = 0.0f;
+float gParallaxRise = 0.0f;
 float gWindowRange = kWindowRangeDefault;
 float gWindowScale = kWindowScaleDefault;
 float gDioramaDepth = kDioramaDepthDefault;
@@ -132,6 +134,11 @@ float TanHalfHeight() {
                : gTanHalfWidth;
 }
 } // namespace
+
+void SetVisionOSParallaxReference(float across, float rise) {
+    gParallaxAcross = across;
+    gParallaxRise = rise;
+}
 
 void SetVisionOSWindow(float halfWidth, float halfHeight, float range) {
     gShellWindow = { halfWidth, halfHeight, range };
@@ -471,8 +478,11 @@ void GfxWindowBackendVisionOS::BeginRenderView(uint32_t view) {
     const float acrossGlass = gain * gGlassDepth * gTanHalfWidth / window.HalfWidth;
     const float alongNormal = gGlassDepth / window.Range;
 
-    gViewGeometry.eyeOffset[0] = eyeX * acrossGlass;
-    gViewGeometry.eyeOffset[1] = eyeY * acrossGlass;
+    // Against where the head stood when the window was placed, not against the middle of the glass.
+    // A window put high or to one side would otherwise be drawn as one looked into from there, and
+    // would stay that way for as long as it hung there.
+    gViewGeometry.eyeOffset[0] = (eyeX - gParallaxAcross) * acrossGlass;
+    gViewGeometry.eyeOffset[1] = (eyeY - gParallaxRise) * acrossGlass;
     // The shell reports z towards the viewer, and the model wants how far the head has come off
     // the range the window hangs at.
     gViewGeometry.eyeOffset[2] = (eyeZ - window.Range) * alongNormal;
