@@ -593,6 +593,16 @@ void GfxWindowBackendVisionOS::HandleEvents() {
     // SDL has no video here, but the control deck still reads controller add and remove from
     // the same queue, and only a pump puts them there.
     SDL_PumpEvents();
+
+    // The control deck polls the pad rather than taking its events, so nothing else empties the
+    // queue. SDL_PeepEvents walks the whole of it to find the two the device handler wants, under
+    // the event lock, twice a frame, so a queue that only grows makes every frame slower than the
+    // last. The window backend on the desktop drops the same events for the same reason.
+    SDL_Event event;
+    while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_CONTROLLERDEVICEADDED - 1) > 0) {
+    }
+    while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_CONTROLLERDEVICEREMOVED + 1, SDL_LASTEVENT) > 0) {
+    }
 }
 
 bool GfxWindowBackendVisionOS::IsFrameReady() {
