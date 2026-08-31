@@ -121,6 +121,16 @@ void MoveGlass() {
 float Clamp(float value, float low, float high) {
     return value < low ? low : (value > high ? high : value);
 }
+
+// Before the game loads a projection there is only the shape of the picture to go on.
+float TanHalfHeight() {
+    if (gTanHalfHeight > 0.0f) {
+        return gTanHalfHeight;
+    }
+    return gCompositor.Width > 0
+               ? gTanHalfWidth * static_cast<float>(gCompositor.Height) / static_cast<float>(gCompositor.Width)
+               : gTanHalfWidth;
+}
 } // namespace
 
 void SetVisionOSWindow(float halfWidth, float halfHeight, float range) {
@@ -133,14 +143,12 @@ VisionOSWindow GetVisionOSWindow() {
         return gShellWindow;
     }
     const float glass = 2.0f * kWindowSizeRange * gWindowScale;
-    float tanHalfHeight = gTanHalfHeight;
-    if (tanHalfHeight <= 0.0f) {
-        // Before the game loads a projection there is only the shape of the picture to go on.
-        tanHalfHeight = gCompositor.Width > 0 ? gTanHalfWidth * static_cast<float>(gCompositor.Height) /
-                                                    static_cast<float>(gCompositor.Width)
-                                              : gTanHalfWidth;
-    }
-    return { 0.5f * glass * gTanHalfWidth, 0.5f * glass * tanHalfHeight, gWindowRange };
+    return { 0.5f * glass * gTanHalfWidth, 0.5f * glass * TanHalfHeight(), gWindowRange };
+}
+
+float GetVisionOSPictureAspect() {
+    const float tanHalfHeight = TanHalfHeight();
+    return tanHalfHeight > 0.0f ? gTanHalfWidth / tanHalfHeight : 1.0f;
 }
 
 bool TakeVisionOSRecenter() {
@@ -149,15 +157,23 @@ bool TakeVisionOSRecenter() {
     return wanted;
 }
 
+// A shell that reports its own window owns the placement, and the system owns it there. The menu
+// keeps only what belongs to the app.
 void SetXrWindowDistance(float meters) {
+    if (gShellWindowValid) {
+        return;
+    }
     gWindowRange = Clamp(meters, kWindowRangeMin, kWindowRangeMax);
 }
 
 float GetXrWindowDistance() {
-    return gWindowRange;
+    return gShellWindowValid ? gShellWindow.Range : gWindowRange;
 }
 
 void SetXrWindowScale(float scale) {
+    if (gShellWindowValid) {
+        return;
+    }
     gWindowScale = Clamp(scale, kWindowScaleMin, kWindowScaleMax);
 }
 
