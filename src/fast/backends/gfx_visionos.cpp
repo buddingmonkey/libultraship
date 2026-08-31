@@ -7,6 +7,7 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <deque>
 #include <limits>
@@ -25,7 +26,9 @@ namespace Fast {
 
 namespace {
 VisionOSCompositor gCompositor = { nullptr, nullptr, 0, 0 };
-MTL::Texture* gGameTextures[2] = { nullptr, nullptr };
+MTL::Texture* gGameTextures[2][2] = {};
+int gWriteSlot = 0;
+std::atomic<int> gReadySlot{ -1 };
 VisionOSFrameHooks gFrameHooks = { nullptr, nullptr, nullptr, nullptr };
 std::deque<VisionOSPointer> gPointerQueue;
 std::mutex gPointerMutex;
@@ -299,10 +302,14 @@ void PopVisionOSPointer() {
 
 void SetVisionOSCompositor(void* device, void* commandQueue, uint32_t width, uint32_t height) {
     if (gCompositor.Width != width || gCompositor.Height != height) {
-        for (MTL::Texture*& texture : gGameTextures) {
-            if (texture != nullptr) {
-                texture->release();
-                texture = nullptr;
+        gReadySlot.store(-1, std::memory_order_release);
+        gWriteSlot = 0;
+        for (MTL::Texture** eye : gGameTextures) {
+            for (int slot = 0; slot < 2; ++slot) {
+                if (eye[slot] != nullptr) {
+                    eye[slot]->release();
+                    eye[slot] = nullptr;
+                }
             }
         }
     }
@@ -317,8 +324,8 @@ void* GetVisionOSGameTexture(int eye) {
     if (eye < 0 || eye >= 2) {
         return nullptr;
     }
-    if (gGameTextures[eye] != nullptr) {
-        return gGameTextures[eye];
+    if (gGameTextures[eye][gWriteSlot] != nullptr) {
+        return gGameTextures[eye][gWriteSlot];
     }
     if (gCompositor.Device == nullptr || gCompositor.Width == 0 || gCompositor.Height == 0) {
         return nullptr;
@@ -328,11 +335,24 @@ void* GetVisionOSGameTexture(int eye) {
         MTL::PixelFormatBGRA8Unorm, gCompositor.Width, gCompositor.Height, false);
     descriptor->setUsage(MTL::TextureUsageRenderTarget | MTL::TextureUsageShaderRead);
     descriptor->setStorageMode(MTL::StorageModePrivate);
-    gGameTextures[eye] = static_cast<MTL::Device*>(gCompositor.Device)->newTexture(descriptor);
-    if (gGameTextures[eye] == nullptr) {
+    gGameTextures[eye][gWriteSlot] = static_cast<MTL::Device*>(gCompositor.Device)->newTexture(descriptor);
+    if (gGameTextures[eye][gWriteSlot] == nullptr) {
         SPDLOG_ERROR("visionOS: the game texture for eye {} was not made", eye);
     }
-    return gGameTextures[eye];
+    return gGameTextures[eye][gWriteSlot];
+}
+
+void* GetVisionOSReadyGameTexture(int eye) {
+    const int slot = gReadySlot.load(std::memory_order_acquire);
+    if (eye < 0 || eye >= 2 || slot < 0) {
+        return nullptr;
+    }
+    return gGameTextures[eye][slot];
+}
+
+void FlipVisionOSGameTextures() {
+    gReadySlot.store(gWriteSlot, std::memory_order_release);
+    gWriteSlot = 1 - gWriteSlot;
 }
 
 void SetVisionOSRefreshRate(uint32_t hz) {

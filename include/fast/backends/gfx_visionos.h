@@ -17,8 +17,13 @@ struct VisionOSCompositor {
 
 void SetVisionOSCompositor(void* device, void* commandQueue, uint32_t width, uint32_t height);
 VisionOSCompositor GetVisionOSCompositor();
-// One per eye. Both are drawn from the same compositor frame, so they cannot be the same texture.
+// One per eye, and two deep. Both eyes are drawn from the same frame, so they cannot be the same
+// texture. The two slots let a shell copy the frame the game just finished while the game draws the
+// next one, so no read ever meets a write. A shell that draws from the game texture itself needs
+// only the first pair and never flips.
 void* GetVisionOSGameTexture(int eye);
+void* GetVisionOSReadyGameTexture(int eye);
+void FlipVisionOSGameTextures();
 
 // The cadence the compositor is actually presenting at. No Compositor Services call reports the
 // panel rate and none can ask for one, so the shell measures it from the presentation times and
