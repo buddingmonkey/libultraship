@@ -412,8 +412,6 @@ void Fast3dGui::ImGuiWMNewFrame() {
             ImGui::GetIO().DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
             ImGui::GetIO().DeltaTime = VisionOSDeltaTime();
 
-            // Take the pointer before the list is cleared, so the tracking area the system aimed at
-            // can still be looked up among this frame's items.
             {
                 static float sX = -FLT_MAX;
                 static float sY = -FLT_MAX;
@@ -425,29 +423,17 @@ void Fast3dGui::ImGuiWMNewFrame() {
                 // one before. Both eyes are then given the same state, so their frames agree.
                 VisionOSPointer next{};
                 if (GetXrViewIndex() == 0 && PeekVisionOSPointer(&next)) {
-                    float wantX = next.X;
-                    float wantY = next.Y;
-                    bool wantValid = next.Valid;
-                    // The system already decided which item it aimed at, and it drew the highlight
-                    // for that item. Take its answer, so the press cannot land somewhere else.
-                    if (next.Identifier != 0) {
-                        for (size_t i = 0; i < GetVisionOSTrackingRectCount(); ++i) {
-                            const VisionOSTrackingRect rect = GetVisionOSTrackingRect(i);
-                            if (rect.Identifier == next.Identifier) {
-                                wantX = (rect.MinX + rect.MaxX) * 0.5f;
-                                wantY = (rect.MinY + rect.MaxY) * 0.5f;
-                                wantValid = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (wantValid && (wantX != sX || wantY != sY)) {
-                        sX = wantX;
-                        sY = wantY;
+                    const bool newPlace = next.Valid && (!sHavePos || next.X != sX || next.Y != sY);
+                    if (next.Valid) {
+                        sX = next.X;
+                        sY = next.Y;
                         sHavePos = true;
-                    } else {
-                        sPressed = wantValid && next.Pressed;
+                    }
+                    // A press that arrives at a new place gives up the place on this frame and the
+                    // press on the next. A press that is already held only moves, and moves at once,
+                    // which is what a slider needs.
+                    if (!(next.Valid && next.Pressed != sPressed && newPlace)) {
+                        sPressed = next.Valid && next.Pressed;
                         PopVisionOSPointer();
                     }
                 }
