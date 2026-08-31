@@ -81,6 +81,8 @@ struct VisionOSEye {
     bool Valid;
 };
 VisionOSEye gEyes[2] = {};
+VisionOSWindow gShellWindow = {};
+bool gShellWindowValid = false;
 float gWindowRange = kWindowRangeDefault;
 float gWindowScale = kWindowScaleDefault;
 float gDioramaDepth = kDioramaDepthDefault;
@@ -118,7 +120,15 @@ float Clamp(float value, float low, float high) {
 }
 } // namespace
 
+void SetVisionOSWindow(float halfWidth, float halfHeight, float range) {
+    gShellWindow = { halfWidth, halfHeight, range };
+    gShellWindowValid = halfWidth > 0.0f && halfHeight > 0.0f && range > 0.0f;
+}
+
 VisionOSWindow GetVisionOSWindow() {
+    if (gShellWindowValid) {
+        return gShellWindow;
+    }
     const float glass = 2.0f * kWindowSizeRange * gWindowScale;
     float tanHalfHeight = gTanHalfHeight;
     if (tanHalfHeight <= 0.0f) {

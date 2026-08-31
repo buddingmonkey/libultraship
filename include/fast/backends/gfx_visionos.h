@@ -58,15 +58,15 @@ void PushVisionOSPointer(VisionOSPointer pointer);
 bool PeekVisionOSPointer(VisionOSPointer* pointer);
 void PopVisionOSPointer();
 
-// The room screen, in meters. The backend owns the size and the range, because the menu writes them
-// through gfx_xr_view.h and the window camera model reads them; the shell owns only where the
-// screen stands in the room.
+// The room screen, in meters. A shell that owns the size says so with SetVisionOSWindow, and the
+// getter reports that. A shell that does not gets the size the menu asks for through gfx_xr_view.h.
 struct VisionOSWindow {
     float HalfWidth;
     float HalfHeight;
     float Range;
 };
 
+void SetVisionOSWindow(float halfWidth, float halfHeight, float range);
 VisionOSWindow GetVisionOSWindow();
 
 // True once after the menu asks for the window to come back in front of the viewer.
