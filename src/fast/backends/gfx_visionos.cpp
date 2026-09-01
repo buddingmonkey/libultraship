@@ -25,7 +25,7 @@
 namespace Fast {
 
 namespace {
-VisionOSCompositor gCompositor = { nullptr, nullptr, 0, 0 };
+VisionOSRenderTarget gRenderTarget = { nullptr, nullptr, 0, 0 };
 MTL::Texture* gGameTextures[2][2] = {};
 int gWriteSlot = 0;
 std::atomic<int> gReadySlot{ -1 };
@@ -39,14 +39,14 @@ struct PendingKey {
 std::deque<PendingKey> gKeyQueue;
 std::mutex gKeyMutex;
 // An item as ImGui reported it, with what the set needs to put it in order later.
-struct PendingTrackingRect {
-    VisionOSTrackingRect Rect;
+struct PendingHoverRect {
+    VisionOSHoverRect Rect;
     const ImGuiWindow* Window;
     float Area;
 };
-std::vector<PendingTrackingRect> gPendingRects;
-std::vector<VisionOSTrackingRect> gTrackingRects;
-std::vector<VisionOSTrackingRect> gPublishedRects;
+std::vector<PendingHoverRect> gPendingRects;
+std::vector<VisionOSHoverRect> gHoverRects;
+std::vector<VisionOSHoverRect> gPublishedRects;
 std::mutex gRectMutex;
 
 // The window in the room, in the units gfx_xr_view.h asks for. The model is the one the OpenXR
@@ -127,8 +127,8 @@ float TanHalfHeight() {
     if (gTanHalfHeight > 0.0f) {
         return gTanHalfHeight;
     }
-    return gCompositor.Width > 0
-               ? gTanHalfWidth * static_cast<float>(gCompositor.Height) / static_cast<float>(gCompositor.Width)
+    return gRenderTarget.Width > 0
+               ? gTanHalfWidth * static_cast<float>(gRenderTarget.Height) / static_cast<float>(gRenderTarget.Width)
                : gTanHalfWidth;
 }
 } // namespace
@@ -152,8 +152,9 @@ VisionOSWindow GetVisionOSWindow() {
 }
 
 float GetVisionOSPictureAspect() {
-    // Before the compositor starts there is no picture, and a square is a bad guess for one.
-    if (gTanHalfHeight <= 0.0f && gCompositor.Width == 0) {
+    // Before the shell says how large a picture it wants there is none, and a square is a bad
+    // guess for one.
+    if (gTanHalfHeight <= 0.0f && gRenderTarget.Width == 0) {
         return 0.0f;
     }
     const float tanHalfHeight = TanHalfHeight();
@@ -231,12 +232,12 @@ int GetXrViewIndex() {
     return gViewIndex;
 }
 
-void BeginVisionOSTrackingRects() {
+void BeginVisionOSHoverRects() {
     gPendingRects.clear();
 }
 
-void EndVisionOSTrackingRects() {
-    gTrackingRects.clear();
+void EndVisionOSHoverRects() {
+    gHoverRects.clear();
     ImGuiContext* ctx = ImGui::GetCurrentContext();
     if (ctx == nullptr) {
         return;
@@ -246,7 +247,7 @@ void EndVisionOSTrackingRects() {
     // that window. Order of submission decides neither, so a container that ImGui reports after its
     // content cannot cover it, and a future widget cannot bring the same fault back.
     std::stable_sort(gPendingRects.begin(), gPendingRects.end(),
-                     [](const PendingTrackingRect& a, const PendingTrackingRect& b) { return a.Area > b.Area; });
+                     [](const PendingHoverRect& a, const PendingHoverRect& b) { return a.Area > b.Area; });
 
     // ctx->Windows is back to front, with a child after its parent, which is the order the set
     // needs. ImGui skips the same windows in FindHoveredWindowEx.
@@ -258,29 +259,29 @@ void EndVisionOSTrackingRects() {
         // A window takes the hover from everything behind it, so it hides it here as well.
         const ImRect outer = window->OuterRectClipped;
         if (outer.GetWidth() > 0.0f && outer.GetHeight() > 0.0f) {
-            VisionOSTrackingRect blank{};
+            VisionOSHoverRect blank{};
             blank.MinX = outer.Min.x;
             blank.MinY = outer.Min.y;
             blank.MaxX = outer.Max.x;
             blank.MaxY = outer.Max.y;
-            gTrackingRects.push_back(blank);
+            gHoverRects.push_back(blank);
         }
 
         // The largest item goes down first, so the smallest item that holds a point wins it.
-        for (const PendingTrackingRect& pending : gPendingRects) {
+        for (const PendingHoverRect& pending : gPendingRects) {
             if (pending.Window == window) {
-                gTrackingRects.push_back(pending.Rect);
+                gHoverRects.push_back(pending.Rect);
             }
         }
     }
 
     {
         std::lock_guard<std::mutex> lock(gRectMutex);
-        gPublishedRects = gTrackingRects;
+        gPublishedRects = gHoverRects;
     }
 }
 
-size_t CopyVisionOSTrackingRects(VisionOSTrackingRect* out, size_t max) {
+size_t CopyVisionOSHoverRects(VisionOSHoverRect* out, size_t max) {
     std::lock_guard<std::mutex> lock(gRectMutex);
     const size_t count = std::min(max, gPublishedRects.size());
     std::copy_n(gPublishedRects.begin(), count, out);
@@ -323,8 +324,8 @@ void PopVisionOSPointer() {
     }
 }
 
-void SetVisionOSCompositor(void* device, void* commandQueue, uint32_t width, uint32_t height) {
-    if (gCompositor.Width != width || gCompositor.Height != height) {
+void SetVisionOSRenderTarget(void* device, void* commandQueue, uint32_t width, uint32_t height) {
+    if (gRenderTarget.Width != width || gRenderTarget.Height != height) {
         gReadySlot.store(-1, std::memory_order_release);
         gWriteSlot = 0;
         for (MTL::Texture** eye : gGameTextures) {
@@ -336,11 +337,7 @@ void SetVisionOSCompositor(void* device, void* commandQueue, uint32_t width, uin
             }
         }
     }
-    gCompositor = { device, commandQueue, width, height };
-}
-
-VisionOSCompositor GetVisionOSCompositor() {
-    return gCompositor;
+    gRenderTarget = { device, commandQueue, width, height };
 }
 
 void* GetVisionOSGameTexture(int eye) {
@@ -350,15 +347,15 @@ void* GetVisionOSGameTexture(int eye) {
     if (gGameTextures[eye][gWriteSlot] != nullptr) {
         return gGameTextures[eye][gWriteSlot];
     }
-    if (gCompositor.Device == nullptr || gCompositor.Width == 0 || gCompositor.Height == 0) {
+    if (gRenderTarget.Device == nullptr || gRenderTarget.Width == 0 || gRenderTarget.Height == 0) {
         return nullptr;
     }
 
     MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::texture2DDescriptor(
-        MTL::PixelFormatBGRA8Unorm, gCompositor.Width, gCompositor.Height, false);
+        MTL::PixelFormatBGRA8Unorm, gRenderTarget.Width, gRenderTarget.Height, false);
     descriptor->setUsage(MTL::TextureUsageRenderTarget | MTL::TextureUsageShaderRead);
     descriptor->setStorageMode(MTL::StorageModePrivate);
-    gGameTextures[eye][gWriteSlot] = static_cast<MTL::Device*>(gCompositor.Device)->newTexture(descriptor);
+    gGameTextures[eye][gWriteSlot] = static_cast<MTL::Device*>(gRenderTarget.Device)->newTexture(descriptor);
     if (gGameTextures[eye][gWriteSlot] == nullptr) {
         SPDLOG_ERROR("visionOS: the game texture for eye {} was not made", eye);
     }
@@ -382,8 +379,8 @@ void SetVisionOSRefreshRate(uint32_t hz) {
     if (hz < 30 || hz > 240 || hz == gRefreshRate) {
         return;
     }
-    // The only report of the panel rate there is. Compositor Services never states it, so without
-    // this line nothing says whether the app is holding 90, 96 or 120.
+    // The only report of the panel rate there is. visionOS never states it, so without this line
+    // nothing says whether the app is holding 90, 96 or 120.
     SPDLOG_INFO("visionOS: presenting at {} Hz", hz);
     gRefreshRate = hz;
 }
@@ -398,21 +395,21 @@ GfxWindowBackendVisionOS::GfxWindowBackendVisionOS(GfxRenderingAPIMetal* renderi
 
 void GfxWindowBackendVisionOS::Init(const char* gameName, const char* apiName, bool startFullScreen, uint32_t width,
                                     uint32_t height, int32_t posX, int32_t posY) {
-    mWidth = gCompositor.Width != 0 ? gCompositor.Width : width;
-    mHeight = gCompositor.Height != 0 ? gCompositor.Height : height;
+    mWidth = gRenderTarget.Width != 0 ? gRenderTarget.Width : width;
+    mHeight = gRenderTarget.Height != 0 ? gRenderTarget.Height : height;
     mFullScreen = true;
 
     MTL::Texture* target = static_cast<MTL::Texture*>(GetVisionOSGameTexture(0));
     if (target == nullptr) {
-        SPDLOG_ERROR("visionOS: the compositor was not published before the window came up");
+        SPDLOG_ERROR("visionOS: the render target was not published before the window came up");
         return;
     }
 
     // Interpreter::Init calls the rendering API's Init straight after this, and that reads the
     // device, so the external target has to be handed over here.
     if (mRenderingApi == nullptr ||
-        !mRenderingApi->MetalInitExternal(static_cast<MTL::Device*>(gCompositor.Device),
-                                          static_cast<MTL::CommandQueue*>(gCompositor.CommandQueue), target)) {
+        !mRenderingApi->MetalInitExternal(static_cast<MTL::Device*>(gRenderTarget.Device),
+                                          static_cast<MTL::CommandQueue*>(gRenderTarget.CommandQueue), target)) {
         SPDLOG_ERROR("visionOS: the external Metal target did not come up");
         return;
     }
@@ -612,7 +609,7 @@ bool GfxWindowBackendVisionOS::IsFrameReady() {
 void GfxWindowBackendVisionOS::SwapBuffersBegin() {
     // ImGui has ended its frame by now, so the window order is settled and the set can be put in
     // order. The shell reads it on its own thread, one update later.
-    EndVisionOSTrackingRects();
+    EndVisionOSHoverRects();
 
     // A GUI-only frame reaches here without BeginRenderFrame, the same way the OpenXR backend has
     // to open one late. It asked for no views, so it is a frame of one and both eyes read it.
@@ -624,8 +621,8 @@ void GfxWindowBackendVisionOS::SwapBuffersBegin() {
         gViewIndex = 0;
     }
 
-    // The compositor frame holds both eyes. Close it when the last one has committed, so the shell
-    // makes its command buffer after ours and the screen samples this frame, not the one before it.
+    // The shell's frame holds both eyes. Close it when the last one has committed, so the shell
+    // makes its command buffer after ours and shows this frame, not the one before it.
     if (gViewIndex + 1 < static_cast<int>(mViewsThisFrame)) {
         return;
     }
@@ -679,7 +676,7 @@ bool GfxWindowBackendVisionOS::IsFullscreen() {
 
 // ImGui calls these from ItemAdd when the test engine hooks are on. That is the only place which
 // reports every item rectangle, and a highlight needs one rectangle per item. The hook only
-// collects; EndVisionOSTrackingRects puts the rectangles in order.
+// collects; EndVisionOSHoverRects puts the rectangles in order.
 void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb,
                                  const ImGuiLastItemData* itemData) {
     // An item with no ID cannot be interacted with; plain text is the common case.
@@ -729,7 +726,7 @@ void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb
         return;
     }
 
-    Fast::PendingTrackingRect pending{};
+    Fast::PendingHoverRect pending{};
     pending.Rect.MinX = visible.Min.x;
     pending.Rect.MinY = visible.Min.y;
     pending.Rect.MaxX = visible.Max.x;

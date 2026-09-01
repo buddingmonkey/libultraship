@@ -443,7 +443,7 @@ void Fast3dGui::ImGuiWMNewFrame() {
                 ImGui::GetIO().AddMouseButtonEvent(0, sPressed);
             }
 
-            BeginVisionOSTrackingRects();
+            BeginVisionOSHoverRects();
 
             break;
         }

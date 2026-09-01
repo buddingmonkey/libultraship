@@ -5,18 +5,17 @@
 
 namespace Fast {
 
-// The visionOS shell owns the Compositor Services layer and its Metal objects. libultraship
-// borrows them and publishes the texture that the room screen samples. Every pointer is an
-// Objective-C object, so the shell and the backend agree on void* instead of on Metal headers.
-struct VisionOSCompositor {
+// The visionOS shell owns the Metal objects and says how large a picture it wants. libultraship
+// draws into that picture and publishes it for the shell to show. Every pointer is an Objective-C
+// object, so the shell and the backend agree on void* instead of on Metal headers.
+struct VisionOSRenderTarget {
     void* Device;
     void* CommandQueue;
     uint32_t Width;
     uint32_t Height;
 };
 
-void SetVisionOSCompositor(void* device, void* commandQueue, uint32_t width, uint32_t height);
-VisionOSCompositor GetVisionOSCompositor();
+void SetVisionOSRenderTarget(void* device, void* commandQueue, uint32_t width, uint32_t height);
 // One per eye, and two deep. Both eyes are drawn from the same frame, so they cannot be the same
 // texture. The two slots let a shell copy the frame the game just finished while the game draws the
 // next one, so no read ever meets a write. A shell that draws from the game texture itself needs
@@ -25,29 +24,28 @@ void* GetVisionOSGameTexture(int eye);
 void* GetVisionOSReadyGameTexture(int eye);
 void FlipVisionOSGameTextures();
 
-// The cadence the compositor is actually presenting at. No Compositor Services call reports the
-// panel rate and none can ask for one, so the shell measures it from the presentation times and
-// the app follows whatever it is given.
+// The cadence the shell is actually presenting at. Nothing on visionOS reports the panel rate and
+// nothing can ask for one, so the shell measures it from the frame times and the app follows
+// whatever it is given.
 void SetVisionOSRefreshRate(uint32_t hz);
 
-// How many views the drawable has this frame. One image for both eyes below two.
+// How many views the shell wants this frame. One image for both eyes below two.
 void SetVisionOSViewCount(uint32_t views);
 
-// The shell owns the Compositor Services frame. It opens one when the backend asks, and closes it
-// after Fast3D has committed, so the screen samples the frame that was just drawn.
+// The shell owns the frame. It opens one when the backend asks, and closes it after Fast3D has
+// committed, so the picture the shell shows is the frame that was just drawn.
 struct VisionOSFrameHooks {
     bool (*OpenFrame)();
     void (*CloseFrame)();
     bool (*IsRunning)();
-    // The layer state is the only lifecycle signal here, and it must be read even while the app
+    // The scene state is the only lifecycle signal here, and it must be read even while the app
     // is off screen, when no frame is opened at all.
     void (*PollState)();
 };
 
 void SetVisionOSFrameHooks(VisionOSFrameHooks hooks);
 
-// Where the gaze and pinch ray meets the room screen, in game texture pixels. The system gives a
-// ray only while a pinch is held, so there is no position to report before the press.
+// Where the press meets the picture, in game texture pixels.
 struct VisionOSPointer {
     float X;
     float Y;
@@ -93,7 +91,7 @@ void PushVisionOSKey(int scancode, bool pressed);
 
 // One rectangle the system can highlight, in game texture pixels. An identifier of zero is a
 // window, which takes no highlight of its own and only hides what is behind it.
-struct VisionOSTrackingRect {
+struct VisionOSHoverRect {
     float MinX;
     float MinY;
     float MaxX;
@@ -103,12 +101,12 @@ struct VisionOSTrackingRect {
 
 // The set is collected while ImGui builds the frame and put in order after ImGui ends it, because
 // the window order is only correct then.
-void BeginVisionOSTrackingRects();
-void EndVisionOSTrackingRects();
+void BeginVisionOSHoverRects();
+void EndVisionOSHoverRects();
 
 // The shell reads the newest set from the main thread, which is not the thread that builds it. It
 // returns how many it wrote.
-size_t CopyVisionOSTrackingRects(VisionOSTrackingRect* out, size_t max);
+size_t CopyVisionOSHoverRects(VisionOSHoverRect* out, size_t max);
 
 } // namespace Fast
 
@@ -121,8 +119,8 @@ namespace Fast {
 
 class GfxRenderingAPIMetal;
 
-// visionOS has no window. The compositor decides the eye targets, so this backend reports one
-// fixed size, owns no drawable, and leaves every window and pointer operation harmless.
+// visionOS has no window. The shell decides the eye targets, so this backend reports one fixed
+// size, owns no drawable, and leaves every window and pointer operation harmless.
 class GfxWindowBackendVisionOS final : public GfxWindowBackend {
   public:
     explicit GfxWindowBackendVisionOS(GfxRenderingAPIMetal* renderingApi);
