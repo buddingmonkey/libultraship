@@ -46,6 +46,8 @@ struct PendingTrackingRect {
 };
 std::vector<PendingTrackingRect> gPendingRects;
 std::vector<VisionOSTrackingRect> gTrackingRects;
+std::vector<VisionOSTrackingRect> gPublishedRects;
+std::mutex gRectMutex;
 
 // The window in the room, in the units gfx_xr_view.h asks for. The model is the one the OpenXR
 // backend uses; only the window differs, because this one is a fixed quad and not an angular size
@@ -277,6 +279,11 @@ void EndVisionOSTrackingRects() {
             }
         }
     }
+
+    {
+        std::lock_guard<std::mutex> lock(gRectMutex);
+        gPublishedRects = gTrackingRects;
+    }
 }
 
 size_t GetVisionOSTrackingRectCount() {
@@ -285,6 +292,13 @@ size_t GetVisionOSTrackingRectCount() {
 
 VisionOSTrackingRect GetVisionOSTrackingRect(size_t index) {
     return gTrackingRects[index];
+}
+
+size_t CopyVisionOSTrackingRects(VisionOSTrackingRect* out, size_t max) {
+    std::lock_guard<std::mutex> lock(gRectMutex);
+    const size_t count = std::min(max, gPublishedRects.size());
+    std::copy_n(gPublishedRects.begin(), count, out);
+    return count;
 }
 
 void SetVisionOSFrameHooks(VisionOSFrameHooks hooks) {

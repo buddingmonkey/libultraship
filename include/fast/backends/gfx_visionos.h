@@ -112,6 +112,10 @@ void EndVisionOSTrackingRects();
 size_t GetVisionOSTrackingRectCount();
 VisionOSTrackingRect GetVisionOSTrackingRect(size_t index);
 
+// The volume shell reads the newest set from the main thread, which is not the thread that builds
+// it. It returns how many it wrote.
+size_t CopyVisionOSTrackingRects(VisionOSTrackingRect* out, size_t max);
+
 } // namespace Fast
 
 #ifdef __VISIONOS__
