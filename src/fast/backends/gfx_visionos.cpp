@@ -38,7 +38,7 @@ struct PendingKey {
 };
 std::deque<PendingKey> gKeyQueue;
 std::mutex gKeyMutex;
-// An item as ImGui reported it, with what the mask needs to put it in order later.
+// An item as ImGui reported it, with what the set needs to put it in order later.
 struct PendingTrackingRect {
     VisionOSTrackingRect Rect;
     const ImGuiWindow* Window;
@@ -69,9 +69,6 @@ constexpr float kWindowRangeMax = 4.0f;
 constexpr float kWindowScaleDefault = kWindowRangeDefault / kWindowSizeRange;
 constexpr float kWindowScaleMin = 0.5f;
 constexpr float kWindowScaleMax = 8.0f;
-// A window placed with the head bowed hangs low but stands up, and only a steep look tips it.
-constexpr float kRiseFlat = 0.35f;
-constexpr float kRiseMax = 1.22f;
 constexpr uint32_t kRefreshRateDefault = 90;
 // The half-angle the window covers across, before the game has loaded a projection to ask for its
 // own. About 61 degrees, which is what Banjo-Kazooie asks for once it runs. ApplyXrProjection only
@@ -93,7 +90,6 @@ float gParallaxRise = 0.0f;
 float gWindowRange = kWindowRangeDefault;
 float gWindowScale = kWindowScaleDefault;
 float gDioramaDepth = kDioramaDepthDefault;
-bool gRecenterWanted = false;
 float gTanHalfWidth = kTanHalfWidthDefault;
 float gTanHalfHeight = 0.0f;
 float gSceneNear = std::numeric_limits<float>::max();
@@ -164,12 +160,6 @@ float GetVisionOSPictureAspect() {
     return tanHalfHeight > 0.0f ? gTanHalfWidth / tanHalfHeight : 0.0f;
 }
 
-bool TakeVisionOSRecenter() {
-    const bool wanted = gRecenterWanted;
-    gRecenterWanted = false;
-    return wanted;
-}
-
 // A shell that reports its own window owns the placement, and the system owns it there. The menu
 // keeps only what belongs to the app.
 void SetXrWindowDistance(float meters) {
@@ -198,8 +188,8 @@ void SetXrDioramaDepth(float meters) {
     gDioramaDepth = Clamp(meters, kDioramaDepthMin, kDioramaDepthMax);
 }
 
+// The system owns where a volume stands, so there is nothing here to put back in front.
 void RecenterXrWindow() {
-    gRecenterWanted = true;
 }
 
 float GetXrWindowAngularWidth() {
@@ -252,20 +242,20 @@ void EndVisionOSTrackingRects() {
         return;
     }
 
-    // The mask has to answer what ImGui answers: which window is in front here, then which item in
+    // The set has to answer what ImGui answers: which window is in front here, then which item in
     // that window. Order of submission decides neither, so a container that ImGui reports after its
     // content cannot cover it, and a future widget cannot bring the same fault back.
     std::stable_sort(gPendingRects.begin(), gPendingRects.end(),
                      [](const PendingTrackingRect& a, const PendingTrackingRect& b) { return a.Area > b.Area; });
 
-    // ctx->Windows is back to front, with a child after its parent, which is the order the mask
+    // ctx->Windows is back to front, with a child after its parent, which is the order the set
     // needs. ImGui skips the same windows in FindHoveredWindowEx.
     for (const ImGuiWindow* window : ctx->Windows) {
         if (!window->WasActive || window->Hidden || (window->Flags & ImGuiWindowFlags_NoMouseInputs) != 0) {
             continue;
         }
 
-        // A window takes the hover from everything behind it, so it hides it in the mask as well.
+        // A window takes the hover from everything behind it, so it hides it here as well.
         const ImRect outer = window->OuterRectClipped;
         if (outer.GetWidth() > 0.0f && outer.GetHeight() > 0.0f) {
             VisionOSTrackingRect blank{};
@@ -288,14 +278,6 @@ void EndVisionOSTrackingRects() {
         std::lock_guard<std::mutex> lock(gRectMutex);
         gPublishedRects = gTrackingRects;
     }
-}
-
-size_t GetVisionOSTrackingRectCount() {
-    return gTrackingRects.size();
-}
-
-VisionOSTrackingRect GetVisionOSTrackingRect(size_t index) {
-    return gTrackingRects[index];
 }
 
 size_t CopyVisionOSTrackingRects(VisionOSTrackingRect* out, size_t max) {
@@ -628,8 +610,8 @@ bool GfxWindowBackendVisionOS::IsFrameReady() {
 }
 
 void GfxWindowBackendVisionOS::SwapBuffersBegin() {
-    // ImGui has ended its frame by now, so the window order is settled and the mask can be put in
-    // order. The shell rasterizes it inside CloseFrame.
+    // ImGui has ended its frame by now, so the window order is settled and the set can be put in
+    // order. The shell reads it on its own thread, one update later.
     EndVisionOSTrackingRects();
 
     // A GUI-only frame reaches here without BeginRenderFrame, the same way the OpenXR backend has
@@ -696,7 +678,7 @@ bool GfxWindowBackendVisionOS::IsFullscreen() {
 } // namespace Fast
 
 // ImGui calls these from ItemAdd when the test engine hooks are on. That is the only place which
-// reports every item rectangle, and a tracking area needs one rectangle per item. The hook only
+// reports every item rectangle, and a highlight needs one rectangle per item. The hook only
 // collects; EndVisionOSTrackingRects puts the rectangles in order.
 void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb,
                                  const ImGuiLastItemData* itemData) {
@@ -709,7 +691,7 @@ void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb
     }
 
     // A full-size item, such as a dock space, is a place to put content, not a place to press. It
-    // would give the whole screen one gaze highlight.
+    // would give the whole screen one highlight.
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     if (bb.GetWidth() >= display.x * 0.9f && bb.GetHeight() >= display.y * 0.9f) {
         return;

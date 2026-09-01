@@ -7,6 +7,7 @@ set(SDL_VULKAN OFF CACHE BOOL "" FORCE)
 include(${CMAKE_CURRENT_LIST_DIR}/ios.cmake)
 
 # ItemAdd is the only place ImGui reports every item rectangle, and the test engine hook is the
-# only supported way to read it. Tracking areas need those rectangles. libultraship supplies the
-# hooks; see gfx_visionos.cpp.
+# only supported way to read it. visionOS never tells an app where the wearer looks, so only the
+# system can draw a highlight, and it needs those rectangles. libultraship supplies the hooks; see
+# gfx_visionos.cpp.
 target_compile_definitions(ImGui PUBLIC IMGUI_ENABLE_TEST_ENGINE)

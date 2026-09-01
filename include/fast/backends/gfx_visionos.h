@@ -51,7 +51,6 @@ void SetVisionOSFrameHooks(VisionOSFrameHooks hooks);
 struct VisionOSPointer {
     float X;
     float Y;
-    uint64_t Identifier; ///< The tracking area the system aimed at, which is the ImGui item id.
     bool Valid;
     bool Pressed;
 };
@@ -78,9 +77,6 @@ VisionOSWindow GetVisionOSWindow();
 // letterboxes to it. Zero until there is a picture to measure.
 float GetVisionOSPictureAspect();
 
-// True once after the menu asks for the window to come back in front of the viewer.
-bool TakeVisionOSRecenter();
-
 // Where the head stood when the window was placed, across and up, in the screen's own axes. The
 // picture faces the viewer from there, and only what the head does afterwards is parallax. The
 // range in VisionOSWindow does the same for the third axis, and sets the depth scale as well.
@@ -95,8 +91,8 @@ void SetVisionOSEye(int view, float x, float y, float z);
 // Controller key code is the HID usage, which is what an SDL scancode is.
 void PushVisionOSKey(int scancode, bool pressed);
 
-// One rectangle of the tracking mask, in game texture pixels. An identifier of zero is a window,
-// which takes no tracking area and only hides what is behind it.
+// One rectangle the system can highlight, in game texture pixels. An identifier of zero is a
+// window, which takes no highlight of its own and only hides what is behind it.
 struct VisionOSTrackingRect {
     float MinX;
     float MinY;
@@ -105,15 +101,13 @@ struct VisionOSTrackingRect {
     uint64_t Identifier;
 };
 
-// The mask is collected while ImGui builds the frame and put in order after ImGui ends it, because
+// The set is collected while ImGui builds the frame and put in order after ImGui ends it, because
 // the window order is only correct then.
 void BeginVisionOSTrackingRects();
 void EndVisionOSTrackingRects();
-size_t GetVisionOSTrackingRectCount();
-VisionOSTrackingRect GetVisionOSTrackingRect(size_t index);
 
-// The volume shell reads the newest set from the main thread, which is not the thread that builds
-// it. It returns how many it wrote.
+// The shell reads the newest set from the main thread, which is not the thread that builds it. It
+// returns how many it wrote.
 size_t CopyVisionOSTrackingRects(VisionOSTrackingRect* out, size_t max);
 
 } // namespace Fast
