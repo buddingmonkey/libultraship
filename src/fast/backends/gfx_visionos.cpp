@@ -156,8 +156,12 @@ VisionOSWindow GetVisionOSWindow() {
 }
 
 float GetVisionOSPictureAspect() {
+    // Before the compositor starts there is no picture, and a square is a bad guess for one.
+    if (gTanHalfHeight <= 0.0f && gCompositor.Width == 0) {
+        return 0.0f;
+    }
     const float tanHalfHeight = TanHalfHeight();
-    return tanHalfHeight > 0.0f ? gTanHalfWidth / tanHalfHeight : 1.0f;
+    return tanHalfHeight > 0.0f ? gTanHalfWidth / tanHalfHeight : 0.0f;
 }
 
 bool TakeVisionOSRecenter() {

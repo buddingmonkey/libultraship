@@ -75,7 +75,7 @@ void SetVisionOSWindow(float halfWidth, float halfHeight, float range);
 VisionOSWindow GetVisionOSWindow();
 
 // The shape of the picture the game draws, width over height. A shell that owns the window
-// letterboxes to it.
+// letterboxes to it. Zero until there is a picture to measure.
 float GetVisionOSPictureAspect();
 
 // True once after the menu asks for the window to come back in front of the viewer.
