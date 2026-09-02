@@ -380,13 +380,22 @@ void ReportVisionOS(const char* text) {
 }
 
 void SetVisionOSRefreshRate(uint32_t hz) {
-    if (hz < 30 || hz > 240 || hz == gRefreshRate) {
+    if (hz < 30 || hz > 240) {
         return;
     }
-    // The only report of the panel rate there is. visionOS never states it, so without this line
-    // nothing says whether the app is holding 90, 96 or 120.
-    SPDLOG_INFO("visionOS: presenting at {} Hz", hz);
     gRefreshRate = hz;
+
+    // The only report of the panel rate there is. visionOS never states it, so without this line
+    // nothing says whether the app is holding 90, 96 or 120. The measurement moves by a hertz or
+    // two either way, and a line for every change of it put 1752 of them in one hour of log, so
+    // only a change of cadence is said.
+    static uint32_t sReported = 0;
+    const uint32_t moved = hz > sReported ? hz - sReported : sReported - hz;
+    if (sReported != 0 && moved <= 2) {
+        return;
+    }
+    sReported = hz;
+    SPDLOG_INFO("visionOS: presenting at {} Hz", hz);
 }
 
 void SetVisionOSViewCount(uint32_t views) {

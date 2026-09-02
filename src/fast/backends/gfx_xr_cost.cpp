@@ -63,12 +63,19 @@ void ReportXrCost() {
         }
         gFrames = 0;
         gPresents = 0;
-        if (first || frames < 1) {
+        if (first) {
             return;
         }
+        // A second with no frame in it is the one worth reporting, so it is said once. Saying it
+        // every second would fill the log of an app that is parked and drawing nothing.
+        static bool sIdle = false;
+        if (frames < 1 && sIdle) {
+            return;
+        }
+        sIdle = frames < 1;
     }
 
-    const double perFrame = 1000.0 / frames;
+    const double perFrame = frames > 0 ? 1000.0 / frames : 0.0;
     SPDLOG_INFO("xr cost: frames {}/s, presents {}/s, interpreter {:.2f} ms, draw gpu {:.2f} ms, copy {:.2f} ms, "
                 "copy gpu {:.2f} ms, wait {:.2f} ms, throttle {:.2f} ms",
                 frames, presents, cost[static_cast<int>(XrCost::Interpreter)] * perFrame,
