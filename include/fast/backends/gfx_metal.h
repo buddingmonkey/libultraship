@@ -191,6 +191,7 @@ class GfxRenderingAPIMetal final : public GfxRenderingAPI {
     bool NonUniformThreadGroupSupported();
     void SetupScreenFramebuffer(uint32_t width, uint32_t height);
     void WaitForFreeFrame();
+    void NoteGpuTime(MTL::CommandBuffer* commandBuffer);
     // Elements that only need to be setup once
     bool mExternalTarget = false;
     bool mScreenFramebufferReady = false;

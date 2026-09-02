@@ -15,6 +15,7 @@
 #endif
 
 #include <any>
+#include <chrono>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -5514,6 +5515,10 @@ void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_r
     mRapi->UpdateFramebufferParameters(0, mGfxCurrentWindowDimensions.width, mGfxCurrentWindowDimensions.height, 1,
                                        false, true, true, !mRendersToFb);
     mRapi->StartFrame();
+#ifdef ENABLE_XR_WINDOW
+    // After StartFrame, because that waits for a free frame on the GPU, which is not the walk.
+    const auto interpreterStart = std::chrono::steady_clock::now();
+#endif
     mRapi->StartDrawToFramebuffer(mRendersToFb ? mGameFb : 0, (float)mCurDimensions.height / mNativeDimensions.height);
     mRapi->ClearFramebuffer(true, true);
     mRdp->viewport_or_scissor_changed = true;
@@ -5566,6 +5571,11 @@ void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_r
 
         assert(0 && "active framebuffer was never reset back to original");
     }
+
+#ifdef ENABLE_XR_WINDOW
+    AddXrCost(XrCost::Interpreter,
+              std::chrono::duration<double>(std::chrono::steady_clock::now() - interpreterStart).count());
+#endif
 }
 
 void Interpreter::EndFrame() {

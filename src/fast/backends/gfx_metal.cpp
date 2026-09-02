@@ -35,6 +35,7 @@
 #include <spdlog/fmt/fmt.h>
 
 #include "fast/backends/gfx_metal_shader.h"
+#include "fast/backends/gfx_xr_view.h"
 
 #include "libultraship/libultra/abi.h"
 #include "ship/Context.h"
@@ -617,13 +618,30 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
 void GfxRenderingAPIMetal::OnResize() {
 }
 
+// The game spreads one frame over several command buffers, so every one of them has to say how
+// long the GPU held it. There is no frame debugger over a headset run to say it instead.
+void GfxRenderingAPIMetal::NoteGpuTime(MTL::CommandBuffer* commandBuffer) {
+#ifdef ENABLE_XR_WINDOW
+    if (commandBuffer == nullptr) {
+        return;
+    }
+    commandBuffer->addCompletedHandler([](MTL::CommandBuffer* completed) {
+        AddXrCost(XrCost::DrawGpu, completed->GPUEndTime() - completed->GPUStartTime());
+    });
+#endif
+}
+
 void GfxRenderingAPIMetal::WaitForFreeFrame() {
+    const auto before = std::chrono::steady_clock::now();
     std::unique_lock<std::mutex> lock(mFrameThrottleMutex);
     if (!mFrameThrottleSignal.wait_for(lock, std::chrono::seconds(1),
                                        [this] { return mFramesInFlight < kMaxVertexBufferPoolSize; })) {
         SPDLOG_WARN("Metal: no frame retired in a second; going on with {} in flight", mFramesInFlight);
     }
     mFramesInFlight++;
+#ifdef ENABLE_XR_WINDOW
+    AddXrCost(XrCost::Throttle, std::chrono::duration<double>(std::chrono::steady_clock::now() - before).count());
+#endif
 }
 
 void GfxRenderingAPIMetal::StartFrame() {
@@ -664,6 +682,7 @@ void GfxRenderingAPIMetal::EndFrame() {
         if (!framebuffer.mHasEndedEncoding)
             framebuffer.mCommandEncoder->endEncoding();
 
+        NoteGpuTime(framebuffer.mCommandBuffer);
         framebuffer.mCommandBuffer->commit();
         it++;
     }
@@ -715,6 +734,7 @@ void GfxRenderingAPIMetal::EndFrame() {
             mFrameThrottleSignal.notify_one();
         });
     }
+    NoteGpuTime(screen_framebuffer.mCommandBuffer);
     screen_framebuffer.mCommandBuffer->commit();
 
     // Now that commit has been called, retain the command buffer for GPU sync

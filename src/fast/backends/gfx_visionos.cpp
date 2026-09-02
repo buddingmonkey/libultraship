@@ -375,6 +375,10 @@ void FlipVisionOSGameTextures() {
     gWriteSlot = 1 - gWriteSlot;
 }
 
+void ReportVisionOS(const char* text) {
+    SPDLOG_INFO("visionOS: {}", text != nullptr ? text : "");
+}
+
 void SetVisionOSRefreshRate(uint32_t hz) {
     if (hz < 30 || hz > 240 || hz == gRefreshRate) {
         return;

@@ -24,6 +24,10 @@ void* GetVisionOSGameTexture(int eye);
 void* GetVisionOSReadyGameTexture(int eye);
 void FlipVisionOSGameTextures();
 
+// The shell has no log of its own. A device gives up nothing written to stderr, so anything the
+// shell must be able to say after a run goes through here.
+void ReportVisionOS(const char* text);
+
 // The cadence the shell is actually presenting at. Nothing on visionOS reports the panel rate and
 // nothing can ask for one, so the shell measures it from the frame times and the app follows
 // whatever it is given.

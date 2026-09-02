@@ -108,4 +108,27 @@ struct XrPadState {
 
 bool GetXrPad(XrPadState* pad);
 
+// Where a headset frame's time goes. Neither headset states any of it, and a device run gives no
+// frame debugger and no log but the app's own, so the app is the only thing that can say it. Each
+// part is added by whoever can measure it, and the report names them apart.
+enum class XrCost {
+    Interpreter, // the display list walked and the commands encoded, on the CPU
+    Copy,        // the shell's copy of the finished picture, on the CPU
+    Wait,        // the game thread held for the frame the shell offers next
+    Throttle,    // the game thread held for a frame the GPU has finished with
+    DrawGpu,     // the game's own command buffers, on the GPU
+    CopyGpu,     // that copy, on the GPU
+};
+
+void AddXrCost(XrCost part, double seconds);
+
+// One frame the game finished, and one frame the shell offered to show it in. The two apart are
+// what says whether the game or the shell is the slower of the pair.
+void CountXrFrame();
+void CountXrPresent();
+
+// Names every part once a second, as a mean over the frames of that second. Nothing is reported
+// until a frame is counted, so a backend that measures nothing prints nothing.
+void ReportXrCost();
+
 } // namespace Fast

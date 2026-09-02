@@ -2559,6 +2559,12 @@ void GfxWindowBackendOpenXR::EndRenderFrame() {
 
     mFrameOpen = false;
     sViewGeometryValid = false;
+
+    // One backend submits the frame itself and one hands it to a shell, so each counts its own
+    // presented frames. Here the two are the same frame.
+    CountXrFrame();
+    CountXrPresent();
+    ReportXrCost();
 }
 
 void GfxWindowBackendOpenXR::SwapBuffersBegin() {
