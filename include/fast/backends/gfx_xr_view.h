@@ -118,6 +118,7 @@ enum class XrCost {
     Throttle,    // the game thread held for a frame the GPU has finished with
     DrawGpu,     // the game's own command buffers, on the GPU
     CopyGpu,     // that copy, on the GPU
+    Prepare,     // the main thread's share of the copy: the buffer and the replace handshake
 };
 
 void AddXrCost(XrCost part, double seconds);

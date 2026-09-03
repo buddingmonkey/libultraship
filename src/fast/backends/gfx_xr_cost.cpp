@@ -13,7 +13,7 @@ namespace {
 // The game thread walks the display list, the shell copies the picture, and the GPU reports its own
 // buffers on a third thread, so every part arrives from somewhere else.
 std::mutex gCostMutex;
-double gCost[6] = {};
+double gCost[7] = {};
 int gFrames = 0;
 int gPresents = 0;
 double gNextReport = 0.0;
@@ -44,7 +44,7 @@ void CountXrPresent() {
 }
 
 void ReportXrCost() {
-    double cost[6];
+    double cost[7];
     int frames;
     int presents;
     {
@@ -57,7 +57,7 @@ void ReportXrCost() {
         gNextReport = now + 1.0;
         frames = gFrames;
         presents = gPresents;
-        for (int part = 0; part < 6; ++part) {
+        for (int part = 0; part < 7; ++part) {
             cost[part] = gCost[part];
             gCost[part] = 0.0;
         }
@@ -77,10 +77,11 @@ void ReportXrCost() {
 
     const double perFrame = frames > 0 ? 1000.0 / frames : 0.0;
     SPDLOG_INFO("xr cost: frames {}/s, presents {}/s, interpreter {:.2f} ms, draw gpu {:.2f} ms, copy {:.2f} ms, "
-                "copy gpu {:.2f} ms, wait {:.2f} ms, throttle {:.2f} ms",
+                "copy gpu {:.2f} ms, prepare {:.2f} ms, wait {:.2f} ms, throttle {:.2f} ms",
                 frames, presents, cost[static_cast<int>(XrCost::Interpreter)] * perFrame,
                 cost[static_cast<int>(XrCost::DrawGpu)] * perFrame, cost[static_cast<int>(XrCost::Copy)] * perFrame,
-                cost[static_cast<int>(XrCost::CopyGpu)] * perFrame, cost[static_cast<int>(XrCost::Wait)] * perFrame,
+                cost[static_cast<int>(XrCost::CopyGpu)] * perFrame,
+                cost[static_cast<int>(XrCost::Prepare)] * perFrame, cost[static_cast<int>(XrCost::Wait)] * perFrame,
                 cost[static_cast<int>(XrCost::Throttle)] * perFrame);
 }
 
