@@ -402,8 +402,7 @@ void SetVisionOSViewCount(uint32_t views) {
     gViewCount = views >= 2 ? 2 : 1;
 }
 
-GfxWindowBackendVisionOS::GfxWindowBackendVisionOS(GfxRenderingAPIMetal* renderingApi)
-    : mRenderingApi(renderingApi) {
+GfxWindowBackendVisionOS::GfxWindowBackendVisionOS(GfxRenderingAPIMetal* renderingApi) : mRenderingApi(renderingApi) {
 }
 
 void GfxWindowBackendVisionOS::Init(const char* gameName, const char* apiName, bool startFullScreen, uint32_t width,
@@ -498,7 +497,6 @@ void GfxWindowBackendVisionOS::BeginRenderView(uint32_t view) {
     gViewGeometry.eyeOffset[2] = (eyeZ - window.Range) * alongNormal;
     gViewGeometry.windowDistance = gGlassDepth;
     gViewGeometryValid = true;
-
 }
 
 void GfxWindowBackendVisionOS::Close() {
@@ -512,8 +510,7 @@ void GfxWindowBackendVisionOS::SetKeyboardCallbacks(bool (*onKeyDown)(int scanco
     mOnAllKeysUp = onAllKeysUp;
 }
 
-void GfxWindowBackendVisionOS::SetMouseCallbacks(bool (*onMouseButtonDown)(int btn),
-                                                 bool (*onMouseButtonUp)(int btn)) {
+void GfxWindowBackendVisionOS::SetMouseCallbacks(bool (*onMouseButtonDown)(int btn), bool (*onMouseButtonUp)(int btn)) {
     mOnMouseButtonDown = onMouseButtonDown;
     mOnMouseButtonUp = onMouseButtonUp;
 }
@@ -609,10 +606,8 @@ void GfxWindowBackendVisionOS::HandleEvents() {
     // the event lock, twice a frame, so a queue that only grows makes every frame slower than the
     // last. The window backend on the desktop drops the same events for the same reason.
     SDL_Event event;
-    while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_CONTROLLERDEVICEADDED - 1) > 0) {
-    }
-    while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_CONTROLLERDEVICEREMOVED + 1, SDL_LASTEVENT) > 0) {
-    }
+    while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_CONTROLLERDEVICEADDED - 1) > 0) {}
+    while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_CONTROLLERDEVICEREMOVED + 1, SDL_LASTEVENT) > 0) {}
 }
 
 bool GfxWindowBackendVisionOS::IsFrameReady() {
@@ -690,8 +685,7 @@ bool GfxWindowBackendVisionOS::IsFullscreen() {
 // ImGui calls these from ItemAdd when the test engine hooks are on. That is the only place which
 // reports every item rectangle, and a highlight needs one rectangle per item. The hook only
 // collects; EndVisionOSHoverRects puts the rectangles in order.
-void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb,
-                                 const ImGuiLastItemData* itemData) {
+void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb, const ImGuiLastItemData* itemData) {
     // An item with no ID cannot be interacted with; plain text is the common case.
     if (id == 0 || bb.GetWidth() <= 0.0f || bb.GetHeight() <= 0.0f) {
         return;

@@ -2788,12 +2788,12 @@ typedef union Gfx {
     })
 
 // Merges the draws that follow into one draw call per texture; draws inside the span reorder.
-#define gSPTextureBatch(pkt, on)                    \
-    _DW({                                           \
-        Gfx* _g = (Gfx*)(pkt);                      \
-                                                    \
-        _g->words.w0 = _SHIFTL(G_TEXBATCH, 24, 8);  \
-        _g->words.w1 = (unsigned int)(on);          \
+#define gSPTextureBatch(pkt, on)                   \
+    _DW({                                          \
+        Gfx* _g = (Gfx*)(pkt);                     \
+                                                   \
+        _g->words.w0 = _SHIFTL(G_TEXBATCH, 24, 8); \
+        _g->words.w1 = (unsigned int)(on);         \
     })
 
 #define gSPRegisterBlendedTex(pkt, timg, mask, replc)    \

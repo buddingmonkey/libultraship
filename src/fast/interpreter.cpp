@@ -143,10 +143,10 @@ static constexpr float N64_PRIM_DEPTH_MAX = 32767.0f;
 // Which state change ended each batch inside the marked (particle) bracket. Indices:
 // 0 depth, 1 decal, 2 viewport, 3 scissor, 4 texture, 5 samplerFb, 6 sampler, 7 shader,
 // 8 alpha, 9 tri-cap.
-#define MARKED_FLUSH_CAUSE(idx) \
-    do { \
+#define MARKED_FLUSH_CAUSE(idx)                   \
+    do {                                          \
         if (!mXrSceneDepth && mBufVboNumTris > 0) \
-            mMarkedFlushCauses[idx]++; \
+            mMarkedFlushCauses[idx]++;            \
     } while (0)
 #else
 #define MARKED_FLUSH_CAUSE(idx)
@@ -1388,12 +1388,9 @@ bool Interpreter::BuildTextureBinding(int tile, bool importReplacement, TextureB
                             origSizeBytes };
         } else {
             // CI8 uses both palette halves
-            binding.key = { binding.origAddr,
-                            { mRdp->palette_dram_addr[0], mRdp->palette_dram_addr[1] },
-                            binding.fmt,
-                            binding.siz,
-                            paletteIndex,
-                            origSizeBytes };
+            binding.key = { binding.origAddr, { mRdp->palette_dram_addr[0], mRdp->palette_dram_addr[1] },
+                            binding.fmt,      binding.siz,
+                            paletteIndex,     origSizeBytes };
         }
     } else {
         binding.key = { binding.origAddr, {}, binding.fmt, binding.siz, paletteIndex, origSizeBytes };

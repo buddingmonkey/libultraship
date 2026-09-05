@@ -80,9 +80,8 @@ void ReportXrCost() {
                 "copy gpu {:.2f} ms, prepare {:.2f} ms, wait {:.2f} ms, throttle {:.2f} ms",
                 frames, presents, cost[static_cast<int>(XrCost::Interpreter)] * perFrame,
                 cost[static_cast<int>(XrCost::DrawGpu)] * perFrame, cost[static_cast<int>(XrCost::Copy)] * perFrame,
-                cost[static_cast<int>(XrCost::CopyGpu)] * perFrame,
-                cost[static_cast<int>(XrCost::Prepare)] * perFrame, cost[static_cast<int>(XrCost::Wait)] * perFrame,
-                cost[static_cast<int>(XrCost::Throttle)] * perFrame);
+                cost[static_cast<int>(XrCost::CopyGpu)] * perFrame, cost[static_cast<int>(XrCost::Prepare)] * perFrame,
+                cost[static_cast<int>(XrCost::Wait)] * perFrame, cost[static_cast<int>(XrCost::Throttle)] * perFrame);
 }
 
 } // namespace Fast
