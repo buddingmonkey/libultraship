@@ -43,6 +43,10 @@ typedef struct {
             uint32_t Width;  ///< Framebuffer width in pixels.
             uint32_t Height; ///< Framebuffer height in pixels.
         } Gx2;
+        struct {
+            uint32_t Width;  ///< Game texture width in pixels.
+            uint32_t Height; ///< Game texture height in pixels.
+        } VisionOS;
     };
     WindowBackend Backend;
 } GuiWindowInitData;

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24.0)
+cmake_minimum_required(VERSION 3.28.0)
 
 # Enable /Z7 (embedded debug info) instead of /Zi (shared PDB) on MSVC so that
 # sccache can cache object files without racing over a shared .pdb file.
@@ -13,15 +13,21 @@ option(ENABLE_DEBUG_TOOLS "Build the Android bring-up tools that hand a frame ou
 option(DISABLE_DLL_LOADER "Disable dynamic library loading support" OFF)
 option(ENABLE_SCRIPTING "Enable TCC-based C mod compilation and scripting system" OFF)
 
-if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+project(libultraship LANGUAGES C CXX)
+
+set(LUS_APPLE_MOBILE OFF)
+if(CMAKE_SYSTEM_NAME MATCHES "^(iOS|visionOS)$")
+    set(LUS_APPLE_MOBILE ON)
+endif()
+
+if(LUS_APPLE_MOBILE)
     option(SIGN_LIBRARY "Enable xcode signing" OFF)
     option(BUNDLE_ID "Bundle ID for xcode signing" "com.example.libultraship")
     set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 endif()
 
-project(libultraship LANGUAGES C CXX)
-
-if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR LUS_APPLE_MOBILE)
+    enable_language(OBJC)
     enable_language(OBJCXX)
     set(CMAKE_OBJC_FLAGS "${CMAKE_OBJC_FLAGS} -fobjc-arc")
     set(CMAKE_OBJCXX_FLAGS "${CMAKE_OBJCXX_FLAGS} -fobjc-arc")
@@ -60,6 +66,8 @@ endif()
 
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     include(cmake/dependencies/ios.cmake)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+    include(cmake/dependencies/visionos.cmake)
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

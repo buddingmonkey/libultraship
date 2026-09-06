@@ -13,12 +13,12 @@ if (NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
     list(FILTER Source_Files__Audio EXCLUDE REGEX "audio/WasapiAudioPlayer.*")
 endif()
 
-if (NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+if (NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT LUS_APPLE_MOBILE)
     list(FILTER Source_Files__Audio EXCLUDE REGEX "audio/CoreAudioAudioPlayer.*")
 endif()
 
 # AVAudioSession setup for the iOS RemoteIO unit; macOS has no session to configure.
-if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+if (LUS_APPLE_MOBILE)
     list(APPEND Source_Files__Audio ${CMAKE_CURRENT_SOURCE_DIR}/audio/CoreAudioSession.mm)
 endif()
 
@@ -64,7 +64,7 @@ target_sources(libultraship PRIVATE ${Source_Files__Window__Gui})
 
 file(GLOB_RECURSE Source_Files__Utils RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "utils/*.cpp" "utils/*.c")
 
-if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR LUS_APPLE_MOBILE)
     list(APPEND Source_Files__Utils ${CMAKE_CURRENT_SOURCE_DIR}/utils/AppleFolderManager.mm)
 endif()
 
@@ -99,7 +99,7 @@ endif()
 
 #=================== Port ===================
 
-if (CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+if (CMAKE_SYSTEM_NAME STREQUAL "Android" OR LUS_APPLE_MOBILE)
     set(Source_Files__Port
         ${CMAKE_CURRENT_SOURCE_DIR}/port/mobile/MobileImpl.cpp
     )
