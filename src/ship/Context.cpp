@@ -3,6 +3,7 @@
 #include <cstring>
 #include <iostream>
 #include <SDL2/SDL.h>
+#include <spdlog/spdlog.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include "ship/install_config.h"
@@ -30,6 +31,9 @@
 #endif
 
 namespace Ship {
+// Constructs spdlog's registry before mContext, so it outlives every destructor below that logs.
+[[maybe_unused]] const bool gSpdlogRegistryBeforeContext = spdlog::default_logger_raw() != nullptr;
+
 std::unique_ptr<Context> Context::mContext;
 
 Context* Context::GetRawInstance() {
