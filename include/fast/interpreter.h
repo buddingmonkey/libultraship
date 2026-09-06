@@ -214,8 +214,8 @@ struct TextureCacheMapIter {
 // Everything a tile needs to name a texture, with no GPU state touched and no cache entry made.
 struct TextureBinding {
     TextureCacheKey key;
-    const uint8_t* origAddr;   // source address, after the empty-TMEM-slot fallback
-    const uint8_t* fbAddr;     // address the framebuffer-mirror lookup reads, null when replacing
+    const uint8_t* origAddr; // source address, after the empty-TMEM-slot fallback
+    const uint8_t* fbAddr;   // address the framebuffer-mirror lookup reads, null when replacing
     uint32_t tmemIndex;
     uint32_t texFlags;
     uint8_t fmt, siz;

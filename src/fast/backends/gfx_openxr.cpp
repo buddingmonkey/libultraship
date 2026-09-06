@@ -1715,8 +1715,7 @@ void GfxWindowBackendOpenXR::PlaceWindow() {
     // Along the window's own normal, which is not the line to the head once the window stands
     // upright below or above it. The apex of the frustum has to sit square behind the glass.
     const XrVector3f normal = RotateByQuaternion(mAnchorPose.orientation, { 0.0f, 0.0f, 1.0f });
-    mViewpoint = { mAnchorPose.position.x + normal.x * mWindowRadius,
-                   mAnchorPose.position.y + normal.y * mWindowRadius,
+    mViewpoint = { mAnchorPose.position.x + normal.x * mWindowRadius, mAnchorPose.position.y + normal.y * mWindowRadius,
                    mAnchorPose.position.z + normal.z * mWindowRadius };
     mAnchorValid = true;
 
