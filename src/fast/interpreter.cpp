@@ -1647,9 +1647,20 @@ void Interpreter::GfxSpMatrix(uint8_t parameters, const int32_t* addr) {
     if (parameters & mtx_projection) {
         if (parameters & mtx_load) {
             memcpy(mRsp->P_matrix, matrix, sizeof(matrix));
+#ifdef ENABLE_XR_WINDOW
+            memcpy(mXrLoadedProjection, matrix, sizeof(matrix));
+            memset(mXrProjectionPostMul, 0, sizeof(mXrProjectionPostMul));
+            for (int i = 0; i < 4; i++) {
+                mXrProjectionPostMul[i][i] = 1.0f;
+            }
+            mXrLoadedProjectionValid = true;
+#endif
             ApplyXrProjection();
         } else {
             MatrixMul(mRsp->P_matrix, matrix, mRsp->P_matrix);
+#ifdef ENABLE_XR_WINDOW
+            MatrixMul(mXrProjectionPostMul, matrix, mXrProjectionPostMul);
+#endif
         }
     } else { // G_MTX_MODELVIEW
         if ((parameters & mtx_push) && mRsp->modelview_matrix_stack_size < 11) {
@@ -1744,6 +1755,17 @@ void Interpreter::ApplyXrProjection() {
 }
 
 #ifdef ENABLE_XR_WINDOW
+void Interpreter::ReapplyXrProjection() {
+    if (!mXrLoadedProjectionValid) {
+        return;
+    }
+    memcpy(mRsp->P_matrix, mXrLoadedProjection, sizeof(mXrLoadedProjection));
+    ApplyXrProjection();
+    MatrixMul(mRsp->P_matrix, mXrProjectionPostMul, mRsp->P_matrix);
+    const int top = mRsp->modelview_matrix_stack_size > 0 ? mRsp->modelview_matrix_stack_size - 1 : 0;
+    MatrixMul(mRsp->MP_matrix, mRsp->modelview_matrix_stack[top], mRsp->P_matrix);
+}
+
 float Interpreter::XrVisibleDepth(struct LoadedVertex* const vertices[3]) const {
     float depth;
 
@@ -4454,7 +4476,14 @@ bool gfx_set_fb_handler_custom(F3DGfx** cmd0) {
 
 bool gfx_xr_flat_projection_handler_custom(F3DGfx** cmd0) {
 #ifdef ENABLE_XR_WINDOW
-    SetXrFlatProjection((*cmd0)->words.w1 != 0);
+    Interpreter* gfx = mInstance.lock().get();
+    if ((*cmd0)->words.w1 != 0) {
+        gfx->mXrFlatDepth++;
+    } else if (gfx->mXrFlatDepth > 0) {
+        gfx->mXrFlatDepth--;
+    }
+    SetXrFlatProjection(gfx->mXrFlatDepth > 0);
+    gfx->ReapplyXrProjection();
 #endif
     return false;
 }
@@ -5272,6 +5301,11 @@ void Interpreter::SpReset() {
         mShaderStack.pop();
     }
     mXrProjection = false;
+#ifdef ENABLE_XR_WINDOW
+    mXrLoadedProjectionValid = false;
+    mXrFlatDepth = 0;
+    SetXrFlatProjection(false);
+#endif
     mRsp->modelview_matrix_stack_size = 1;
     mRsp->current_num_lights = 2;
     mRsp->lights_changed = true;

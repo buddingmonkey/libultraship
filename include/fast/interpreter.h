@@ -477,6 +477,9 @@ class Interpreter {
     // in the room. The game's own view stays where it is; only the apex of the frustum moves.
     void ApplyXrProjection();
 #ifdef ENABLE_XR_WINDOW
+    // Builds the projection again from the parts the game gave it, so a mark that turns the window
+    // frustum on or off acts at once and not at the next projection load.
+    void ReapplyXrProjection();
     // Depth from the viewpoint to the nearest part of the triangle that reaches the screen. A
     // corner that misses the screen must not count: the glass would sit at it for nothing.
     float XrVisibleDepth(struct LoadedVertex* const vertices[3]) const;
@@ -611,6 +614,17 @@ class Interpreter {
     bool mXrProjection{};
     float mXrEyeZ{};
     float mXrNearPlane{};
+
+    // The projection as the game loaded it, and everything the game multiplied onto it after.
+    // ApplyXrProjection writes over P_matrix and reads a plain perspective, so the window frustum
+    // has to be built from the loaded copy and the multiplies put back on top of the result.
+    float mXrLoadedProjection[4][4]{};
+    float mXrProjectionPostMul[4][4]{};
+    bool mXrLoadedProjectionValid{};
+
+    // How many marks are open. A HUD element that marks itself can be drawn inside a pass that is
+    // marked already, and the inner mark must not end the outer one.
+    int mXrFlatDepth{};
 
     int mGameFb{};             // game_framebuffer;
     int mGameFbMsaaResolved{}; // game_framebuffer_msaa_resolved;
