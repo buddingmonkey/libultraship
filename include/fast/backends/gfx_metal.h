@@ -180,9 +180,7 @@ class GfxRenderingAPIMetal final : public GfxRenderingAPI {
     void SetupFloatingFrame();
     void RenderDrawData(ImDrawData* drawData);
     bool MetalInit(SDL_Renderer* renderer);
-    // visionOS hands over a device, a queue and a target texture, and has no drawable to present.
     bool MetalInitExternal(MTL::Device* device, MTL::CommandQueue* queue, MTL::Texture* target);
-    // Each eye draws into its own texture, so the target changes between the two passes of a frame.
     void MetalSetExternalTarget(MTL::Texture* target);
     bool MetalInitImGui();
     void SetExternalClearColor(double red, double green, double blue, double alpha);
@@ -191,7 +189,6 @@ class GfxRenderingAPIMetal final : public GfxRenderingAPI {
     bool NonUniformThreadGroupSupported();
     void SetupScreenFramebuffer(uint32_t width, uint32_t height);
     void WaitForFreeFrame();
-    void NoteGpuTime(MTL::CommandBuffer* commandBuffer);
     // Elements that only need to be setup once
     bool mExternalTarget = false;
     bool mScreenFramebufferReady = false;

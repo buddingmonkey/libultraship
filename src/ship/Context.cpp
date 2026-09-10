@@ -46,10 +46,6 @@ void Context::DestroyInstance() {
 
 Context::~Context() {
     SPDLOG_TRACE("destruct context");
-    // A context is assembled in stages -- CreateUninitializedInstance() followed by individual
-    // Init* calls -- and an early exit can destroy one before every stage has run. The extractor
-    // flow quits before GameEngine::FinishInit() reaches InitLogging(), for example, leaving
-    // mLogger null. Each member is checked rather than assumed present.
     if (mWindow != nullptr) {
         mWindow->SaveWindowToConfig();
     }
@@ -499,8 +495,6 @@ std::string Context::GetAppBundlePath() {
     return CMAKE_INSTALL_PREFIX;
 #else
 #ifdef __APPLE__
-    // On iOS this is the read-only bundle; GetAppDirectoryPath stays in Documents,
-    // so LocateFileAcrossAppDirs prefers user data and falls back to shipped assets.
     FolderManager folderManager;
     return folderManager.getMainBundlePath();
 #endif

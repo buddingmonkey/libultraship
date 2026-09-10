@@ -600,7 +600,6 @@ static uint32_t gfx_cm_to_opengl(uint32_t val) {
         case G_TX_MIRROR | G_TX_WRAP:
             return GL_MIRRORED_REPEAT;
         case G_TX_MIRROR | G_TX_CLAMP:
-            // Without GL_EXT_texture_mirror_clamp_to_edge the enum is invalid and the previous wrap mode stays.
             return sHasMirrorClampToEdge ? GL_MIRROR_CLAMP_TO_EDGE : GL_MIRRORED_REPEAT;
         case G_TX_NOMIRROR | G_TX_WRAP:
             return GL_REPEAT;
@@ -948,8 +947,6 @@ void GfxRenderingAPIOGL::SelectTextureFb(int fb_id) {
     if (texId >= textures.size()) {
         textures.resize((size_t)texId + 1);
     }
-    // The color buffer never goes through UploadTexture, so give it the size the three-point
-    // filter reads. Zero there samples one texel and paints the whole surface with it.
     textures[texId].width = mFrameBuffers[fb_id].width;
     textures[texId].height = mFrameBuffers[fb_id].height;
     SelectTexture(tile, texId);
@@ -970,11 +967,8 @@ void GfxRenderingAPIOGL::CopyFramebuffer(int fb_dst_id, int fb_src_id, int srcX0
         glDisable(GL_SCISSOR_TEST);
     }
 
-    // A multisampled source only supports an equal, unflipped blit, so resolve it first and copy
-    // from the resolved buffer. A flipped or scaled resolve is an error the driver may enforce.
-    if (src.msaa_level > 1) {
-        // The resolve moves the samples, not the rows, so the copy keeps the orientation of the
-        // buffer that was drawn, not the flag on the buffer it lands in.
+    if (src.msaa_level > 1 &&
+        ((srcX1 - srcX0) != (dstX1 - dstX0) || (srcY1 - srcY0) != (dstY1 - dstY0) || src.invertY != dst.invertY)) {
         const bool src_invertY = src.invertY;
 
         // Start with the main buffer (0) as the msaa resolved buffer

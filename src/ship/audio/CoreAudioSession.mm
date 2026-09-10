@@ -9,29 +9,15 @@
 namespace Ship {
 
 namespace {
-/**
- * Guards the handlers below. Deliberately held while a handler runs so that
- * StopIOSAudioSessionObservers() cannot return until the handler has finished -- see the
- * lifetime contract in CoreAudioSession.h.
- */
 std::mutex gHandlerMutex;
 IOSAudioSessionHandlers gHandlers;
 NSMutableArray* gObserverTokens = nil;
 
-/**
- * @brief Returns a loggable string for an NSError, tolerating a nil error.
- *
- * Messaging nil yields nil, so a failing API that neglects to populate the out-error would
- * otherwise hand spdlog a null char pointer.
- */
 const char* ErrorText(NSError* error) {
     const char* text = error.localizedDescription.UTF8String;
     return text != nullptr ? text : "unknown error";
 }
 
-/**
- * Dispatches an AVAudioSessionInterruptionNotification to the registered handlers.
- */
 void HandleInterruptionNotification(NSNotification* notification) {
     NSNumber* rawType = notification.userInfo[AVAudioSessionInterruptionTypeKey];
     if (rawType == nil) {
@@ -60,14 +46,6 @@ void HandleInterruptionNotification(NSNotification* notification) {
     }
 }
 
-/**
- * Dispatches an AVAudioSessionRouteChangeNotification.
- *
- * Only OldDeviceUnavailable needs the player to do anything: iOS pauses the unit so that
- * unplugging headphones does not suddenly blast audio out of the speaker. The other reasons
- * (a new device appearing, a category change, the route configuring itself at startup) carry
- * on playing without help.
- */
 void HandleRouteChangeNotification(NSNotification* notification) {
     NSNumber* rawReason = notification.userInfo[AVAudioSessionRouteChangeReasonKey];
     if (rawReason == nil) {
@@ -86,9 +64,6 @@ void HandleRouteChangeNotification(NSNotification* notification) {
     }
 }
 
-/**
- * Dispatches AVAudioSessionMediaServicesWereResetNotification.
- */
 void HandleMediaServicesResetNotification(NSNotification* notification) {
     (void)notification;
 
@@ -105,15 +80,12 @@ bool ConfigureIOSAudioSession(double sampleRate) {
     AVAudioSession* session = [AVAudioSession sharedInstance];
     NSError* error = nil;
 
-    // Playback keeps game audio running with the ring/silent switch engaged, matching how
-    // the desktop ports behave. It does not mix with other apps' audio.
     if (![session setCategory:AVAudioSessionCategoryPlayback error:&error]) {
         SPDLOG_ERROR("CoreAudio: Failed to set audio session category: {}", ErrorText(error));
         return false;
     }
 
     if (![session setPreferredSampleRate:sampleRate error:&error]) {
-        // Not fatal -- the unit resamples to whatever rate the session settles on.
         SPDLOG_WARN("CoreAudio: Failed to set preferred sample rate {}: {}", sampleRate, ErrorText(error));
     }
 
@@ -168,7 +140,6 @@ void StartIOSAudioSessionObservers(IOSAudioSessionHandlers handlers) {
                                                    HandleRouteChangeNotification(notification);
                                                }]];
 
-    // Posted with no object, unlike the other two.
     [gObserverTokens addObject:[center addObserverForName:AVAudioSessionMediaServicesWereResetNotification
                                                    object:nil
                                                     queue:nil
@@ -180,8 +151,6 @@ void StartIOSAudioSessionObservers(IOSAudioSessionHandlers handlers) {
 void StopIOSAudioSessionObservers() {
     std::lock_guard<std::mutex> guard(gHandlerMutex);
 
-    // Clearing the handlers is the load-bearing part: a notification block that was already
-    // in flight when the observer was removed still runs, and finds nothing to call.
     gHandlers = IOSAudioSessionHandlers{};
 
     if (gObserverTokens != nil) {

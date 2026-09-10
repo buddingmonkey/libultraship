@@ -29,144 +29,70 @@
 
 namespace Fast {
 
-// The window hangs in front of where the user faced at start, at the range the setting asks for.
-// The default is the range the common headsets focus at, so the glass, the frame and the HUD ask
-// the eyes for the vergence the optics already ask for.
 static constexpr float WINDOW_DISTANCE_DEFAULT = 1.3f;
 static constexpr float WINDOW_DISTANCE_MIN = 0.5f;
 static constexpr float WINDOW_DISTANCE_MAX = 4.0f;
-// What a held window multiplies its reach by for each meter the hand pushes along the ray. An arm
-// pushes about half a meter and the range above is eight times over, so one stroke covers most of
-// it. It multiplies rather than adds, so the window is still fine to place close to the face and
-// still crosses the room from the far end.
 static constexpr float WINDOW_REACH_GAIN = 3.0f;
 static constexpr float WINDOW_REACH_MIN = 0.1f;
-// The half-angle the window covers across, before the game has loaded a projection to ask for its
-// own. About 61 degrees, which is what Banjo-Kazooie asks for once it runs.
 static constexpr float WINDOW_TAN_HALF_WIDTH_DEFAULT = 0.59f;
 
-// How much of the window's own width the game draws, in steps, and what it draws over the width the
-// window covers in the view.
 static constexpr float RENDER_STEPS = 16.0f;
 static constexpr float RENDER_HEADROOM = 1.2f;
 
-// The size is meters of glass, and the range does not touch it: a window pushed away keeps the
-// width it had and goes small in the eye, as everything else in the room does. Scale 1 is the width
-// the game's field of view gives at the range below, and the largest scale fills the same angle
-// from the furthest range.
 static constexpr float WINDOW_SIZE_RANGE = 0.5f;
 static constexpr float WINDOW_SCALE_MIN = 0.5f;
 static constexpr float WINDOW_SCALE_MAX = 8.0f;
-// The scale that covers the same angle at the default range as scale 1 does at the nearest one.
 static constexpr float WINDOW_SCALE_DEFAULT = WINDOW_DISTANCE_DEFAULT / WINDOW_SIZE_RANGE;
 
-// Meters of world behind the glass: the farthest thing the game draws sits this far behind the
-// window, and everything nearer sorts itself in between. The gain it makes, depth over range plus
-// depth, stays under one, so no range and no size can put more than one eye separation of parallax
-// on the glass and the eyes never diverge.
 static constexpr float DIORAMA_DEPTH_DEFAULT = 2.0f;
 static constexpr float DIORAMA_DEPTH_MIN = 0.5f;
 static constexpr float DIORAMA_DEPTH_MAX = 4.0f;
 
-// How far above or below the eyes the window can go, in radians, and where it starts to bend in to
-// face the user. Below the first figure it stands upright. The second is the end of the capsule,
-// and it is short of a quarter turn on purpose: a window that faces the user has no yaw at all
-// straight overhead.
 static constexpr float WINDOW_RISE_FLAT = 0.35f;
 static constexpr float WINDOW_RISE_MAX = 1.22f;
 
-// Game units from the viewpoint to the glass, which is also the scale: this many game units fill
-// one window distance of the room. A flat quad cannot hold anything nearer than the glass, so the
-// glass goes at the nearest thing the game drew and never deeper than the range Banjo stands at.
 static constexpr float WINDOW_DEPTH_MAX = 700.0f;
 static constexpr float WINDOW_DEPTH_MIN = 1.0f;
 
-// Seconds for the glass to come back out. Long, so it holds about the nearest of the last few
-// seconds instead of chasing the camera in and out of every corner.
 static constexpr float WINDOW_DEPTH_RELEASE = 2.0f;
 
-// The glass keeps this much clear of the nearest thing. The reading is a frame old, so without the
-// margin anything moving towards the camera crosses the glass for a frame before it moves.
 static constexpr float WINDOW_DEPTH_MARGIN = 0.9f;
 
-// The menu button, in window heights: how large it is drawn, how far above the top edge it sits,
-// and how much larger than the drawing the rectangle that takes the pinch is. A target in the air
-// needs more than its outline, and the gap is wider than the growth, so the button and the picture
-// never contest the same pinch.
 static constexpr float MENU_BUTTON_SIDE = 0.06f;
 static constexpr float MENU_BUTTON_GAP = 0.04f;
 static constexpr float MENU_BUTTON_REACH = 1.6f;
 
-// The cursor shows in a zone this many button sides wide around the button. The zone reaches down
-// past the top edge of the window, so the cursor never goes out while the hand crosses from the
-// picture to the button, which is the only place a small target is hard to find.
 static constexpr float MENU_BUTTON_ZONE = 3.0f;
 
-// The cursor, in window heights. The rest of the rectangle holds the shadow. The ring sits at this
-// much of the rectangle, which is what the ray keeps its distance from; CURSOR_FRAGMENT draws it.
 static constexpr float CURSOR_SIDE = 0.075f;
 static constexpr float CURSOR_RING = 0.32f;
 
-// The ray, in meters. A dot on its own says nothing about which hand put it there, and both hands
-// can carry one. It is a stub out of the hand rather than a line to the dot: hidden for the first
-// stretch, so it does not sit on the front of a controller, and stopped short of the dot, so it
-// never runs into the middle of it. Where the dot is nearer than the reach, the gap wins.
 static constexpr float RAY_HIDDEN = 0.06f;
 static constexpr float RAY_RAMP = 0.01f;
 static constexpr float RAY_REACH = 0.50f;
 static constexpr float RAY_GAP = 0.02f;
-// Held at the width it has at the hand, so perspective does not narrow it. What narrows it is the
-// taper, which begins this far before the far fade and takes it to this much of its width by the
-// end. Raise the first number to start the taper nearer the hand.
 static constexpr float RAY_WIDTH = 0.00125f;
 static constexpr float RAY_TAPER = 0.02f;
 static constexpr float RAY_TAPER_TO = 0.4f;
 
-// What the ray and the dot turn while the trigger is held. A color rather than more opacity: the
-// pointer hangs over passthrough as readily as over the game, and a white that is only brighter
-// says nothing against a bright picture. One definition, because two shaders read it.
 static constexpr float POINTER_IDLE[3] = { 1.0f, 1.0f, 1.0f };
 static constexpr float POINTER_HELD[3] = { 0.20f, 0.55f, 1.0f };
 
-// The move bar, in window widths and window heights: how wide and how tall it is drawn, how far
-// below the bottom edge it hangs, and how much taller than the drawing the rectangle that takes the
-// pinch is. A bar that thin needs the extra height to be reachable, and the gap is wider than the
-// growth, so the bar and the picture never contest the same pinch.
 static constexpr float MOVE_BAR_WIDTH = 0.22f;
 static constexpr float MOVE_BAR_HEIGHT = 0.022f;
 static constexpr float MOVE_BAR_GAP = 0.035f;
 static constexpr float MOVE_BAR_REACH = 2.6f;
 
-// The corner handle, in window heights: how large the drawing is, and how far outside the corner
-// the pinch reaches. The target is the part of that square outside the picture, so a pinch near a
-// corner of the game view still belongs to the game.
 static constexpr float CORNER_SIDE = 0.16f;
 static constexpr float CORNER_ZONE = 0.11f;
 
-// The handle's arc turns about a center this far inside the corner, in corner sides: the RADIUS
-// less the GAP of the shader below. The picture rounds onto the same center, so the arc the handle
-// draws follows the corner it takes hold of, a constant gap outside it.
 static constexpr float CORNER_ARC_CENTER = 0.155f;
 
-// How far in from its edge the picture fades out, in window heights, before the softness setting,
-// and the most that setting can multiply it by.
 static constexpr float WINDOW_FEATHER = 0.012f;
 static constexpr float EDGE_SOFTNESS_MAX = 3.0f;
 
-// Each eye looks through the window at its own angle, so at a side edge one eye sees a sliver of
-// the world the other cannot. That is what a real window does, and no mask removes it. What makes
-// it hard to look at is that the edge stands at the depth of the nearest thing behind it, so it is
-// not clearly in front of what it cuts. The cure is the floating window of stereo film: each eye
-// gives up its own side edge, which puts crossed parallax on it and floats the frame towards the
-// viewer. The sliver is then plainly behind a near edge, which the eyes read as ordinary occlusion.
-//
-// The crop is this fraction of the eye separation, so it holds its depth whoever wears the headset.
-// One puts the frame at half the range of the glass, which is far more than film ever uses.
 static constexpr float EDGE_FLOAT_MAX = 1.0f;
 
-// Radians of turn in a new LOCAL origin below which it reads as the system keeping the space near
-// the user rather than the user asking for a recenter. A gesture made while facing the old front
-// falls under it, and costs nothing: the window is already there.
 static constexpr float RECENTER_YAW_MIN = 0.035f;
 
 static float sWindowDistance = WINDOW_DISTANCE_DEFAULT;
@@ -289,8 +215,6 @@ bool GfxWindowBackendOpenXR::StartSession() {
     if (trackables) {
         enabled.push_back(XR_ANDROID_TRACKABLES_EXTENSION_NAME);
     }
-    // Horizon OS offers no ALPHA_BLEND environment on a stereo view, so the room can only come
-    // from a passthrough layer under the frame.
     const bool passthrough = HasExtension(extensions, XR_FB_PASSTHROUGH_EXTENSION_NAME);
     if (passthrough) {
         enabled.push_back(XR_FB_PASSTHROUGH_EXTENSION_NAME);
@@ -356,8 +280,7 @@ bool GfxWindowBackendOpenXR::StartSession() {
         return false;
     }
 
-    // LOCAL on Android XR follows the head position, so nothing put in it stands still in the
-    // room. UNBOUNDED is the space that does.
+    // LOCAL on Android XR follows the head position; UNBOUNDED is the space that stands still.
     XrReferenceSpaceCreateInfo spaceInfo{ XR_TYPE_REFERENCE_SPACE_CREATE_INFO };
     spaceInfo.referenceSpaceType =
         unbounded ? XR_REFERENCE_SPACE_TYPE_UNBOUNDED_ANDROID : XR_REFERENCE_SPACE_TYPE_LOCAL;
@@ -371,8 +294,6 @@ bool GfxWindowBackendOpenXR::StartSession() {
     }
     mSpaceType = spaceInfo.referenceSpaceType;
 
-    // The recenter gesture re-origins LOCAL, which the window does not hang in. PollLocalSpace
-    // locates this one every frame, and that is what makes the runtime announce the gesture.
     if (mSpaceType != XR_REFERENCE_SPACE_TYPE_LOCAL) {
         XrReferenceSpaceCreateInfo localInfo{ XR_TYPE_REFERENCE_SPACE_CREATE_INFO };
         localInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
@@ -389,8 +310,6 @@ bool GfxWindowBackendOpenXR::StartSession() {
     __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "reference space %s",
                         spaceInfo.referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL ? "LOCAL" : "UNBOUNDED");
 
-    // Alpha blend puts the room behind the quad. Opaque fills everything the quad does not cover
-    // with black, which reads as a screen in a void.
     uint32_t blendModeCount = 0;
     if (!Failed(mInstance,
                 xrEnumerateEnvironmentBlendModes(mInstance, mSystemId, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0,
@@ -425,10 +344,7 @@ bool GfxWindowBackendOpenXR::StartSession() {
                "xrEnumerateSwapchainFormats")) {
         return false;
     }
-    // The game draws display-referred color. A linear swapchain makes the runtime encode it to
-    // sRGB on the way to the display; an sRGB one makes the blit encode it. Either washes the
-    // picture out. The fix is an sRGB swapchain, which the runtime reads correctly, with the write
-    // conversion turned off so the blit copies the bytes as they are.
+    // The swapchain is sRGB and the blit's write conversion is off, or the color is encoded twice.
     const char* glExtensions = (const char*)glGetString(GL_EXTENSIONS);
     mSrgbWriteControl = glExtensions != nullptr && strstr(glExtensions, "GL_EXT_sRGB_write_control") != nullptr;
 
@@ -497,8 +413,6 @@ bool GfxWindowBackendOpenXR::StartSession() {
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    // The frame the game gives back until the first head pose says how much of the view the window
-    // covers. SizeRender shrinks it as soon as it can.
     CreateGameTargets(mGameWidth, mGameHeight);
 
     if (!StartPlacementPass()) {
@@ -508,10 +422,6 @@ bool GfxWindowBackendOpenXR::StartSession() {
     mWindowRadius = sWindowDistance;
     mWindowScale = sWindowScale;
     SizeWindow();
-
-    for (XrView& view : mViews) {
-        view = { XR_TYPE_VIEW };
-    }
 
     if (refreshRate) {
         StartRefreshRates();
@@ -531,6 +441,11 @@ void GfxWindowBackendOpenXR::CreateGameTargets(uint32_t width, uint32_t height) 
     mTexWidth = width < 1 ? 1 : width;
     mTexHeight = height < 1 ? 1 : height;
 
+    GLint texture = 0;
+    GLint framebuffer = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &framebuffer);
+
     for (uint32_t view = 0; view < VIEW_COUNT; view++) {
         if (mGameFbo[view] != 0) {
             glDeleteFramebuffers(1, &mGameFbo[view]);
@@ -549,8 +464,8 @@ void GfxWindowBackendOpenXR::CreateGameTargets(uint32_t width, uint32_t height) 
         glBindFramebuffer(GL_FRAMEBUFFER, mGameFbo[view]);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mGameTex[view], 0);
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)framebuffer);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)texture);
 }
 
 void GfxWindowBackendOpenXR::StartPassthrough() {
@@ -589,8 +504,8 @@ void GfxWindowBackendOpenXR::StartPassthrough() {
         return;
     }
 
-    start(mPassthrough);
-    resume(mPassthroughLayer);
+    Failed(mInstance, start(mPassthrough), "xrPassthroughStartFB");
+    Failed(mInstance, resume(mPassthroughLayer), "xrPassthroughLayerResumeFB");
     __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "the room comes from a passthrough layer");
 }
 
@@ -645,9 +560,6 @@ bool GfxWindowBackendOpenXR::SetRefreshRate(float rate) {
     return true;
 }
 
-// Horizon OS puts the panel back to its own rate at the end of the launch transition, which lands
-// after the one request the game makes. Ask again whenever the rate is not the one asked for, a few
-// times, so a runtime that simply refuses the rate is not argued with for the whole run.
 void GfxWindowBackendOpenXR::HoldRefreshRate() {
     if (mWantedRate <= 0.0f || mRequestRefreshRate == nullptr || fabsf(mRefreshRate - mWantedRate) < 0.5f ||
         mRateRetries >= 4) {
@@ -660,8 +572,6 @@ void GfxWindowBackendOpenXR::HoldRefreshRate() {
 }
 
 void GfxWindowBackendOpenXR::GetActiveWindowRefreshRate(uint32_t* refreshRate) {
-    // SDL reports the panel mode the 2D window was made in, which is not what the compositor runs
-    // the headset at once the app asks for a rate.
     if (mActive && mRefreshRate > 0.0f) {
         *refreshRate = (uint32_t)lroundf(mRefreshRate);
         return;
@@ -677,8 +587,10 @@ bool GfxWindowBackendOpenXR::StartActions(bool handInteraction) {
         return false;
     }
 
-    xrStringToPath(mInstance, "/user/hand/left", &mHandPath[0]);
-    xrStringToPath(mInstance, "/user/hand/right", &mHandPath[1]);
+    if (Failed(mInstance, xrStringToPath(mInstance, "/user/hand/left", &mHandPath[0]), "xrStringToPath(left)") ||
+        Failed(mInstance, xrStringToPath(mInstance, "/user/hand/right", &mHandPath[1]), "xrStringToPath(right)")) {
+        return false;
+    }
 
     XrActionCreateInfo aimInfo{ XR_TYPE_ACTION_CREATE_INFO };
     snprintf(aimInfo.actionName, XR_MAX_ACTION_NAME_SIZE, "aim");
@@ -724,7 +636,8 @@ bool GfxWindowBackendOpenXR::StartActions(bool handInteraction) {
         suggestion.interactionProfile = profilePath;
         suggestion.countSuggestedBindings = 4;
         suggestion.suggestedBindings = bindings;
-        xrSuggestInteractionProfileBindings(mInstance, &suggestion);
+        Failed(mInstance, xrSuggestInteractionProfileBindings(mInstance, &suggestion),
+               "xrSuggestInteractionProfileBindings");
     };
 
     suggest("/interaction_profiles/khr/simple_controller", "/user/hand/left/input/select/click",
@@ -757,9 +670,6 @@ bool GfxWindowBackendOpenXR::StartActions(bool handInteraction) {
 static Fast::XrPadState sPad = {};
 static bool sPadValid = false;
 
-// The game pad, which on Horizon OS can only come through here: a Touch controller reaches no
-// Android input device, so SDL never sees one. The whole Touch profile is suggested in this one
-// call, aim and select included, because a second call for the same profile replaces the first.
 bool GfxWindowBackendOpenXR::StartPadActions() {
     auto make = [&](const char* name, const char* localized, XrActionType type, XrAction* action) {
         XrActionCreateInfo info{ XR_TYPE_ACTION_CREATE_INFO };
@@ -817,7 +727,8 @@ bool GfxWindowBackendOpenXR::StartPadActions() {
     suggestion.interactionProfile = profile;
     suggestion.countSuggestedBindings = (uint32_t)bindings.size();
     suggestion.suggestedBindings = bindings.data();
-    xrSuggestInteractionProfileBindings(mInstance, &suggestion);
+    Failed(mInstance, xrSuggestInteractionProfileBindings(mInstance, &suggestion),
+           "xrSuggestInteractionProfileBindings");
     return true;
 }
 
@@ -914,13 +825,10 @@ static float sPointerU = 0.0f;
 static float sPointerV = 0.0f;
 static bool sMenuHover = false;
 static bool sMenuHeld = false;
-// Where the cursor is drawn, in meters from the middle of the window, on the plane it hangs in.
 static bool sCursorValid = false;
 static float sCursorX = 0.0f;
 static float sCursorY = 0.0f;
 
-// Each hand that reaches the window, whether or not it is the one the window answers. A dot alone
-// says nothing about which hand put it there, so the ray back to the hand is drawn with it.
 static bool sHandValid[2] = { false, false };
 static XrVector3f sHandFrom[2] = {};
 static float sHandX[2] = { 0.0f, 0.0f };
@@ -1032,9 +940,6 @@ XrVector3f GfxWindowBackendOpenXR::HeadPosition() const {
     return { 0.5f * (left.x + right.x), 0.5f * (left.y + right.y), 0.5f * (left.z + right.z) };
 }
 
-// Where an aim ray meets the plane the window hangs in, in meters from the middle of it. The button,
-// the move bar and the corner handle are all on that plane, so one intersection answers for them
-// all.
 bool GfxWindowBackendOpenXR::PlaneHit(const XrPosef& pose, float* planeX, float* planeY) const {
     const XrVector3f origin = ToWindowAxes(pose.position);
     const XrVector3f aim = RotateByQuaternion(pose.orientation, { 0.0f, 0.0f, -1.0f });
@@ -1051,8 +956,6 @@ bool GfxWindowBackendOpenXR::PlaneHit(const XrPosef& pose, float* planeX, float*
     return true;
 }
 
-// How far out along the window's diagonal a point on the plane sits. The aspect is locked, so the
-// direction of that diagonal does not change with the size and this one number is the whole resize.
 float GfxWindowBackendOpenXR::DiagonalReach(float planeX, float planeY) const {
     const float halfWidth = 0.5f * mWindowWidth;
     const float halfHeight = 0.5f * mWindowHeight;
@@ -1080,7 +983,6 @@ float GfxWindowBackendOpenXR::WindowCorner() const {
     return mWindowHeight * CORNER_SIDE * CORNER_ARC_CENTER;
 }
 
-// The side edge one eye gives up, in window heights, which is what the shader measures in.
 float GfxWindowBackendOpenXR::EdgeFloat() const {
     if (mViewCount != VIEW_COUNT || !mViewsValid || mWindowHeight <= 0.0f) {
         return 0.0f;
@@ -1093,8 +995,6 @@ bool GfxWindowBackendOpenXR::OnBar(float planeX, float planeY) const {
     return fabsf(planeX) <= 0.625f * BarWidth() && fabsf(planeY - BarDrop()) <= 0.5f * BarHeight() * MOVE_BAR_REACH;
 }
 
-// The corner outside the picture, never the picture inside it. The picture is a rounded rectangle,
-// so the handle takes the corner the rounding left. Bit 0 is the right side, bit 1 the top.
 int GfxWindowBackendOpenXR::OnCorner(float planeX, float planeY) const {
     const float zone = mWindowHeight * CORNER_ZONE;
     const float halfWidth = 0.5f * mWindowWidth;
@@ -1111,8 +1011,6 @@ int GfxWindowBackendOpenXR::OnCorner(float planeX, float planeY) const {
     return (planeX > 0.0f ? 1 : 0) | (planeY > 0.0f ? 2 : 0);
 }
 
-// A grab re-bases the window onto the head as it is now, so the range and the size it leaves are
-// the ones the user sees from where they stand.
 void GfxWindowBackendOpenXR::StartGrab(Grab kind, int hand, const XrPosef& handPose, float planeX, float planeY) {
     const XrVector3f head = HeadPosition();
     const XrVector3f reach = Subtract(mAnchorPose.position, head);
@@ -1128,9 +1026,6 @@ void GfxWindowBackendOpenXR::StartGrab(Grab kind, int hand, const XrPosef& handP
         mCornerHover = -1;
     }
 
-    // The head has moved since the window was placed, so the range the user pulls against is the
-    // one from where they stand now. The size is glass and holds through that, and the window turns
-    // to face the user because that is what a window taken hold of does.
     mGrabScale = mWindowScale;
     mPlacementHead = head;
     mWindowDir = { reach.x / radius, reach.y / radius, reach.z / radius };
@@ -1139,23 +1034,18 @@ void GfxWindowBackendOpenXR::StartGrab(Grab kind, int hand, const XrPosef& handP
     sWindowDistance = mWindowRadius;
     sWindowScale = mWindowScale;
 
-    // Where the window stands in the frame of the ray that took it, read after the placement so a
-    // window the clamps moved does not carry the difference into the drag. The reach along that
-    // direction is held apart from it, because the push works on the reach alone.
     const XrVector3f offset = Subtract(mAnchorPose.position, handPose.position);
     const float held = fmaxf(Length(offset), WINDOW_REACH_MIN);
     mGrabWindowOffset = RotateInverse(handPose.orientation, { offset.x / held, offset.y / held, offset.z / held });
     mGrabWindowReach = held;
     mGrabRayFrom = handPose.position;
 
-    // An anchor is a fixed pose and cannot follow the hand. A new one is made where the pinch lifts.
     if (mAnchorSpace != XR_NULL_HANDLE) {
         xrDestroySpace(mAnchorSpace);
         mAnchorSpace = XR_NULL_HANDLE;
     }
 }
 
-// Answers false when the pinch has lifted, which is what leaves the window where the hand left it.
 bool GfxWindowBackendOpenXR::UpdateGrab(XrTime displayTime) {
     XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
     getInfo.action = mSelectAction;
@@ -1171,9 +1061,6 @@ bool GfxWindowBackendOpenXR::UpdateGrab(XrTime displayTime) {
     }
 
     if (mGrab == Grab::Move) {
-        // The window is fixed to the ray, so a turn of the wrist carries it across the room. A
-        // push along the ray takes it out and a pull brings it in, and the reach is multiplied
-        // rather than moved: an arm is half a meter long and the range is three and a half.
         const XrVector3f aim = RotateByQuaternion(location.pose.orientation, { 0.0f, 0.0f, -1.0f });
         const XrVector3f step = Subtract(location.pose.position, mGrabRayFrom);
         mGrabRayFrom = location.pose.position;
@@ -1190,12 +1077,9 @@ bool GfxWindowBackendOpenXR::UpdateGrab(XrTime displayTime) {
             PlaceWindow();
             sWindowDistance = mWindowRadius;
             sWindowScale = mWindowScale;
-            // Take the reach back off the window the range clamp left. Without this a push into
-            // the clamp winds the reach up, and the pull back spends that before it moves.
             mGrabWindowReach = fmaxf(Length(Subtract(mAnchorPose.position, location.pose.position)), WINDOW_REACH_MIN);
         }
     } else {
-        // The plane does not move under a resize, so the corner stays under the ray that took it.
         float planeX = 0.0f;
         float planeY = 0.0f;
         if (PlaneHit(location.pose, &planeX, &planeY)) {
@@ -1209,8 +1093,6 @@ bool GfxWindowBackendOpenXR::UpdateGrab(XrTime displayTime) {
         }
     }
 
-    // The hand is on the handle, and the handle lights to say so. A cursor as well is one mark too
-    // many, and under a move it would have to leave the point the user took hold of.
     sCursorValid = false;
     return true;
 }
@@ -1227,13 +1109,29 @@ void GfxWindowBackendOpenXR::EndGrab() {
                         mWindowScale, sWindowAngularWidth * 180.0f / (float)M_PI);
 }
 
+static void PushPointerButton(bool down, int x, int y) {
+    SDL_Event button{};
+    button.type = down ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
+    button.button.windowID = SDL_GetWindowID(SDL_GL_GetCurrentWindow());
+    button.button.timestamp = SDL_GetTicks();
+    button.button.button = SDL_BUTTON_LEFT;
+    button.button.state = down ? SDL_PRESSED : SDL_RELEASED;
+    button.button.clicks = 1;
+    button.button.x = x;
+    button.button.y = y;
+    SDL_PushEvent(&button);
+}
+
 void GfxWindowBackendOpenXR::ClearPointer() {
     sMenuHover = false;
     sMenuHeld = false;
     sCursorValid = false;
     sHandValid[0] = false;
     sHandValid[1] = false;
-    // A session that stops answering ends the grab where the window stands, anchor and all.
+    if (sPointerDown) {
+        sPointerDown = false;
+        PushPointerButton(false, (int)(sPointerU * (float)mTexWidth), (int)(sPointerV * (float)mTexHeight));
+    }
     if (mGrab != Grab::None && mAnchorValid) {
         EndGrab();
     }
@@ -1257,7 +1155,6 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         return;
     }
 
-    // The pad answers wherever the window is, so it is read before the window is asked about.
     PumpPad();
 
     if (!mAnchorValid) {
@@ -1265,8 +1162,6 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         return;
     }
 
-    // A held handle owns that hand until it lifts, and nothing else on the window answers. The
-    // handle lights to say so, and a dot left over the point the hand took would only follow it.
     if (mGrab != Grab::None) {
         if (UpdateGrab(displayTime)) {
             sHandValid[0] = false;
@@ -1302,8 +1197,6 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
     const float zoneHalf = 0.5f * MenuZone();
     const float menuRise = MenuRise();
 
-    // Both hands are read before any of them is answered, because both are drawn: each one that
-    // reaches the window carries a dot, and a ray back to the hand it came from.
     struct HandAim {
         bool onPlane;
         XrPosef pose;
@@ -1350,8 +1243,6 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
             continue;
         }
 
-        // Both hands are drawn, so both are marked here. Only one of them answers: a pinch takes
-        // the window and the hand that took it keeps it, which is what answered says.
         sHandValid[hand] = true;
         sHandFrom[hand] = aims[hand].pose.position;
         sHandX[hand] = planeX;
@@ -1361,7 +1252,6 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
             continue;
         }
 
-        // A pinching hand wins; otherwise the first hand on the quad drives the cursor.
         if (!cursor || pinching) {
             cursor = true;
             cursorX = planeX;
@@ -1398,8 +1288,6 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
     }
 
 #ifdef ENABLE_DEBUG_TOOLS
-    // A pointer put on the window from the host, so a prompt can be answered with no hand in the
-    // headset. It takes the place of a hand on the picture and leaves the handles alone.
     float debugU = 0.0f;
     float debugV = 0.0f;
     bool debugDown = false;
@@ -1412,8 +1300,6 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         cursorX = (u - 0.5f) * mWindowWidth;
         cursorY = (0.5f - v) * mWindowHeight;
 
-        // A hand is invented for it, part of the way to the window and low and to the right, so
-        // that what a hand draws can be looked at from the host as well.
         if (mViewsValid) {
             const XrVector3f head = HeadPosition();
             const XrVector3f right = RotateByQuaternion(mAnchorPose.orientation, { 1.0f, 0.0f, 0.0f });
@@ -1434,8 +1320,6 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
     mBarHover = barHit;
     mCornerHover = cornerHit;
 
-    // A pinch on a handle takes the window, but only if it did not start on the picture: a finger
-    // already down belongs to the game until it lifts.
     if (!wasDown && !sMenuHeld && mViewsValid && pinchHand >= 0 && (barDown || cornerDown)) {
         StartGrab(barDown ? Grab::Move : Grab::Resize, pinchHand, pinchPose, pinchX, pinchY);
         if (mGrab != Grab::None) {
@@ -1449,9 +1333,6 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         }
     }
 
-    // A pinch that lands on the button holds it until it lifts. It works on the lift, so a pinch
-    // that leaves the button before it opens does nothing, and one that arrives from the picture
-    // already closed never takes it.
     const bool holding = menuHit && menuDown;
     if (sMenuHeld && !holding) {
         if (menuHit) {
@@ -1480,19 +1361,12 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         return;
     }
 
-    // The pad reads SDL's touch device list, which SDL_PushEvent cannot reach, so the pinch goes
-    // in there directly. ImGui reads mouse events, which is what SDL synthesizes from a touch on a
-    // phone, so the menu is driven the same way here.
     const int x = (int)(sPointerU * (float)mTexWidth);
     const int y = (int)(sPointerV * (float)mTexHeight);
 
-    // ImGui's SDL backend drops an event whose window it does not know, and a pushed event does
-    // not carry one by itself.
-    const Uint32 windowId = SDL_GetWindowID(SDL_GL_GetCurrentWindow());
-
     SDL_Event motion{};
     motion.type = SDL_MOUSEMOTION;
-    motion.motion.windowID = windowId;
+    motion.motion.windowID = SDL_GetWindowID(SDL_GL_GetCurrentWindow());
     motion.motion.timestamp = SDL_GetTicks();
     motion.motion.state = down ? SDL_BUTTON_LMASK : 0;
     motion.motion.x = x;
@@ -1500,16 +1374,7 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
     SDL_PushEvent(&motion);
 
     if (down != wasDown) {
-        SDL_Event button{};
-        button.type = down ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
-        button.button.windowID = windowId;
-        button.button.timestamp = SDL_GetTicks();
-        button.button.button = SDL_BUTTON_LEFT;
-        button.button.state = down ? SDL_PRESSED : SDL_RELEASED;
-        button.button.clicks = 1;
-        button.button.x = x;
-        button.button.y = y;
-        SDL_PushEvent(&button);
+        PushPointerButton(down, x, y);
     }
     sPointerDown = down;
 }
@@ -1519,7 +1384,11 @@ void GfxWindowBackendOpenXR::PollEvents() {
     while (true) {
         event = { XR_TYPE_EVENT_DATA_BUFFER };
         const XrResult result = xrPollEvent(mInstance, &event);
-        if (result != XR_SUCCESS) {
+        if (result == XR_EVENT_UNAVAILABLE) {
+            return;
+        }
+        if (Failed(mInstance, result, "xrPollEvent")) {
+            Teardown();
             return;
         }
         if (event.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
@@ -1529,21 +1398,18 @@ void GfxWindowBackendOpenXR::PollEvents() {
         } else if (event.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
             HandleReferenceSpaceChange(*(const XrEventDataReferenceSpaceChangePending*)&event);
         } else if (event.type == XR_TYPE_EVENT_DATA_DISPLAY_REFRESH_RATE_CHANGED_FB) {
-            // The runtime can refuse or later drop the rate the game asked for, and the sub-frame
-            // count follows whatever it reports here.
             mRefreshRate = ((const XrEventDataDisplayRefreshRateChangedFB*)&event)->toDisplayRefreshRate;
             __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "display now runs at %.0f Hz", mRefreshRate);
             HoldRefreshRate();
         }
+        if (!mActive) {
+            Teardown();
+            return;
+        }
     }
 }
 
-// The recenter gesture re-origins LOCAL, not the space the window hangs in. Android XR also
-// re-origins LOCAL by itself to keep it near the user, and the window must not chase that; only
-// the gesture turns the origin to face where the user faces.
 void GfxWindowBackendOpenXR::HandleReferenceSpaceChange(const XrEventDataReferenceSpaceChangePending& change) {
-    // Without an anchor the window pose is held in the coordinates of its own space, so a re-origin
-    // of that space carries the window away with it. An anchor holds the window through one.
     bool wanted = change.referenceSpaceType == mSpaceType && mAnchorSpace == XR_NULL_HANDLE;
     float turn = 0.0f;
     if (change.referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL && change.poseValid == XR_TRUE) {
@@ -1555,15 +1421,12 @@ void GfxWindowBackendOpenXR::HandleReferenceSpaceChange(const XrEventDataReferen
     }
 
     sRecenterWanted = true;
-    // The new origin only takes effect for a locate at or after this time, so a recenter run any
-    // earlier would place the window with poses read in the old one.
     mRecenterAfter = change.changeTime;
     __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "space %d turned %.0f degrees, window re-fronted",
                         (int)change.referenceSpaceType, turn * 180.0f / (float)M_PI);
 }
 
-// Android XR announces a re-origin of a space only while the application locates that space, so
-// this call is what carries the recenter gesture. Nothing reads the result.
+// Nothing reads the result: locating the space is what makes Android XR announce a recenter gesture.
 void GfxWindowBackendOpenXR::PollLocalSpace() {
     if (mLocalSpace == XR_NULL_HANDLE) {
         return;
@@ -1609,32 +1472,6 @@ void GfxWindowBackendOpenXR::LocateViews() {
     mViewsValid = count == VIEW_COUNT && (viewState.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0;
 }
 
-// Where the window hangs comes from four numbers: the head it was placed around, the direction from
-// that head to its middle, the range, and what the corner handles left. The range alone puts the
-// apex of the game's frustum behind the glass, which holds the framing at every range: the picture
-// is the one the game drew, and the range says how large the diorama behind it is in the room. The
-// size is glass only. A larger window shows the same diorama over more of the eye, and a further
-// range shows a larger one over less of it.
-//
-// The window hangs on a capsule around the user, not a sphere. It faces the user in the horizontal
-// and stands upright through the middle of the range, so it can go up and down with no tilt at all.
-// It bends in only near the ends, where an upright panel is read at too flat an angle. The bend
-// stops short of straight up, because the yaw of a window that faces the user has no answer there.
-// The window takes the shape of the field of view it shows, and the size scale gives it its width
-// in meters. That field of view is the game's, once the game has loaded a projection to ask for
-// one. Before then —
-// the extractor, the ROM prompt, the menu over them — nothing has asked, and the window takes the
-// shape of the picture at a plain angle. It cannot take the shape of the swapchain: an eye image is
-// about as tall as it is wide, and a landscape picture drawn on a rectangle that shape is squeezed
-// to about half its width.
-// The game is drawn once per eye and then sampled onto a window that covers part of the view, so
-// every pixel it draws past what that window covers is thrown away. The waste is small where the
-// headset hands the app a panel the size of one eye and large where it hands it the whole binocular
-// panel: Quest gives the game 4128 pixels across for a window that covers about a thousand of them,
-// which is sixteen times the pixels and the same multiple of the shading.
-//
-// The step is coarse so that a hand on a corner handle does not rebuild the targets every frame,
-// and the headroom is for a head that leans in towards the window, which widens it in the view.
 void GfxWindowBackendOpenXR::SizeRender() {
     if (!mViewsValid || mSwapchainWidth == 0 || mGameWidth == 0 || sWindowAngularWidth <= 0.0f) {
         return;
@@ -1657,15 +1494,6 @@ void GfxWindowBackendOpenXR::SizeRender() {
                         mTexWidth, mTexHeight, covered);
 }
 
-// A headset hands the app a panel far larger than the part of the view the window covers: Quest
-// gives 4128 pixels across for a window worth about 1300 of them. SizeRender already draws the game
-// at the smaller size, but the window size the renderer and the menu read stayed the panel, so the
-// picture was scaled up to the panel to be composited and scaled back down to be placed. Report the
-// size the eye target really is, and both steps become a copy.
-//
-// Everything downstream is in these units: the menu layout, the menu scale, which is an angle over
-// a width, and the pointer, which pushes a mouse position. SizeRender still divides by the panel,
-// so nothing here feeds back into the size it picks.
 void GfxWindowBackendOpenXR::GetDimensions(uint32_t* width, uint32_t* height, int32_t* posX, int32_t* posY) {
     GfxWindowBackendSDL2::GetDimensions(width, height, posX, posY);
     if (mTexWidth > 0 && mTexHeight > 0) {
@@ -1700,7 +1528,6 @@ void GfxWindowBackendOpenXR::PlaceWindow() {
     const float rise = Clamp(atan2f(mWindowDir.y, across), -WINDOW_RISE_MAX, WINDOW_RISE_MAX);
     mWindowDir = { sinf(azimuth) * cosf(rise), sinf(rise), cosf(azimuth) * cosf(rise) };
 
-    // Yaw and pitch. A window that took a roll as well would hang askew in the room.
     const float pitch = rise * Smoothstep(WINDOW_RISE_FLAT, WINDOW_RISE_MAX, fabsf(rise));
     const float yaw = atan2f(-mWindowDir.x, -mWindowDir.z);
     const float cy = cosf(0.5f * yaw);
@@ -1712,24 +1539,16 @@ void GfxWindowBackendOpenXR::PlaceWindow() {
                              mPlacementHead.y + mWindowDir.y * mWindowRadius,
                              mPlacementHead.z + mWindowDir.z * mWindowRadius };
 
-    // Along the window's own normal, which is not the line to the head once the window stands
-    // upright below or above it. The apex of the frustum has to sit square behind the glass.
     const XrVector3f normal = RotateByQuaternion(mAnchorPose.orientation, { 0.0f, 0.0f, 1.0f });
     mViewpoint = { mAnchorPose.position.x + normal.x * mWindowRadius, mAnchorPose.position.y + normal.y * mWindowRadius,
                    mAnchorPose.position.z + normal.z * mWindowRadius };
     mAnchorValid = true;
 
-    // A window put low stands upright, so its apex holds the height of the glass and the head is
-    // above it: the picture is then drawn as one looked down into. Take the rise the window is
-    // placed with out of the parallax, and the content faces the user as it is put there. Only
-    // what the head does after this puts any rise back, which is what a peek over the sill is.
     if (mViewsValid) {
         mParallaxRise = ToWindowAxes(HeadPosition()).y;
     }
 }
 
-// A spatial anchor holds a pose through SLAM itself, so the window stays put even when the
-// reference spaces re-origin around the user.
 void GfxWindowBackendOpenXR::AnchorHere() {
     if (mCreateAnchorSpace != nullptr) {
         if (mAnchorSpace != XR_NULL_HANDLE) {
@@ -1749,15 +1568,9 @@ void GfxWindowBackendOpenXR::AnchorHere() {
     }
 }
 
-// Puts the window where the user is looking now, upright and level. Nothing else ever placed it:
-// it used to hang off the origin of the reference space, which is wherever the headset happened to
-// be when the session opened.
 void GfxWindowBackendOpenXR::Recenter() {
-    // The head pose comes from the views already located this frame. Locating VIEW space instead
-    // reports no valid pose on Galaxy XR while the headset is worn, which silently disabled every
-    // recenter.
+    // Locating VIEW space instead reports no valid pose on Galaxy XR while the headset is worn.
     const float yaw = YawOf(mViews[0].pose.orientation);
-    // A recenter wins over a drag: it is the way back from a window put where no hand can reach it.
     mGrab = Grab::None;
     mBarHover = false;
     mCornerHover = -1;
@@ -1777,13 +1590,10 @@ void GfxWindowBackendOpenXR::Recenter() {
                         mWindowSized ? "the game's own field of view" : "the shape of the picture");
 }
 
-// A point measured from the viewpoint the window was placed for, in the window's own axes.
 XrVector3f GfxWindowBackendOpenXR::ToWindowAxes(const XrVector3f& point) const {
     return RotateInverse(mAnchorPose.orientation, Subtract(point, mViewpoint));
 }
 
-// In at once, so nothing is ever left standing in front of the window; out slowly, so one near
-// object in one frame does not throw the world back and hold it there.
 void GfxWindowBackendOpenXR::MoveGlass() {
     float target = sSceneNear * WINDOW_DEPTH_MARGIN;
     if (target > WINDOW_DEPTH_MAX) {
@@ -1801,8 +1611,6 @@ void GfxWindowBackendOpenXR::MoveGlass() {
     sSceneNear = std::numeric_limits<float>::max();
 }
 
-// The settings and the handles write the same two numbers, and the handles write them through
-// PlaceWindow, so anything that differs here came from the menu and moves the window in place.
 void GfxWindowBackendOpenXR::ApplySettings() {
     const bool ranged = sWindowDistance != mWindowRadius || sWindowScale != mWindowScale;
     if (!ranged && (mWindowSized || sViewTanHalfWidth <= 0.0f)) {
@@ -1820,9 +1628,6 @@ void GfxWindowBackendOpenXR::ApplySettings() {
                         sDioramaDepth);
 }
 
-// The rectangle the button is drawn and aimed at, the zone around it the cursor shows in, the
-// cursor itself, and how far the button sits above the middle of the window. All follow the window,
-// so they keep their size and place as the window resizes.
 float GfxWindowBackendOpenXR::MenuSide() const {
     return mWindowHeight * MENU_BUTTON_SIDE * MENU_BUTTON_REACH;
 }
@@ -1839,7 +1644,6 @@ float GfxWindowBackendOpenXR::MenuRise() const {
     return mWindowHeight * (0.5f + MENU_BUTTON_GAP + MENU_BUTTON_SIDE * 0.5f);
 }
 
-// A pose on the window plane, that many meters right of and above the middle of the window.
 XrPosef GfxWindowBackendOpenXR::PlanePose(float x, float y) const {
     const XrVector3f right = RotateByQuaternion(mAnchorPose.orientation, { 1.0f, 0.0f, 0.0f });
     const XrVector3f up = RotateByQuaternion(mAnchorPose.orientation, { 0.0f, 1.0f, 0.0f });
@@ -1855,8 +1659,6 @@ bool GfxWindowBackendOpenXR::OpenFrame() {
         return false;
     }
 #ifdef ENABLE_DEBUG_TOOLS
-    // The frame writes the picture and then one image an eye, so the request has to be taken up
-    // here rather than by whichever of them asks first.
     DebugCapture::Arm();
 #endif
 
@@ -1890,8 +1692,6 @@ bool GfxWindowBackendOpenXR::OpenFrame() {
         ApplySettings();
     }
 
-    // The anchor is the ground truth for where the window hangs. Follow it in the app space so
-    // the off-axis frustum and the pointer agree with the picture the compositor shows.
     if (mAnchorSpace != XR_NULL_HANDLE && mAnchorValid && mGrab == Grab::None) {
         XrSpaceLocation anchor{ XR_TYPE_SPACE_LOCATION };
         const XrSpaceLocationFlags needed =
@@ -1903,8 +1703,6 @@ bool GfxWindowBackendOpenXR::OpenFrame() {
             mViewpoint = { anchor.pose.position.x + normal.x * mWindowRadius,
                            anchor.pose.position.y + normal.y * mWindowRadius,
                            anchor.pose.position.z + normal.z * mWindowRadius };
-            // The head the window was placed around goes with the anchor. It is not the reverse of
-            // the normal any more: an upright window above or below the eyes does not face them.
             mPlacementHead = { anchor.pose.position.x - mWindowDir.x * mWindowRadius,
                                anchor.pose.position.y - mWindowDir.y * mWindowRadius,
                                anchor.pose.position.z - mWindowDir.z * mWindowRadius };
@@ -1914,8 +1712,6 @@ bool GfxWindowBackendOpenXR::OpenFrame() {
     PumpPointer(mDisplayTime);
     SizeRender();
 
-    // Without a head pose there is no off-axis frustum to build, so the frame falls back to one
-    // image that both eyes read, which is what 2.1 presented.
     mViewCount = (mViewsValid && sStereo) ? VIEW_COUNT : 1;
     mCurrentView = 0;
     return true;
@@ -1933,19 +1729,11 @@ void GfxWindowBackendOpenXR::BeginRenderView(uint32_t view) {
         return;
     }
 
-    // Across the glass, the eye offset converts against the glass itself — sGlassDepth game units
-    // over a window WINDOW_SIZE_RANGE * scale meters wide — so a point on the glass lands on the
-    // same spot for both eyes at any size and range. The gain then sets how deep the world reads:
-    // it compresses every disparity so the farthest thing the game draws sits sDioramaDepth meters
-    // behind the window, whatever the range and however the window is resized. Along the normal the
-    // old scale stands, so the apex of the frustum reaches the glass when the nose does and not a
-    // step before; the parallax a lean can put on the glass stays under the same gain.
     const float gain = sDioramaDepth / (mWindowRadius + sDioramaDepth);
     const float acrossGlass = gain * sGlassDepth / (WINDOW_SIZE_RANGE * mWindowScale);
     const float alongNormal = sGlassDepth / mWindowRadius;
     const XrVector3f& left = mViews[0].pose.position;
     const XrVector3f& right = mViews[1].pose.position;
-    // One image for both eyes is drawn from between them, not from either one.
     const bool mono = mViewCount != VIEW_COUNT;
     const XrVector3f& eye = mViews[view].pose.position;
     const XrVector3f world =
@@ -2004,12 +1792,6 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
         "    vUv = c + 0.5;\n"
         "    gl_Position = uMvp * vec4(c, 0.0, 1.0);\n"
         "}\n";
-    // The picture is a rounded rectangle that can fade out at its edge. The shape is measured in
-    // window heights, so the rounding and the fade hold their size on the glass whatever the window
-    // does. uShift takes this eye's own side edge in and leaves the other, which floats the frame:
-    // the same crop off each eye keeps the picture one width and moves only which side gives it up.
-    // The ramp is never narrower than a pixel, so the rounding stays clean with the fade at zero.
-    // The color comes out multiplied by the alpha, as the layer reads it that way.
     static const char* FRAGMENT = "#version 300 es\n"
                                   "precision highp float;\n"
                                   "uniform sampler2D uTex;\n"
@@ -2027,10 +1809,6 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
                                   "    float a = smoothstep(0.0, max(uFeather, fwidth(sd)), -sd);\n"
                                   "    oColor = vec4(texture(uTex, vUv).rgb * a, a);\n"
                                   "}\n";
-    // Three bars in a rounded square, drawn from the distance to each shape so the edges stay clean
-    // at any range. SIDE is 1 / MENU_BUTTON_REACH: the rest of the rectangle keeps its alpha at
-    // zero and is the part of the target the user cannot see. The color comes out multiplied by
-    // the alpha, as the layer and the blend both read it.
     static const char* MENU_FRAGMENT =
         "#version 300 es\n"
         "precision highp float;\n"
@@ -2060,9 +1838,6 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
         "    alpha = min(alpha * uGlow, 1.0);\n"
         "    oColor = vec4(vec3(alpha), alpha);\n"
         "}\n";
-    // A ring with a soft dark edge outside it, which is what makes the cursor hold up on a bright
-    // sky and on a black cave alike. The shadow stops at the ring: under it, it shows through the
-    // open middle and turns the white grey.
     static const char* CURSOR_FRAGMENT =
         "#version 300 es\n"
         "precision highp float;\n"
@@ -2087,9 +1862,6 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
         "    oColor = c;\n"
         "}\n";
 
-    // The ray's band is one meter across and the width is set here, from what it should be at each
-    // end. Both ends are held at the same angle, so the far one is the wider, and no matrix makes
-    // that shape.
     static const char* RAY_VERTEX =
         "#version 300 es\n"
         "uniform mat4 uMvp;\n"
@@ -2101,10 +1873,6 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
         "    gl_Position = uMvp * vec4(c.x, c.y * mix(uWidth.x, uWidth.y, vUv.x), 0.0, 1.0);\n"
         "}\n";
 
-    // The ray. uFade carries its profile in meters from the hand: nothing until x, full by y, held
-    // to z, gone by w. It comes out of nothing rather than starting at the hand, so no controller
-    // wears a line on its front, and it is gone before the dot rather than reaching the middle of
-    // it. Nothing tapers: the width is an angle and the ramps are the only thing that changes.
     static const char* RAY_FRAGMENT = "#version 300 es\n"
                                       "precision highp float;\n"
                                       "uniform vec3 uTint;\n"
@@ -2123,8 +1891,6 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
                                       "    oColor = vec4(uTint * a, a);\n"
                                       "}\n";
 
-    // The move bar. The quad is far wider than it is tall, so the shape is drawn in a space the
-    // width stretches, or the ends would be ellipses rather than half circles.
     static const char* BAR_FRAGMENT = "#version 300 es\n"
                                       "precision highp float;\n"
                                       "uniform float uGlow;\n"
@@ -2139,9 +1905,6 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
                                       "    float alpha = min((1.0 - smoothstep(-aa, aa, sd)) * uGlow, 1.0);\n"
                                       "    oColor = vec4(vec3(alpha), alpha);\n"
                                       "}\n";
-    // A quarter turn of a thick round-capped stroke, outside one corner of the picture. The quad is
-    // centerd on that corner and the picture lies towards negative x and y, so the handle never
-    // covers the game. Beyond the quarter the arc ends in its caps, which is what rounds the ends.
     static const char* CORNER_FRAGMENT =
         "#version 300 es\n"
         "precision highp float;\n"
@@ -2203,7 +1966,6 @@ bool GfxWindowBackendOpenXR::StartPlacementPass() {
     return true;
 }
 
-// Column-major 4x4, as GL wants them.
 static void MulMatrix(const float a[16], const float b[16], float out[16]) {
     for (int col = 0; col < 4; col++) {
         for (int row = 0; row < 4; row++) {
@@ -2225,13 +1987,11 @@ static void RotationFromQuaternion(const XrQuaternionf& q, float r[9]) {
     r[8] = 1.0f - 2.0f * (q.x * q.x + q.y * q.y);
 }
 
-// This eye's own frustum and pose, which everything drawn in the room goes through.
 static void EyeMatrix(const XrView& eye, float out[16]) {
     float r[9];
     RotationFromQuaternion(eye.pose.orientation, r);
     const XrVector3f& p = eye.pose.position;
 
-    // The inverse of the eye pose, which for a rotation is its transpose.
     float view[16] = {};
     for (int axis = 0; axis < 3; axis++) {
         view[axis * 4] = r[axis];
@@ -2259,11 +2019,9 @@ static void EyeMatrix(const XrView& eye, float out[16]) {
     MulMatrix(proj, view, out);
 }
 
-// The window rectangle at the anchor pose, seen from the eye pose, through the eye's frustum.
 static void PlacementMatrix(const XrView& eye, const XrPosef& anchor, float width, float height, float mvp[16]) {
     float r[9];
 
-    // Columns 0 and 1 carry the rectangle's own size, so the unit quad comes out the window.
     RotationFromQuaternion(anchor.orientation, r);
     float model[16] = {};
     for (int axis = 0; axis < 3; axis++) {
@@ -2281,9 +2039,6 @@ static void PlacementMatrix(const XrView& eye, const XrPosef& anchor, float widt
     MulMatrix(eyeMatrix, model, mvp);
 }
 
-// A flat band from one point to another, turned to face the eye. The band's x runs along it from
-// the hand and its y across, one meter wide, because the shader is what sets the width: a band held
-// at one angle is wider at the end than at the start and no matrix can do that.
 static void RayMatrix(const XrView& eye, const XrVector3f& from, const XrVector3f& to, float mvp[16]) {
     XrVector3f along = Subtract(to, from);
     const float span = Length(along);
@@ -2328,9 +2083,6 @@ static void RayMatrix(const XrView& eye, const XrVector3f& from, const XrVector3
     MulMatrix(eyeMatrix, model, mvp);
 }
 
-// The game has just drawn this eye into the default framebuffer; keep a copy to place later. The
-// draw covers the corner the size of the eye target, which is the size GetDimensions reports, so
-// this is a copy and not a resample.
 void GfxWindowBackendOpenXR::PresentView(uint32_t view) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mGameFbo[view]);
@@ -2338,21 +2090,69 @@ void GfxWindowBackendOpenXR::PresentView(uint32_t view) {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-// The button hangs over the top edge of the window, on the same plane and in the same layer. It is
-// outside the picture, so nothing the game draws has to make room for it. The cursor goes on the
-// same plane, over the picture as readily as over the room, and over the button last of all.
+static void SetEnabled(GLenum cap, GLboolean on) {
+    if (on == GL_TRUE) {
+        glEnable(cap);
+    } else {
+        glDisable(cap);
+    }
+}
+
+struct SavedGlState {
+    GLint program = 0;
+    GLint vao = 0;
+    GLint framebuffer = 0;
+    GLint activeTexture = GL_TEXTURE0;
+    GLint texture = 0;
+    GLint blend[4] = {};
+    GLboolean blendEnabled = GL_FALSE;
+    GLboolean scissor = GL_FALSE;
+    GLboolean depth = GL_FALSE;
+    GLboolean srgb = GL_FALSE;
+    bool srgbControl = false;
+
+    void Save(bool srgbWriteControl) {
+        srgbControl = srgbWriteControl;
+        glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &framebuffer);
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture);
+        glActiveTexture(GL_TEXTURE0);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture);
+        glActiveTexture((GLenum)activeTexture);
+        glGetIntegerv(GL_BLEND_SRC_RGB, &blend[0]);
+        glGetIntegerv(GL_BLEND_DST_RGB, &blend[1]);
+        glGetIntegerv(GL_BLEND_SRC_ALPHA, &blend[2]);
+        glGetIntegerv(GL_BLEND_DST_ALPHA, &blend[3]);
+        blendEnabled = glIsEnabled(GL_BLEND);
+        scissor = glIsEnabled(GL_SCISSOR_TEST);
+        depth = glIsEnabled(GL_DEPTH_TEST);
+        if (srgbControl) {
+            srgb = glIsEnabled(GL_FRAMEBUFFER_SRGB_EXT);
+        }
+    }
+
+    void Restore() const {
+        glUseProgram((GLuint)program);
+        glBindVertexArray((GLuint)vao);
+        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)framebuffer);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)texture);
+        glActiveTexture((GLenum)activeTexture);
+        glBlendFuncSeparate(blend[0], blend[1], blend[2], blend[3]);
+        SetEnabled(GL_BLEND, blendEnabled);
+        SetEnabled(GL_SCISSOR_TEST, scissor);
+        SetEnabled(GL_DEPTH_TEST, depth);
+        if (srgbControl) {
+            SetEnabled(GL_FRAMEBUFFER_SRGB_EXT, srgb);
+        }
+    }
+};
+
 void GfxWindowBackendOpenXR::DrawOverlays(uint32_t eye) {
     if (mMenuProgram == 0 || mCursorProgram == 0) {
         return;
     }
-    // The game's renderer sets the blend function once, at start, and counts on it for the life of
-    // the app. Put back what was found, or every alpha it draws from here on adds instead of blends.
-    GLint blend[4] = {};
-    glGetIntegerv(GL_BLEND_SRC_RGB, &blend[0]);
-    glGetIntegerv(GL_BLEND_DST_RGB, &blend[1]);
-    glGetIntegerv(GL_BLEND_SRC_ALPHA, &blend[2]);
-    glGetIntegerv(GL_BLEND_DST_ALPHA, &blend[3]);
-
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     glBindVertexArray(mVao);
@@ -2365,8 +2165,6 @@ void GfxWindowBackendOpenXR::DrawOverlays(uint32_t eye) {
     glUniform1f(mMenuGlowLoc, sMenuHeld ? 1.8f : (sMenuHover ? 1.3f : 1.0f));
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-    // The bar is always there, dim, so the user knows the window can be moved. The corner handle
-    // shows only for the corner the hand is at, which is how the picture keeps a clean frame.
     const bool moving = mGrab == Grab::Move;
     PlacementMatrix(mViews[eye], PlanePose(0.0f, BarDrop()), BarWidth(), BarHeight(), mvp);
     glUseProgram(mBarProgram);
@@ -2376,8 +2174,6 @@ void GfxWindowBackendOpenXR::DrawOverlays(uint32_t eye) {
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
     if (mCornerHover >= 0) {
-        // One handle is drawn, and the quad is mirrored onto the corner the hand is at. A negative
-        // side flips the shape with it.
         const float handle = CornerSide();
         const float signX = (mCornerHover & 1) != 0 ? 1.0f : -1.0f;
         const float signY = (mCornerHover & 2) != 0 ? 1.0f : -1.0f;
@@ -2389,9 +2185,6 @@ void GfxWindowBackendOpenXR::DrawOverlays(uint32_t eye) {
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
 
-    // A dot for every hand that reaches the window, and a ray from the hand it came from. Both are
-    // drawn even where only one of them answers, because two dots and no rays say nothing about
-    // which hand is which.
     const float cursor = CursorSide();
     bool anyHand = false;
     for (int hand = 0; hand < 2; hand++) {
@@ -2402,10 +2195,6 @@ void GfxWindowBackendOpenXR::DrawOverlays(uint32_t eye) {
         const XrPosef dot = PlanePose(sHandX[hand], sHandY[hand]);
         const float* tint = sHandDown[hand] ? POINTER_HELD : POINTER_IDLE;
 
-        // The ray reaches as far as it is allowed or as far as it can while staying clear of the
-        // ring, whichever is nearer. The gap is measured from the ring rather than from the middle
-        // of it, or a ring wider than the gap would swallow the end of the ray. Below the length
-        // its own ramps need, there is nothing left to draw.
         const XrVector3f& from = sHandFrom[hand];
         XrVector3f along = Subtract(dot.position, from);
         const float reach = Length(along);
@@ -2413,7 +2202,6 @@ void GfxWindowBackendOpenXR::DrawOverlays(uint32_t eye) {
         if (span > RAY_HIDDEN + 2.0f * RAY_RAMP) {
             const XrVector3f end = { from.x + along.x * span / reach, from.y + along.y * span / reach,
                                      from.z + along.z * span / reach };
-            // One angle from end to end, taken from the width the near end should have.
             const float atHand = Length(Subtract(from, mViews[eye].pose.position));
             const float atEnd = Length(Subtract(end, mViews[eye].pose.position));
             const float wide = atHand > 1e-4f ? RAY_WIDTH * atEnd / atHand : RAY_WIDTH;
@@ -2436,7 +2224,6 @@ void GfxWindowBackendOpenXR::DrawOverlays(uint32_t eye) {
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
 
-    // Nothing else puts a pointer on the window but a hand, except the one driven from the host.
     if (!anyHand && sCursorValid) {
         PlacementMatrix(mViews[eye], PlanePose(sCursorX, sCursorY), cursor, cursor, mvp);
         glUseProgram(mCursorProgram);
@@ -2446,71 +2233,65 @@ void GfxWindowBackendOpenXR::DrawOverlays(uint32_t eye) {
         glUniform3fv(mCursorTintLoc, 1, held ? POINTER_HELD : POINTER_IDLE);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
-
-    glBindVertexArray(0);
-    glUseProgram(0);
-    glDisable(GL_BLEND);
-    glBlendFuncSeparate(blend[0], blend[1], blend[2], blend[3]);
 }
 
-// Draws the captured game image onto the window rectangle inside this eye's full view. Alpha
-// stays zero everywhere else, so the room shows through around the window.
-void GfxWindowBackendOpenXR::DrawEye(uint32_t eye, uint32_t sourceView) {
+bool GfxWindowBackendOpenXR::DrawEye(uint32_t eye, uint32_t sourceView) {
     uint32_t index = 0;
     XrSwapchainImageAcquireInfo acquireInfo{ XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
     if (Failed(mInstance, xrAcquireSwapchainImage(mSwapchain[eye], &acquireInfo, &index), "xrAcquireSwapchainImage")) {
-        return;
+        return false;
     }
 
     XrSwapchainImageWaitInfo waitInfo{ XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
     waitInfo.timeout = XR_INFINITE_DURATION;
-    if (!Failed(mInstance, xrWaitSwapchainImage(mSwapchain[eye], &waitInfo), "xrWaitSwapchainImage")) {
-        if (mSrgbWriteControl) {
-            glDisable(GL_FRAMEBUFFER_SRGB_EXT);
-        }
-        glBindFramebuffer(GL_FRAMEBUFFER, mImageFbos[eye][index]);
-        glViewport(0, 0, mSwapchainWidth, mSwapchainHeight);
-        glDisable(GL_SCISSOR_TEST);
-        glDisable(GL_DEPTH_TEST);
-        glDisable(GL_BLEND);
-        glDisable(GL_CULL_FACE);
-        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-
-        float mvp[16];
-        PlacementMatrix(mViews[eye], mAnchorPose, mWindowWidth, mWindowHeight, mvp);
-        glUseProgram(mProgram);
-        glUniformMatrix4fv(mMvpLoc, 1, GL_FALSE, mvp);
-        glUniform1f(mAspectLoc, mWindowHeight > 0.0f ? mWindowWidth / mWindowHeight : 1.0f);
-        glUniform1f(mRadiusLoc, CORNER_SIDE * CORNER_ARC_CENTER);
-        glUniform1f(mFeatherLoc, WINDOW_FEATHER * sEdgeSoftness);
-        // The left eye gives up the left edge and the right eye the right one. One image for both
-        // eyes has no parallax to correct, so it gives up nothing.
-        glUniform1f(mShiftLoc, eye == 0 ? EdgeFloat() : -EdgeFloat());
-        glBindVertexArray(mVao);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, mGameTex[sourceView]);
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        glBindVertexArray(0);
-        glUseProgram(0);
-        glBindTexture(GL_TEXTURE_2D, 0);
-
-        DrawOverlays(eye);
-
-#ifdef ENABLE_DEBUG_TOOLS
-        if (DebugCapture::Pending()) {
-            DebugCapture::WriteBoundFramebuffer(eye == 0 ? "left" : "right", mSwapchainWidth, mSwapchainHeight);
-            if (eye + 1 >= VIEW_COUNT) {
-                DebugCapture::Finish();
-            }
-        }
-#endif
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (Failed(mInstance, xrWaitSwapchainImage(mSwapchain[eye], &waitInfo), "xrWaitSwapchainImage")) {
+        return false;
     }
 
+    SavedGlState saved;
+    saved.Save(mSrgbWriteControl);
+
+    if (mSrgbWriteControl) {
+        glDisable(GL_FRAMEBUFFER_SRGB_EXT);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, mImageFbos[eye][index]);
+    glViewport(0, 0, mSwapchainWidth, mSwapchainHeight);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    float mvp[16];
+    PlacementMatrix(mViews[eye], mAnchorPose, mWindowWidth, mWindowHeight, mvp);
+    glUseProgram(mProgram);
+    glUniformMatrix4fv(mMvpLoc, 1, GL_FALSE, mvp);
+    glUniform1f(mAspectLoc, mWindowHeight > 0.0f ? mWindowWidth / mWindowHeight : 1.0f);
+    glUniform1f(mRadiusLoc, CORNER_SIDE * CORNER_ARC_CENTER);
+    glUniform1f(mFeatherLoc, WINDOW_FEATHER * sEdgeSoftness);
+    glUniform1f(mShiftLoc, eye == 0 ? EdgeFloat() : -EdgeFloat());
+    glBindVertexArray(mVao);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, mGameTex[sourceView]);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    DrawOverlays(eye);
+
+#ifdef ENABLE_DEBUG_TOOLS
+    if (DebugCapture::Pending()) {
+        DebugCapture::WriteBoundFramebuffer(eye == 0 ? "left" : "right", mSwapchainWidth, mSwapchainHeight);
+        if (eye + 1 >= VIEW_COUNT) {
+            DebugCapture::Finish();
+        }
+    }
+#endif
+
+    saved.Restore();
+
     XrSwapchainImageReleaseInfo releaseInfo{ XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
-    Failed(mInstance, xrReleaseSwapchainImage(mSwapchain[eye], &releaseInfo), "xrReleaseSwapchainImage");
+    return !Failed(mInstance, xrReleaseSwapchainImage(mSwapchain[eye], &releaseInfo), "xrReleaseSwapchainImage");
 }
 
 void GfxWindowBackendOpenXR::EndRenderFrame() {
@@ -2520,8 +2301,6 @@ void GfxWindowBackendOpenXR::EndRenderFrame() {
     const XrCompositionLayerBaseHeader* layers[2] = {};
     uint32_t layerCount = 0;
 
-    // The room is a layer of its own where the environment cannot be alpha blended, and it has to
-    // be under the frame for the game to draw over it.
     if (mPassthroughLayer != XR_NULL_HANDLE) {
         passthrough.flags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
         passthrough.space = XR_NULL_HANDLE;
@@ -2530,8 +2309,9 @@ void GfxWindowBackendOpenXR::EndRenderFrame() {
     }
 
     if (mShouldRender && mViewsValid && mAnchorValid) {
+        bool drawn = true;
         for (uint32_t eye = 0; eye < VIEW_COUNT; eye++) {
-            DrawEye(eye, mViewCount == VIEW_COUNT ? eye : 0);
+            drawn = DrawEye(eye, mViewCount == VIEW_COUNT ? eye : 0) && drawn;
             projectionViews[eye] = { XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW };
             projectionViews[eye].pose = mViews[eye].pose;
             projectionViews[eye].fov = mViews[eye].fov;
@@ -2540,13 +2320,13 @@ void GfxWindowBackendOpenXR::EndRenderFrame() {
                                                         { (int32_t)mSwapchainWidth, (int32_t)mSwapchainHeight } };
             projectionViews[eye].subImage.imageArrayIndex = 0;
         }
-        // Everything drawn over the picture blends into the same image, and a blend that keeps the
-        // alpha right can only work on color already multiplied by it. The layer reads it the same way.
         projection.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
         projection.space = mSpace;
         projection.viewCount = VIEW_COUNT;
         projection.views = projectionViews;
-        layers[layerCount++] = (const XrCompositionLayerBaseHeader*)&projection;
+        if (drawn) {
+            layers[layerCount++] = (const XrCompositionLayerBaseHeader*)&projection;
+        }
     }
 
     XrFrameEndInfo endInfo{ XR_TYPE_FRAME_END_INFO };
@@ -2558,12 +2338,6 @@ void GfxWindowBackendOpenXR::EndRenderFrame() {
 
     mFrameOpen = false;
     sViewGeometryValid = false;
-
-    // One backend submits the frame itself and one hands it to a shell, so each counts its own
-    // presented frames. Here the two are the same frame.
-    CountXrFrame();
-    CountXrPresent();
-    ReportXrCost();
 }
 
 void GfxWindowBackendOpenXR::SwapBuffersBegin() {
@@ -2572,8 +2346,6 @@ void GfxWindowBackendOpenXR::SwapBuffersBegin() {
         return;
     }
     if (!mFrameOpen) {
-        // A caller that draws the gui by itself, as the extractor's progress screen does, asks for
-        // no views at all. Open a frame for it and let both eyes read the one image.
         if (!OpenFrame()) {
             return;
         }
@@ -2581,7 +2353,6 @@ void GfxWindowBackendOpenXR::SwapBuffersBegin() {
     }
 
 #ifdef ENABLE_DEBUG_TOOLS
-    // The picture as the game drew it, in the coordinates the debug pointer is aimed in.
     if (mCurrentView == 0 && DebugCapture::Pending()) {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         DebugCapture::WriteBoundFramebuffer("panel", mTexWidth, mTexHeight);
@@ -2610,7 +2381,6 @@ void GfxWindowBackendOpenXR::Teardown() {
             glDeleteTextures(1, &mGameTex[view]);
             mGameTex[view] = 0;
         }
-        // The reported window size falls back to the panel while there is no eye target.
         mTexWidth = 0;
         mTexHeight = 0;
         if (mSwapchain[view] != XR_NULL_HANDLE) {

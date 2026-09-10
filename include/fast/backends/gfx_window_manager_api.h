@@ -17,9 +17,6 @@ class GfxWindowBackend {
     virtual void SetFullscreenChangedCallback(void (*mOnFullscreenChanged)(bool is_now_fullscreen)) = 0;
     virtual void SetFullscreen(bool fullscreen) = 0;
     virtual void GetActiveWindowRefreshRate(uint32_t* refreshRate) = 0;
-    // Rates the display can be driven at, and a request for one of them. Only a headset answers;
-    // a desktop window takes the rate the monitor is already set to. The caller picks, because
-    // only it knows what its own logic rate divides into.
     virtual std::vector<float> GetSupportedRefreshRates() {
         return {};
     }
@@ -39,9 +36,6 @@ class GfxWindowBackend {
     virtual Ship::WindowRect GetPrimaryMonitorRect() = 0;
     virtual void HandleEvents() = 0;
     virtual bool IsFrameReady() = 0;
-    // How many views the caller must draw the frame into, and which one it is about to draw. A
-    // headset backend answers two and takes the eye pose from the view; everything else answers
-    // one and ignores the rest.
     virtual uint32_t BeginRenderFrame() {
         return 1;
     }

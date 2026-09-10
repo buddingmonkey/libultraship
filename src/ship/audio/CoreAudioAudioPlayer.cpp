@@ -19,8 +19,6 @@ CoreAudioAudioPlayer::~CoreAudioAudioPlayer() {
 
 void CoreAudioAudioPlayer::DoClose() {
 #if TARGET_OS_IPHONE
-    // Must come first: it fences against a session handler that is mid-flight and about to
-    // touch mAudioUnit. See the lifetime contract in CoreAudioSession.h.
     StopIOSAudioSessionObservers();
 #endif
 
@@ -30,16 +28,13 @@ void CoreAudioAudioPlayer::DoClose() {
 
 #if TARGET_OS_IPHONE
     if (wasOpen) {
-        // Hand the audio route back once the unit is gone, so other apps can take over.
         DeactivateIOSAudioSession();
     }
 #endif
 }
 
 void CoreAudioAudioPlayer::CloseOutputUnit() {
-    // Disposing the unit first guarantees the render callback is not running, and must happen
-    // without mMutex held: AudioOutputUnitStop() waits for an in-flight callback, which would
-    // itself be waiting for the mutex.
+    // Not under mMutex: AudioOutputUnitStop() waits for an in-flight render callback, which waits for it.
     if (mAudioUnit != nullptr) {
         AudioOutputUnitStop(mAudioUnit);
         AudioUnitUninitialize(mAudioUnit);
@@ -49,8 +44,6 @@ void CoreAudioAudioPlayer::CloseOutputUnit() {
 
     mInitialized = false;
 
-    // DoPlay() can still be running on the game thread -- a media services reset rebuilds the
-    // unit from a notification thread -- so the buffer only goes away under the lock.
     pthread_mutex_lock(&mMutex);
     delete[] mRingBuffer;
     mRingBuffer = nullptr;
@@ -62,7 +55,6 @@ void CoreAudioAudioPlayer::CloseOutputUnit() {
 
 bool CoreAudioAudioPlayer::DoInit() {
 #if TARGET_OS_IPHONE
-    // Nothing plays on iOS until the process has an active audio session.
     if (!ConfigureIOSAudioSession(this->GetSampleRate())) {
         return false;
     }
@@ -75,9 +67,6 @@ bool CoreAudioAudioPlayer::DoInit() {
             return false;
         }
 
-        // Surround was refused. Every iOS output route is stereo, as are plenty of macOS
-        // devices, so retry rather than leaving the game silent. DowngradeAudioChannels()
-        // keeps Play() from matrix decoding into a unit that is now only two channels wide.
         SPDLOG_WARN("CoreAudio: {} channel output unavailable, retrying in stereo", requestedChannels);
         this->DowngradeAudioChannels(AudioChannelsSetting::audioStereo);
 
@@ -89,8 +78,8 @@ bool CoreAudioAudioPlayer::DoInit() {
 #if TARGET_OS_IPHONE
     IOSAudioSessionHandlers handlers;
 
-    // A phone call or Siri stops the unit and iOS never restarts it for us.
     handlers.OnInterruptionBegan = [this]() {
+        std::lock_guard<std::mutex> guard(mUnitMutex);
         if (mAudioUnit != nullptr) {
             AudioOutputUnitStop(mAudioUnit);
         }
@@ -98,21 +87,16 @@ bool CoreAudioAudioPlayer::DoInit() {
 
     handlers.OnInterruptionEnded = [this](bool shouldResume) {
         if (!shouldResume) {
-            // iOS withholds ShouldResume when it expects the user to hit play, but a game has
-            // no such control and would then stay silent for good. Try anyway: if another app
-            // really does hold the route, reactivation just fails.
             SPDLOG_INFO("CoreAudio: resuming without a ShouldResume hint");
         }
         RestartOutputUnit("interruption");
     };
 
-    // Headphones pulled out. iOS pauses the unit rather than redirecting to the speaker.
     handlers.OnOutputRouteLost = [this]() { RestartOutputUnit("route change"); };
 
     handlers.OnMediaServicesReset = [this]() {
-        // Restarting is useless here -- every Core Audio object the process holds died with
-        // the media server, so the unit and the session both have to be built again. Keep the
-        // channel count the device actually accepted rather than re-asking for surround.
+        std::lock_guard<std::mutex> guard(mUnitMutex);
+
         const int32_t channels = mNumChannels;
 
         CloseOutputUnit();
@@ -125,6 +109,12 @@ bool CoreAudioAudioPlayer::DoInit() {
             SPDLOG_ERROR("CoreAudio: Failed to rebuild audio unit after media services reset");
             return;
         }
+
+        if (mSuspended) {
+            AudioOutputUnitStop(mAudioUnit);
+            DeactivateIOSAudioSession();
+        }
+
         SPDLOG_INFO("CoreAudio: audio rebuilt after media services reset");
     };
 
@@ -138,6 +128,8 @@ bool CoreAudioAudioPlayer::DoInit() {
 void CoreAudioAudioPlayer::Suspend() {
     std::lock_guard<std::mutex> guard(mUnitMutex);
 
+    mSuspended = true;
+
     if (mAudioUnit != nullptr) {
         AudioOutputUnitStop(mAudioUnit);
     }
@@ -146,14 +138,18 @@ void CoreAudioAudioPlayer::Suspend() {
 }
 
 void CoreAudioAudioPlayer::Resume() {
-    // Takes mUnitMutex itself, which is not recursive.
+    {
+        std::lock_guard<std::mutex> guard(mUnitMutex);
+        mSuspended = false;
+    }
+
     RestartOutputUnit("foreground");
 }
 
 void CoreAudioAudioPlayer::RestartOutputUnit(const char* reason) {
     std::lock_guard<std::mutex> guard(mUnitMutex);
 
-    if (!ActivateIOSAudioSession() || mAudioUnit == nullptr) {
+    if (mSuspended || !ActivateIOSAudioSession() || mAudioUnit == nullptr) {
         return;
     }
 
@@ -167,14 +163,11 @@ void CoreAudioAudioPlayer::RestartOutputUnit(const char* reason) {
 bool CoreAudioAudioPlayer::OpenOutputUnit(int32_t numChannels) {
     OSStatus status;
 
-    mNumChannels = numChannels;
-
     const size_t bytesPerSample = sizeof(int16_t);
-    const size_t bytesPerFrame = bytesPerSample * mNumChannels;
+    const size_t bytesPerFrame = bytesPerSample * numChannels;
 
-    // Published under the lock for the same reason CloseOutputUnit() frees under it. The lock
-    // is released before the unit starts, so the render callback never waits on this.
     pthread_mutex_lock(&mMutex);
+    mNumChannels = numChannels;
     mRingBufferSize = 6000 * bytesPerFrame;
     mRingBuffer = new uint8_t[mRingBufferSize];
     mRingBufferReadPos = 0;
@@ -184,7 +177,6 @@ bool CoreAudioAudioPlayer::OpenOutputUnit(int32_t numChannels) {
     AudioComponentDescription desc;
     desc.componentType = kAudioUnitType_Output;
 #if TARGET_OS_IPHONE
-    // iOS has no HAL. RemoteIO is the hardware I/O unit; element 0 is the output bus.
     desc.componentSubType = kAudioUnitSubType_RemoteIO;
 #else
     desc.componentSubType = kAudioUnitSubType_HALOutput;
@@ -223,7 +215,7 @@ bool CoreAudioAudioPlayer::OpenOutputUnit(int32_t numChannels) {
     format.mBytesPerPacket = bytesPerFrame;
     format.mFramesPerPacket = 1;
     format.mBytesPerFrame = bytesPerFrame;
-    format.mChannelsPerFrame = mNumChannels;
+    format.mChannelsPerFrame = numChannels;
     format.mBitsPerChannel = 16;
 
     status = AudioUnitSetProperty(mAudioUnit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &format,
@@ -267,8 +259,6 @@ bool CoreAudioAudioPlayer::OpenOutputUnit(int32_t numChannels) {
 int CoreAudioAudioPlayer::Buffered() {
     pthread_mutex_lock(&mMutex);
 
-    // No buffer between CloseOutputUnit() and OpenOutputUnit(), which a media services reset
-    // can put us in from another thread.
     if (mRingBuffer == nullptr) {
         pthread_mutex_unlock(&mMutex);
         return 0;
@@ -292,8 +282,6 @@ int CoreAudioAudioPlayer::Buffered() {
 void CoreAudioAudioPlayer::DoPlay(const uint8_t* buf, size_t len) {
     pthread_mutex_lock(&mMutex);
 
-    // Samples arriving while the unit is being rebuilt have nowhere to go; drop them rather
-    // than write through a null buffer.
     if (mRingBuffer == nullptr) {
         pthread_mutex_unlock(&mMutex);
         return;

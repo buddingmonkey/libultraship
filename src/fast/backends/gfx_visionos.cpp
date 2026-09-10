@@ -38,7 +38,6 @@ struct PendingKey {
 };
 std::deque<PendingKey> gKeyQueue;
 std::mutex gKeyMutex;
-// An item as ImGui reported it, with what the set needs to put it in order later.
 struct PendingHoverRect {
     VisionOSHoverRect Rect;
     const ImGuiWindow* Window;
@@ -49,9 +48,6 @@ std::vector<VisionOSHoverRect> gHoverRects;
 std::vector<VisionOSHoverRect> gPublishedRects;
 std::mutex gRectMutex;
 
-// The window in the room, in the units gfx_xr_view.h asks for. The model is the one the OpenXR
-// backend uses; only the window differs, because this one is a fixed quad and not an angular size
-// the player can resize. See xr-window-depth-model before changing the gain.
 constexpr float kWindowDepthMax = 700.0f;
 constexpr float kWindowDepthMin = 1.0f;
 constexpr float kWindowDepthMargin = 0.9f;
@@ -59,9 +55,6 @@ constexpr float kWindowDepthRelease = 2.0f;
 constexpr float kDioramaDepthDefault = 2.0f;
 constexpr float kDioramaDepthMin = 0.5f;
 constexpr float kDioramaDepthMax = 4.0f;
-// Meters of glass at scale 1, against the tangents the game asks for, and how far the window hangs
-// from the viewer. Both are the numbers the OpenXR backend works in, so the menu sliders mean the
-// same thing on both headsets.
 constexpr float kWindowSizeRange = 0.5f;
 constexpr float kWindowRangeDefault = 1.3f;
 constexpr float kWindowRangeMin = 0.5f;
@@ -70,10 +63,6 @@ constexpr float kWindowScaleDefault = kWindowRangeDefault / kWindowSizeRange;
 constexpr float kWindowScaleMin = 0.5f;
 constexpr float kWindowScaleMax = 8.0f;
 constexpr uint32_t kRefreshRateDefault = 90;
-// The half-angle the window covers across, before the game has loaded a projection to ask for its
-// own. About 61 degrees, which is what Banjo-Kazooie asks for once it runs. ApplyXrProjection only
-// reports the tangents on a frame it already had a window for, so without a value to start from
-// the two would wait on each other forever.
 constexpr float kTanHalfWidthDefault = 0.59f;
 
 struct VisionOSEye {
@@ -101,8 +90,6 @@ uint32_t gRefreshRate = kRefreshRateDefault;
 XrViewGeometry gViewGeometry = {};
 bool gViewGeometryValid = false;
 
-// In at once, so nothing is ever left standing in front of the window; out slowly, so one near
-// object in one frame does not throw the world back and hold it there.
 void MoveGlass() {
     float target = gSceneNear * kWindowDepthMargin;
     if (target > kWindowDepthMax) {
@@ -122,7 +109,6 @@ float Clamp(float value, float low, float high) {
     return value < low ? low : (value > high ? high : value);
 }
 
-// Before the game loads a projection there is only the shape of the picture to go on.
 float TanHalfHeight() {
     if (gTanHalfHeight > 0.0f) {
         return gTanHalfHeight;
@@ -152,8 +138,6 @@ VisionOSWindow GetVisionOSWindow() {
 }
 
 float GetVisionOSPictureAspect() {
-    // Before the shell says how large a picture it wants there is none, and a square is a bad
-    // guess for one.
     if (gTanHalfHeight <= 0.0f && gRenderTarget.Width == 0) {
         return 0.0f;
     }
@@ -161,8 +145,6 @@ float GetVisionOSPictureAspect() {
     return tanHalfHeight > 0.0f ? gTanHalfWidth / tanHalfHeight : 0.0f;
 }
 
-// A shell that reports its own window owns the placement, and the system owns it there. The menu
-// keeps only what belongs to the app.
 void SetXrWindowDistance(float meters) {
     if (gShellWindowValid) {
         return;
@@ -189,7 +171,6 @@ void SetXrDioramaDepth(float meters) {
     gDioramaDepth = Clamp(meters, kDioramaDepthMin, kDioramaDepthMax);
 }
 
-// The system owns where a volume stands, so there is nothing here to put back in front.
 void RecenterXrWindow() {
 }
 
@@ -243,20 +224,14 @@ void EndVisionOSHoverRects() {
         return;
     }
 
-    // The set has to answer what ImGui answers: which window is in front here, then which item in
-    // that window. Order of submission decides neither, so a container that ImGui reports after its
-    // content cannot cover it, and a future widget cannot bring the same fault back.
     std::stable_sort(gPendingRects.begin(), gPendingRects.end(),
                      [](const PendingHoverRect& a, const PendingHoverRect& b) { return a.Area > b.Area; });
 
-    // ctx->Windows is back to front, with a child after its parent, which is the order the set
-    // needs. ImGui skips the same windows in FindHoveredWindowEx.
     for (const ImGuiWindow* window : ctx->Windows) {
         if (!window->WasActive || window->Hidden || (window->Flags & ImGuiWindowFlags_NoMouseInputs) != 0) {
             continue;
         }
 
-        // A window takes the hover from everything behind it, so it hides it here as well.
         const ImRect outer = window->OuterRectClipped;
         if (outer.GetWidth() > 0.0f && outer.GetHeight() > 0.0f) {
             VisionOSHoverRect blank{};
@@ -267,7 +242,6 @@ void EndVisionOSHoverRects() {
             gHoverRects.push_back(blank);
         }
 
-        // The largest item goes down first, so the smallest item that holds a point wins it.
         for (const PendingHoverRect& pending : gPendingRects) {
             if (pending.Window == window) {
                 gHoverRects.push_back(pending.Rect);
@@ -294,8 +268,6 @@ void SetVisionOSFrameHooks(VisionOSFrameHooks hooks) {
 
 void PushVisionOSPointer(VisionOSPointer pointer) {
     std::lock_guard<std::mutex> lock(gPointerMutex);
-    // Only a change of the button needs its own step. Anything else is the same press moving, so
-    // keep the newest place and hold the queue to the two steps a pinch really has.
     if (!gPointerQueue.empty() && gPointerQueue.back().Pressed == pointer.Pressed) {
         gPointerQueue.back() = pointer;
         return;
@@ -385,10 +357,6 @@ void SetVisionOSRefreshRate(uint32_t hz) {
     }
     gRefreshRate = hz;
 
-    // The only report of the panel rate there is. visionOS never states it, so without this line
-    // nothing says whether the app is holding 90, 96 or 120. The measurement moves by a hertz or
-    // two either way, and a line for every change of it put 1752 of them in one hour of log, so
-    // only a change of cadence is said.
     static uint32_t sReported = 0;
     const uint32_t moved = hz > sReported ? hz - sReported : sReported - hz;
     if (sReported != 0 && moved <= 2) {
@@ -417,8 +385,6 @@ void GfxWindowBackendVisionOS::Init(const char* gameName, const char* apiName, b
         return;
     }
 
-    // Interpreter::Init calls the rendering API's Init straight after this, and that reads the
-    // device, so the external target has to be handed over here.
     if (mRenderingApi == nullptr ||
         !mRenderingApi->MetalInitExternal(static_cast<MTL::Device*>(gRenderTarget.Device),
                                           static_cast<MTL::CommandQueue*>(gRenderTarget.CommandQueue), target)) {
@@ -453,17 +419,10 @@ uint32_t GfxWindowBackendVisionOS::BeginRenderFrame() {
     return mViewsThisFrame;
 }
 
-// The eye offset converts against the glass itself, so a point on the glass lands on the same spot
-// for both eyes. The gain then sets how deep the world reads: it compresses every disparity so the
-// farthest thing the game draws sits the diorama depth behind the window. It stays under one,
-// so the eyes cannot be made to diverge. Along the normal the plain scale stands, so the apex of
-// the frustum reaches the glass exactly when the nose does.
 void GfxWindowBackendVisionOS::BeginRenderView(uint32_t view) {
     gViewIndex = static_cast<int>(view);
     gViewGeometryValid = false;
 
-    // NewFrame points framebuffer zero at whatever the external target is, once per view, so the
-    // eye only has to be chosen here.
     if (mRenderingApi != nullptr) {
         mRenderingApi->MetalSetExternalTarget(static_cast<MTL::Texture*>(GetVisionOSGameTexture(gViewIndex)));
     }
@@ -473,8 +432,6 @@ void GfxWindowBackendVisionOS::BeginRenderView(uint32_t view) {
         return;
     }
 
-    // One image for both eyes is drawn from between them, not from either one. The simulator hands
-    // out a single view, so there is not always a second eye to be between.
     const bool mono = gViewCount < 2 && gEyes[0].Valid && gEyes[1].Valid;
     if (!gEyes[view].Valid) {
         return;
@@ -487,13 +444,8 @@ void GfxWindowBackendVisionOS::BeginRenderView(uint32_t view) {
     const float acrossGlass = gain * gGlassDepth * gTanHalfWidth / window.HalfWidth;
     const float alongNormal = gGlassDepth / window.Range;
 
-    // Against where the head stood when the window was placed, not against the middle of the glass.
-    // A window put high or to one side would otherwise be drawn as one looked into from there, and
-    // would stay that way for as long as it hung there.
     gViewGeometry.eyeOffset[0] = (eyeX - gParallaxAcross) * acrossGlass;
     gViewGeometry.eyeOffset[1] = (eyeY - gParallaxRise) * acrossGlass;
-    // The shell reports z towards the viewer, and the model wants how far the head has come off
-    // the range the window hangs at.
     gViewGeometry.eyeOffset[2] = (eyeZ - window.Range) * alongNormal;
     gViewGeometry.windowDistance = gGlassDepth;
     gViewGeometryValid = true;
@@ -573,14 +525,10 @@ Ship::WindowRect GfxWindowBackendVisionOS::GetPrimaryMonitorRect() {
 }
 
 void GfxWindowBackendVisionOS::HandleEvents() {
-    // The main loop calls this every pass, including the passes it spends off screen, so this is
-    // where the shell can report a pause, a resume or an invalidated layer.
     if (gFrameHooks.PollState != nullptr) {
         gFrameHooks.PollState();
     }
 
-    // The Game Controller framework reports a key on a queue of its own, so take the whole batch
-    // here, on the thread that owns ImGui.
     std::deque<PendingKey> keys;
     {
         std::lock_guard<std::mutex> lock(gKeyMutex);
@@ -597,14 +545,9 @@ void GfxWindowBackendVisionOS::HandleEvents() {
         }
     }
 
-    // SDL has no video here, but the control deck still reads controller add and remove from
-    // the same queue, and only a pump puts them there.
     SDL_PumpEvents();
 
-    // The control deck polls the pad rather than taking its events, so nothing else empties the
-    // queue. SDL_PeepEvents walks the whole of it to find the two the device handler wants, under
-    // the event lock, twice a frame, so a queue that only grows makes every frame slower than the
-    // last. The window backend on the desktop drops the same events for the same reason.
+    // Nothing else empties this queue, so a queue that only grows makes SDL_PeepEvents slower each frame.
     SDL_Event event;
     while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_CONTROLLERDEVICEADDED - 1) > 0) {}
     while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_CONTROLLERDEVICEREMOVED + 1, SDL_LASTEVENT) > 0) {}
@@ -615,12 +558,8 @@ bool GfxWindowBackendVisionOS::IsFrameReady() {
 }
 
 void GfxWindowBackendVisionOS::SwapBuffersBegin() {
-    // ImGui has ended its frame by now, so the window order is settled and the set can be put in
-    // order. The shell reads it on its own thread, one update later.
     EndVisionOSHoverRects();
 
-    // A GUI-only frame reaches here without BeginRenderFrame, the same way the OpenXR backend has
-    // to open one late. It asked for no views, so it is a frame of one and both eyes read it.
     if (!mFrameOpen) {
         if (!OpenFrame()) {
             return;
@@ -629,8 +568,6 @@ void GfxWindowBackendVisionOS::SwapBuffersBegin() {
         gViewIndex = 0;
     }
 
-    // The shell's frame holds both eyes. Close it when the last one has committed, so the shell
-    // makes its command buffer after ours and shows this frame, not the one before it.
     if (gViewIndex + 1 < static_cast<int>(mViewsThisFrame)) {
         return;
     }
@@ -682,11 +619,7 @@ bool GfxWindowBackendVisionOS::IsFullscreen() {
 }
 } // namespace Fast
 
-// ImGui calls these from ItemAdd when the test engine hooks are on. That is the only place which
-// reports every item rectangle, and a highlight needs one rectangle per item. The hook only
-// collects; EndVisionOSHoverRects puts the rectangles in order.
 void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb, const ImGuiLastItemData* itemData) {
-    // An item with no ID cannot be interacted with; plain text is the common case.
     if (id == 0 || bb.GetWidth() <= 0.0f || bb.GetHeight() <= 0.0f) {
         return;
     }
@@ -694,8 +627,6 @@ void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb
         return;
     }
 
-    // A full-size item, such as a dock space, is a place to put content, not a place to press. It
-    // would give the whole screen one highlight.
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     if (bb.GetWidth() >= display.x * 0.9f && bb.GetHeight() >= display.y * 0.9f) {
         return;
@@ -706,27 +637,19 @@ void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb
         return;
     }
 
-    // The window itself and its title bar come through ItemAdd the same way a button does. Neither
-    // is something to press, and the window covers everything inside it.
     if (id == window->ID || id == window->MoveId) {
         return;
     }
 
-    // EndChild reports the whole child window as one item of the parent. ImGui never hovers it,
-    // because the child is the window in front there, so it is not a place to press either.
     if (ctx->WithinEndChildID != 0) {
         return;
     }
 
-    // A modal takes every click, so nothing behind it can be pressed. This is the rule ImGui uses
-    // itself, and without it the implicit debug window offers items under the dimmed screen.
     ImGuiWindow* modal = ImGui::GetTopMostPopupModal();
     if (modal != nullptr && !ImGui::IsWindowWithinBeginStackOf(window, modal)) {
         return;
     }
 
-    // ItemAdd calls this hook before it tests the clip rectangle, so an item scrolled out of view
-    // still arrives, at its full size.
     ImRect visible = bb;
     visible.ClipWith(window->ClipRect);
     if (visible.GetWidth() <= 0.0f || visible.GetHeight() <= 0.0f) {

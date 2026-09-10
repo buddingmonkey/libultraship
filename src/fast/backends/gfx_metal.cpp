@@ -35,7 +35,6 @@
 #include <spdlog/fmt/fmt.h>
 
 #include "fast/backends/gfx_metal_shader.h"
-#include "fast/backends/gfx_xr_view.h"
 
 #include "libultraship/libultra/abi.h"
 #include "ship/Context.h"
@@ -173,8 +172,6 @@ void GfxRenderingAPIMetal::RenderDrawData(ImDrawData* drawData) {
     int fb_width = (int)(drawData->DisplaySize.x * drawData->FramebufferScale.x);
     int fb_height = (int)(drawData->DisplaySize.y * drawData->FramebufferScale.y);
     if (screen_texture->width() != fb_width || screen_texture->height() != fb_height) {
-        // Dropping the frame here means the entire GUI vanishes with no other symptom, so say
-        // so once rather than leaving a black screen to be explained.
         static bool sMismatchReported = false;
         if (!sMismatchReported) {
             sMismatchReported = true;
@@ -618,36 +615,17 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
 void GfxRenderingAPIMetal::OnResize() {
 }
 
-// The game spreads one frame over several command buffers, so every one of them has to say how
-// long the GPU held it. There is no frame debugger over a headset run to say it instead.
-void GfxRenderingAPIMetal::NoteGpuTime(MTL::CommandBuffer* commandBuffer) {
-#ifdef ENABLE_XR_WINDOW
-    if (commandBuffer == nullptr) {
-        return;
-    }
-    commandBuffer->addCompletedHandler([](MTL::CommandBuffer* completed) {
-        AddXrCost(XrCost::DrawGpu, completed->GPUEndTime() - completed->GPUStartTime());
-    });
-#endif
-}
-
 void GfxRenderingAPIMetal::WaitForFreeFrame() {
-    const auto before = std::chrono::steady_clock::now();
     std::unique_lock<std::mutex> lock(mFrameThrottleMutex);
     if (!mFrameThrottleSignal.wait_for(lock, std::chrono::seconds(1),
                                        [this] { return mFramesInFlight < kMaxVertexBufferPoolSize; })) {
         SPDLOG_WARN("Metal: no frame retired in a second; going on with {} in flight", mFramesInFlight);
     }
     mFramesInFlight++;
-#ifdef ENABLE_XR_WINDOW
-    AddXrCost(XrCost::Throttle, std::chrono::duration<double>(std::chrono::steady_clock::now() - before).count());
-#endif
 }
 
 void GfxRenderingAPIMetal::StartFrame() {
     if (mExternalTarget) {
-        // nextDrawable used to bound how far the CPU could run ahead of the GPU. Nothing else
-        // stops a frame from writing the vertex buffer that the GPU still reads.
         WaitForFreeFrame();
         if (!mScreenFramebufferReady) {
             SetupScreenFramebuffer(mExternalColorTexture->width(), mExternalColorTexture->height());
@@ -682,7 +660,6 @@ void GfxRenderingAPIMetal::EndFrame() {
         if (!framebuffer.mHasEndedEncoding)
             framebuffer.mCommandEncoder->endEncoding();
 
-        NoteGpuTime(framebuffer.mCommandBuffer);
         framebuffer.mCommandBuffer->commit();
         it++;
     }
@@ -719,8 +696,6 @@ void GfxRenderingAPIMetal::EndFrame() {
         mScreenReadbackRequested = false;
     }
 
-    // Presenting nothing schedules a present that never retires, which is one
-    // more way for the pool never to refill.
     if (mCurrentDrawable != nullptr) {
         screen_framebuffer.mCommandBuffer->presentDrawable(mCurrentDrawable);
     }
@@ -734,7 +709,6 @@ void GfxRenderingAPIMetal::EndFrame() {
             mFrameThrottleSignal.notify_one();
         });
     }
-    NoteGpuTime(screen_framebuffer.mCommandBuffer);
     screen_framebuffer.mCommandBuffer->commit();
 
     // Now that commit has been called, retain the command buffer for GPU sync
@@ -810,13 +784,6 @@ void GfxRenderingAPIMetal::SetupScreenFramebuffer(uint32_t width, uint32_t heigh
         mCurrentDrawable = mLayer->nextDrawable();
     }
 
-    // The layer gives nothing back once its pool is empty, which is what an
-    // off-screen frame leaves behind. Every metal-cpp call below is objc_msgSend
-    // on that pointer, so a nil drawable silently produces a nil colour
-    // attachment and a frame's worth of work with nowhere to land. Keep the
-    // previous texture so the pass stays valid, and say so once: a nextDrawable
-    // that never succeeds is a one-second stall per frame and needs to be
-    // recognisable in a log.
     if (mCurrentDrawable == nullptr && !mExternalTarget) {
         static bool sNoDrawableReported = false;
         if (!sNoDrawableReported) {
@@ -1119,8 +1086,7 @@ void GfxRenderingAPIMetal::ResolveMSAAColorBuffer(int fb_id_target, int fb_id_so
     int source_texture_id = mFramebuffers[fb_id_source].mTextureId;
     MTL::Texture* source_texture = mTextures[source_texture_id].texture;
 
-    // mTextures already holds what framebuffer zero draws into: the drawable texture, or the
-    // caller texture in external mode. Reading the drawable here crashes when there is none.
+    // An external target has no drawable, so read framebuffer zero's texture, not the drawable.
     int target_texture_id = mFramebuffers[fb_id_target].mTextureId;
     MTL::Texture* target_texture = mTextures[target_texture_id].texture;
 

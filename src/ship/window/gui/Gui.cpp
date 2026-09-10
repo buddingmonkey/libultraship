@@ -290,18 +290,13 @@ void Gui::HandleMouseCapture() {
 
 #if defined(__ANDROID__) || defined(__IOS__)
 namespace {
-// ImGui scrolls from the scrollbar or the wheel, and a touchscreen has neither, so a list can
-// only be worked by the bar itself. Drag its contents instead.
 ImGuiID sDragScrollWindow = 0;
 bool sDragScrollActive = false;
 float sDragScrollStartY = 0.0f;
-// Points per second, smoothed, so that the throw is judged on the run of the gesture and not
-// on whatever the last frame happened to catch.
 float sDragScrollSpeed = 0.0f;
 ImGuiID sCoastWindow = 0;
 float sCoastSpeed = 0.0f;
 
-// How quickly a thrown list gives up, per second, and the speed it stops dead at.
 constexpr float kCoastDrag = 5.0f;
 constexpr float kCoastStop = 40.0f;
 constexpr float kSpeedSmoothing = 0.4f;
@@ -315,13 +310,11 @@ ImGuiWindow* ScrollableAncestor(ImGuiWindow* window) {
     return nullptr;
 }
 
-// Carries a thrown list on after the finger lifts.
 void Coast(float dt) {
     if (sCoastWindow == 0) {
         return;
     }
     ImGuiWindow* window = ImGui::FindWindowByID(sCoastWindow);
-    // A list that stopped being drawn would bank the scroll up and jump when it came back.
     if (window == nullptr || !window->WasActive || ImFabs(sCoastSpeed) < kCoastStop) {
         sCoastWindow = 0;
         sCoastSpeed = 0.0f;
@@ -329,7 +322,6 @@ void Coast(float dt) {
     }
     const float target = window->Scroll.y - sCoastSpeed * dt;
     ImGui::SetScrollY(window, target);
-    // Stop at either end rather than coasting on against it.
     if (target < 0.0f || target > window->ScrollMax.y) {
         sCoastWindow = 0;
         sCoastSpeed = 0.0f;
@@ -344,7 +336,6 @@ void DragScroll() {
     const float dt = io.DeltaTime > 0.0f ? io.DeltaTime : 1.0f / 60.0f;
 
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-        // Hand a gesture that was still moving as it lifted to the coast.
         if (sDragScrollActive) {
             sCoastWindow = sDragScrollWindow;
             sCoastSpeed = sDragScrollSpeed;
@@ -356,10 +347,8 @@ void DragScroll() {
         return;
     }
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        // Catching a list that is still moving stops it, as it does everywhere else.
         sCoastWindow = 0;
         sCoastSpeed = 0.0f;
-        // A mouse has a wheel and the aim for a scrollbar, so it is left alone.
         ImGuiWindow* under =
             io.MouseSource == ImGuiMouseSource_TouchScreen ? ScrollableAncestor(g.HoveredWindow) : nullptr;
         sDragScrollWindow = under != nullptr ? under->ID : 0;
@@ -372,9 +361,6 @@ void DragScroll() {
     }
 
     ImGuiWindow* window = ImGui::FindWindowByID(sDragScrollWindow);
-    // Moving a window and working its scrollbar are drags of their own, and both of them read
-    // the other way round from this one. Neither has claimed the press yet on the frame it
-    // lands, which is why this waits for the gesture to travel before it takes anything over.
     if (window == nullptr || g.MovingWindow != nullptr ||
         (g.ActiveId != 0 && g.ActiveId == ImGui::GetWindowScrollbarID(window, ImGuiAxis_Y))) {
         sDragScrollWindow = 0;
@@ -385,7 +371,6 @@ void DragScroll() {
             return;
         }
         sDragScrollActive = true;
-        // The finger may have come down on a widget before it turned out to be a scroll.
         ImGui::ClearActiveID();
     }
     sDragScrollSpeed = sDragScrollSpeed * (1.0f - kSpeedSmoothing) + (io.MouseDelta.y / dt) * kSpeedSmoothing;

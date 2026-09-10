@@ -140,9 +140,6 @@ void GfxSetInstance(std::shared_ptr<Interpreter> gfx) {
 static constexpr float N64_PRIM_DEPTH_MAX = 32767.0f;
 
 #ifdef ENABLE_DEBUG_TOOLS
-// Which state change ended each batch inside the marked (particle) bracket. Indices:
-// 0 depth, 1 decal, 2 viewport, 3 scissor, 4 texture, 5 samplerFb, 6 sampler, 7 shader,
-// 8 alpha, 9 tri-cap.
 #define MARKED_FLUSH_CAUSE(idx)                   \
     do {                                          \
         if (!mXrSceneDepth && mBufVboNumTris > 0) \
@@ -152,7 +149,6 @@ static constexpr float N64_PRIM_DEPTH_MAX = 32767.0f;
 #define MARKED_FLUSH_CAUSE(idx)
 #endif
 
-// Park the buffered triangles under the texture they were built against.
 void Interpreter::FlushToBucket() {
     if (mBufVboLen == 0) {
         return;
@@ -180,7 +176,6 @@ void Interpreter::FlushToBucket() {
     mBufVboNumTris = 0;
 }
 
-// One draw per texture, before any other state change, in batches the backends are sized for.
 void Interpreter::DrainBuckets() {
     if (mPendingBucketsUsed == 0) {
         return;
@@ -198,8 +193,8 @@ void Interpreter::DrainBuckets() {
             const size_t count = std::min(bucket.numTris - tri, MAX_TRI_BUFFER);
             mRapi->DrawTriangles(bucket.vbo.data() + tri * floatsPerTri, count * floatsPerTri, count);
             tri += count;
-            mDrawCallCount++;
 #ifdef ENABLE_DEBUG_TOOLS
+            mDrawCallCount++;
             mDrawTextures.insert(bucket.node);
             if (!mXrSceneDepth) {
                 mMarkedDrawCount++;
@@ -223,8 +218,8 @@ void Interpreter::Flush() {
         mRapi->DrawTriangles(mBufVbo, mBufVboLen, mBufVboNumTris);
         mBufVboLen = 0;
         mBufVboNumTris = 0;
-        mDrawCallCount++;
 #ifdef ENABLE_DEBUG_TOOLS
+        mDrawCallCount++;
         const void* bound = mRenderingState.mTextures[0];
         mDrawTextures.insert(bound);
         if (!mXrSceneDepth) {
@@ -578,6 +573,8 @@ void Interpreter::TextureCacheClear() {
     mTextureCache.map.reserve(TEXTURE_CACHE_MAX_SIZE);
     // Null rendering-state pointers — they pointed into map nodes that are now freed.
     std::fill(std::begin(mRenderingState.mTextures), std::end(mRenderingState.mTextures), nullptr);
+    // A filter-mode change clears the cache, so a framebuffer slot must also lose its sampler state.
+    std::fill(std::begin(mRenderingState.mFbTextures), std::end(mRenderingState.mFbTextures), FbTextureSlot{});
 }
 
 void Interpreter::ShaderCacheClear() {
@@ -1398,8 +1395,6 @@ bool Interpreter::BuildTextureBinding(int tile, bool importReplacement, TextureB
     return true;
 }
 
-// True when slot i already holds exactly the texture this tile names, so the draw needs neither a
-// re-bind nor the batch break that goes with it.
 bool Interpreter::TextureBindingUnchanged(int i, int tile) {
     if (mRenderingState.mTextures[i] == nullptr || mRdp->loaded_texture[i].masked || mRdp->loaded_texture[i].blended) {
         return false;
@@ -1412,8 +1407,12 @@ bool Interpreter::TextureBindingUnchanged(int i, int tile) {
     if (binding.fbAddr != nullptr && mFbTextures.find((uintptr_t)binding.fbAddr) != mFbTextures.end()) {
         return false;
     }
-    // Cache keys are unique, so an equal key is the same node the map would have returned.
-    return mRenderingState.mTextures[i]->first == binding.key;
+    if (mRenderingState.mTextures[i]->first != binding.key) {
+        return false;
+    }
+    mTextureCache.lru.splice(mTextureCache.lru.end(), mTextureCache.lru,
+                             mRenderingState.mTextures[i]->second.lru_location);
+    return true;
 }
 
 void Interpreter::ImportTexture(int i, int tile, bool importReplacement) {
@@ -1686,18 +1685,15 @@ void Interpreter::ApplyXrProjection() {
     mXrProjection = false;
 
     XrViewGeometry view;
-    // An offscreen buffer holds a portrait, a map or a mirror, none of which is the room's window.
     if (mFbActive || !GetXrViewGeometry(&view)) {
         return;
     }
 
     float(&p)[4][4] = mRsp->P_matrix;
     if (p[2][3] == 0.0f) {
-        return; // guOrtho, which the game uses for its flat passes
+        return;
     }
 
-    // A projection matrix survives any uniform scale, and guPerspective applies one, so divide it
-    // out before reading the planes back off the matrix.
     const float unit = -1.0f / p[2][3];
     const float depthScale = p[2][2] * unit;
     const float depthBias = p[3][2] * unit;
@@ -1709,19 +1705,15 @@ void Interpreter::ApplyXrProjection() {
     const float nearPlane = depthBias / (depthScale - 1.0f);
     const float farPlane = depthBias / (depthScale + 1.0f);
 
-    // AdjXForAspectRatio widens the picture after the projection, so the window is wider than the
-    // matrix alone says.
     SetXrViewTangents(tanHalfWidth * mCurDimensions.aspect_ratio * 0.75f, tanHalfHeight);
 
-    // The window keeps the size the game's own frustum gives it at the viewpoint, so the framing
-    // does not change; the head only moves the apex of the frustum away from the center.
     const float halfWidth = view.windowDistance * tanHalfWidth;
     const float halfHeight = view.windowDistance * tanHalfHeight;
     const float eyeX = view.eyeOffset[0];
     const float eyeY = view.eyeOffset[1];
     const float eyeZ = view.windowDistance + view.eyeOffset[2];
     if (eyeZ < 0.1f * view.windowDistance) {
-        return; // the head has reached the glass
+        return;
     }
 
     const float left = (-halfWidth - eyeX) * nearPlane / eyeZ;
@@ -1769,7 +1761,6 @@ void Interpreter::ReapplyXrProjection() {
 float Interpreter::XrVisibleDepth(struct LoadedVertex* const vertices[3]) const {
     float depth;
 
-    // A triangle that sits on the screen whole, which most do, answers with its nearest corner.
     if (((vertices[0]->clip_rej | vertices[1]->clip_rej | vertices[2]->clip_rej) & 15) == 0) {
         depth = vertices[0]->w;
         for (int i = 1; i < 3; i++) {
@@ -1778,8 +1769,6 @@ float Interpreter::XrVisibleDepth(struct LoadedVertex* const vertices[3]) const 
             }
         }
     } else {
-        // The clip w runs linearly across the triangle, so the nearest point of the part that
-        // reaches the screen is a corner of that part. Five cuts leave at most eight corners.
         float poly[2][8][4];
         int count = 3;
         for (int i = 0; i < 3; i++) {
@@ -1812,7 +1801,7 @@ float Interpreter::XrVisibleDepth(struct LoadedVertex* const vertices[3]) const 
             }
             count = kept;
             if (count < 3) {
-                return std::numeric_limits<float>::max(); // nothing of it reaches the screen
+                return std::numeric_limits<float>::max();
             }
         }
         depth = poly[1][0][3];
@@ -2117,8 +2106,6 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
     }
 
 #ifdef ENABLE_XR_WINDOW
-    // A rectangle carries screen coordinates, not a place in the world, so it is not something the
-    // window has to stay in front of.
     if (mXrProjection && mXrSceneDepth && !is_rect && !mFbActive) {
         SetXrSceneNear(XrVisibleDepth(v_arr));
     }
@@ -2255,9 +2242,6 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
         effective_tile[i] = tile;
 
         if (comb->usedTextures[i]) {
-            // The dirty flag only says a tile command ran, not that the binding moved. A sprite
-            // re-loads the same texture for every copy it draws, so a flush here would end the
-            // batch on every one of them.
             if (mRdp->textures_changed[i] && !TextureBindingUnchanged(i, tile)) {
                 bool bucketed = false;
                 if (mTextureBatch && i == 0 && mRenderingState.mTextures[0] != nullptr &&
@@ -4490,17 +4474,27 @@ bool gfx_xr_flat_projection_handler_custom(F3DGfx** cmd0) {
 
 bool gfx_xr_scene_depth_handler_custom(F3DGfx** cmd0) {
 #ifdef ENABLE_XR_WINDOW
-    mInstance.lock()->mXrSceneDepth = (*cmd0)->words.w1 != 0;
+    Interpreter* gfx = mInstance.lock().get();
+    if ((*cmd0)->words.w1 != 0) {
+        gfx->mXrSceneDepthOff++;
+    } else if (gfx->mXrSceneDepthOff > 0) {
+        gfx->mXrSceneDepthOff--;
+    }
+    gfx->mXrSceneDepth = gfx->mXrSceneDepthOff == 0;
 #endif
     return false;
 }
 
 bool gfx_texture_batch_handler_custom(F3DGfx** cmd0) {
     Interpreter* gfx = mInstance.lock().get();
-    if ((*cmd0)->words.w1 == 0) {
+    if ((*cmd0)->words.w1 != 0) {
+        if (gfx->mTextureBatchDepth++ == 0) {
+            gfx->Flush();
+        }
+    } else if (gfx->mTextureBatchDepth > 0 && --gfx->mTextureBatchDepth == 0) {
         gfx->Flush();
     }
-    gfx->mTextureBatch = (*cmd0)->words.w1 != 0;
+    gfx->mTextureBatch = gfx->mTextureBatchDepth > 0;
     return false;
 }
 
@@ -5331,9 +5325,6 @@ void Interpreter::RegisterStereoFbPair(int fbId, int rightFbId) {
     mStereoFbRight[fbId] = rightFbId;
 }
 
-// Bind a framebuffer as the texture of a slot. The bind goes around the texture cache, so the slot
-// keeps no node and the sampler state moves here. 0xFF is not a wrap mode, so the first triangle
-// after the bind always sets the parameters on the framebuffer this slot now holds.
 void Interpreter::BindFbTexture(int slot, int fbId) {
     mRapi->SelectTextureFb(fbId);
     mRenderingState.mTextures[slot] = nullptr;
@@ -5343,7 +5334,6 @@ void Interpreter::BindFbTexture(int slot, int fbId) {
     }
 }
 
-// The right eye's pass reads and writes its own half of a stereo framebuffer pair.
 int Interpreter::StereoFbForCurrentView(int fbId) {
 #ifdef ENABLE_XR_WINDOW
     if (GetXrViewIndex() == 1) {
@@ -5536,7 +5526,10 @@ void Interpreter::RunGuiOnly() {
 
 void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_replacements) {
     SpReset();
+    mXrSceneDepthOff = 0;
     mXrSceneDepth = true;
+    mTextureBatchDepth = 0;
+    mTextureBatch = false;
 
     mGetPixelDepthPending.clear();
     mGetPixelDepthCached.clear();
@@ -5546,10 +5539,6 @@ void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_r
     mRapi->UpdateFramebufferParameters(0, mGfxCurrentWindowDimensions.width, mGfxCurrentWindowDimensions.height, 1,
                                        false, true, true, !mRendersToFb);
     mRapi->StartFrame();
-#ifdef ENABLE_XR_WINDOW
-    // After StartFrame, because that waits for a free frame on the GPU, which is not the walk.
-    const auto interpreterStart = std::chrono::steady_clock::now();
-#endif
     mRapi->StartDrawToFramebuffer(mRendersToFb ? mGameFb : 0, (float)mCurDimensions.height / mNativeDimensions.height);
     mRapi->ClearFramebuffer(true, true);
     mRdp->viewport_or_scissor_changed = true;
@@ -5602,11 +5591,6 @@ void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_r
 
         assert(0 && "active framebuffer was never reset back to original");
     }
-
-#ifdef ENABLE_XR_WINDOW
-    AddXrCost(XrCost::Interpreter,
-              std::chrono::duration<double>(std::chrono::steady_clock::now() - interpreterStart).count());
-#endif
 }
 
 void Interpreter::EndFrame() {

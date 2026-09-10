@@ -86,7 +86,6 @@ void AudioPlayer::DowngradeAudioChannels(AudioChannelsSetting channels) {
 
     mAudioSettings.ChannelSetting = channels;
 
-    // Play() only matrix decodes in audioMatrix51, so the decoder is dead weight otherwise.
     if (channels != AudioChannelsSetting::audioMatrix51) {
         mSoundMatrixDecoder.reset();
     }

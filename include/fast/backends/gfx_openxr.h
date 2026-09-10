@@ -13,19 +13,12 @@
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
-// gfx_sdl.h names SDL types without including SDL itself.
 #include <SDL2/SDL.h>
 #include "gfx_sdl.h"
 #include "gfx_xr_view.h"
 
 namespace Fast {
 
-// Presents the game on a window anchored in the room. The frame is drawn once per eye, each with
-// an off-axis frustum from that eye to the window rectangle. Each eye's image is then drawn onto
-// the window rectangle inside a full-view projection layer, with the room showing through the
-// alpha around it. A button that opens the menu, a bar that moves the window and a handle that
-// resizes it hang in that alpha, so the picture holds nothing but the game, and a pinch on the
-// picture still belongs to the game. SDL keeps the window, the GLES context, audio and controllers.
 class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
   public:
     static constexpr uint32_t VIEW_COUNT = 2;
@@ -93,7 +86,7 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     XrPosef PlanePose(float x, float y) const;
     void PresentView(uint32_t view);
     void DrawOverlays(uint32_t eye);
-    void DrawEye(uint32_t eye, uint32_t sourceView);
+    bool DrawEye(uint32_t eye, uint32_t sourceView);
     void EndRenderFrame();
     void Teardown();
 
@@ -148,7 +141,7 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     int32_t mRayFadeLoc = -1;
     int32_t mRayTaperLoc = -1;
 
-    XrView mViews[VIEW_COUNT] = {};
+    XrView mViews[VIEW_COUNT] = { { XR_TYPE_VIEW }, { XR_TYPE_VIEW } };
     bool mViewsValid = false;
     XrTime mDisplayTime = 0;
     XrTime mRecenterAfter = 0;
@@ -198,8 +191,8 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     XrAction mStickAction = XR_NULL_HANDLE;
     XrAction mTriggerAction = XR_NULL_HANDLE;
     XrAction mSqueezeAction = XR_NULL_HANDLE;
-    XrAction mFaceLowAction = XR_NULL_HANDLE;  // A on the right hand, X on the left
-    XrAction mFaceHighAction = XR_NULL_HANDLE; // B on the right hand, Y on the left
+    XrAction mFaceLowAction = XR_NULL_HANDLE;
+    XrAction mFaceHighAction = XR_NULL_HANDLE;
     XrAction mMenuAction = XR_NULL_HANDLE;
     XrAction mStickClickAction = XR_NULL_HANDLE;
     XrSpace mAimSpace[2] = { XR_NULL_HANDLE, XR_NULL_HANDLE };

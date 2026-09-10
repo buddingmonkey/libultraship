@@ -211,11 +211,10 @@ struct TextureCacheMapIter {
     TextureCacheMap::iterator it;
 };
 
-// Everything a tile needs to name a texture, with no GPU state touched and no cache entry made.
 struct TextureBinding {
     TextureCacheKey key;
-    const uint8_t* origAddr; // source address, after the empty-TMEM-slot fallback
-    const uint8_t* fbAddr;   // address the framebuffer-mirror lookup reads, null when replacing
+    const uint8_t* origAddr;
+    const uint8_t* fbAddr;
     uint32_t tmemIndex;
     uint32_t texFlags;
     uint8_t fmt, siz;
@@ -360,8 +359,6 @@ struct ColorCombiner {
     uint8_t shader_input_mapping[2][7];
 };
 
-// A framebuffer binds outside the texture cache, so its slot holds no node to carry the sampler
-// state a cached texture keeps in its own.
 struct FbTextureSlot {
     bool bound;
     int fbId;
@@ -430,9 +427,6 @@ class Interpreter {
     // of reading from CPU memory — giving full GPU resolution with no readback.
     void RegisterFbTexture(const void* cpuAddr, int fbId);
     void UnregisterFbTexture(const void* cpuAddr);
-    // Pair a framebuffer with a second one for the right eye. On the second view of a stereo
-    // frame, a copy into or a texture bind of fbId goes to rightFbId instead, so each eye keeps
-    // its own capture.
     void RegisterStereoFbPair(int fbId, int rightFbId);
     int StereoFbForCurrentView(int fbId);
     void BindFbTexture(int slot, int fbId);
@@ -473,15 +467,9 @@ class Interpreter {
     void SetResolvedResourceCacheEnabled(bool enabled);
 
     void GfxSpMatrix(uint8_t params, const int32_t* addr);
-    // Swaps the game's perspective for an off-axis frustum from the tracked eye to a window fixed
-    // in the room. The game's own view stays where it is; only the apex of the frustum moves.
     void ApplyXrProjection();
 #ifdef ENABLE_XR_WINDOW
-    // Builds the projection again from the parts the game gave it, so a mark that turns the window
-    // frustum on or off acts at once and not at the next projection load.
     void ReapplyXrProjection();
-    // Depth from the viewpoint to the nearest part of the triangle that reaches the screen. A
-    // corner that misses the screen must not count: the glass would sit at it for nothing.
     float XrVisibleDepth(struct LoadedVertex* const vertices[3]) const;
 #endif
     void GfxSpPopMatrix(uint32_t count);
@@ -569,16 +557,11 @@ class Interpreter {
     float* mBufVbo; // 3 vertices in a triangle and 32 floats per vtx
     size_t mBufVboLen{};
     size_t mBufVboNumTris{};
-    uint32_t mDrawCallCount{}; // draws issued since the port last cleared it
 #ifdef ENABLE_DEBUG_TOOLS
-    // What perfect batching would leave. A draw ends at a state change, and for sprite content the
-    // change is almost always the texture binding, so the count of distinct bindings is the floor
-    // the draws could fall to. The marked pair is the same question asked of the pass a display
-    // list keeps out of the window depth measurement, which is where the particles are.
+    uint32_t mDrawCallCount{};
     uint32_t mMarkedDrawCount{};
     uint32_t mMarkedFlushCauses[10]{};
 #endif
-    // One bucket per texture inside a gSPTextureBatch span; drained as one draw each.
     struct PendingBucket {
         uint32_t textureId{};
         const void* node{};
@@ -588,6 +571,7 @@ class Interpreter {
     std::vector<PendingBucket> mPendingBuckets;
     size_t mPendingBucketsUsed{};
     bool mTextureBatch = false;
+    int mTextureBatchDepth{};
     void FlushToBucket();
     void DrainBuckets();
 #ifdef ENABLE_DEBUG_TOOLS
@@ -605,25 +589,17 @@ class Interpreter {
     std::map<int, FBInfo>::iterator mActiveFrameBuffer;
     std::map<int, FBInfo> mFrameBuffers;
 
-    // Whether the draws that follow count toward how near the scene comes to the viewer. A pass
-    // that sits in front of what it decorates turns it off, so the window does not lurch forward.
     bool mXrSceneDepth = true;
+    int mXrSceneDepthOff{};
 
-    // Set while the off-axis frustum of a headset stands in for the game's projection, with the
-    // two numbers that turn a clip w back into a depth from the viewpoint.
     bool mXrProjection{};
     float mXrEyeZ{};
     float mXrNearPlane{};
 
-    // The projection as the game loaded it, and everything the game multiplied onto it after.
-    // ApplyXrProjection writes over P_matrix and reads a plain perspective, so the window frustum
-    // has to be built from the loaded copy and the multiplies put back on top of the result.
     float mXrLoadedProjection[4][4]{};
     float mXrProjectionPostMul[4][4]{};
     bool mXrLoadedProjectionValid{};
 
-    // How many marks are open. A HUD element that marks itself can be drawn inside a pass that is
-    // marked already, and the inner mark must not end the outer one.
     int mXrFlatDepth{};
 
     int mGameFb{};             // game_framebuffer;
@@ -633,7 +609,7 @@ class Interpreter {
     std::unordered_map<std::pair<float, float>, uint16_t, hash_pair_ff> mGetPixelDepthCached; // get_pixel_depth_cached;
     std::map<std::string, MaskedTextureEntry, std::less<>> mMaskedTextures;
     std::unordered_map<uintptr_t, int> mFbTextures; // CPU addr -> GPU FB id
-    std::unordered_map<int, int> mStereoFbRight;    // GPU FB id -> right-eye GPU FB id
+    std::unordered_map<int, int> mStereoFbRight;
 
     const std::unordered_map<Mtx*, MtxF>* mCurMtxReplacements;
     bool mMarkerOn; // This was originally a debug feature. Now it seems to control s2dex?

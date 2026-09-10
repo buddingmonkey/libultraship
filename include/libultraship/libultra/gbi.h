@@ -2764,9 +2764,7 @@ typedef union Gfx {
 #define gsSPInvalidateTexCache() \
     { _SHIFTL(G_INVALTEXCACHE, 24, 8), 0 }
 
-// Holds the draws that follow on the headset's window plane, so a HUD element the game places in
-// front of the camera does not take the off-axis frustum and float in the room. Does nothing
-// without a headset.
+// Holds the draws that follow on the headset window plane, so a HUD element does not float in the room.
 #define gSPXrFlatProjection(pkt, on)                  \
     _DW({                                             \
         Gfx* _g = (Gfx*)(pkt);                        \
@@ -2775,10 +2773,7 @@ typedef union Gfx {
         _g->words.w1 = (unsigned int)(on);            \
     })
 
-// Keeps the draws that follow out of the measurement of how near the scene comes to the viewer.
-// The headset holds its window in front of the nearest thing the game draws, and something that
-// sits in front of what it decorates and lasts a moment, like a particle, must not pull the whole
-// window in with it. Does nothing without a headset.
+// Keeps the draws that follow out of the scene depth measurement; 1 opens a region, 0 closes it, and they nest.
 #define gSPXrSceneDepth(pkt, on)                        \
     _DW({                                               \
         Gfx* _g = (Gfx*)(pkt);                          \

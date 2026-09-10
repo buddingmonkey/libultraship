@@ -144,10 +144,8 @@ uint16_t Fast3dWindow::GetPixelDepth(float x, float y) {
 
 void Fast3dWindow::InitWindowManager() {
 #if defined(__VISIONOS__)
-    // The compositor owns the display, so there is nothing for the player to choose.
     SetWindowBackend(WindowBackend::FAST3D_VISIONOS_METAL);
 #elif defined(ENABLE_OPENXR)
-    // The backend falls back to the flat panel by itself when no session comes up.
     SetWindowBackend(WindowBackend::FAST3D_OPENXR_OPENGL);
 #else
     SetWindowBackend(GetSavedWindowBackend());
@@ -232,7 +230,6 @@ bool Fast3dWindow::DrawAndRunGraphicsCommands(Gfx* commands, const std::unordere
     auto gui = wnd->GetGui();
     // Setup mouse state manager
     wnd->GetMouseStateManager()->StartFrame();
-    // A headset asks for the frame once per eye; every other backend asks for it once
     const uint32_t views = BeginRenderFrame();
     for (uint32_t view = 0; view < views; view++) {
         BeginRenderView(view);

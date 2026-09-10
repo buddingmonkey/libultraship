@@ -44,8 +44,8 @@ typedef struct {
             uint32_t Height; ///< Framebuffer height in pixels.
         } Gx2;
         struct {
-            uint32_t Width;  ///< Game texture width in pixels.
-            uint32_t Height; ///< Game texture height in pixels.
+            uint32_t Width;
+            uint32_t Height;
         } VisionOS;
     };
     WindowBackend Backend;

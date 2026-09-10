@@ -13,17 +13,6 @@ typedef union {
     void* ptr;
 } OSMesg;
 
-/*
- * Initialising a narrow member leaves the union's remaining bytes -- including the upper half
- * of the 64-bit ptr -- holding unspecified values, i.e. whatever was on the stack. Receivers
- * tell an event apart from a task pointer by inspecting the whole pointer, so those bytes
- * matter: graphics_thread.c does `if ((uintptr_t)msg.ptr < 100)`, and garbage in the high word
- * turned event 5 into 0x100000005, which then got dereferenced. That crashed on arm64/iOS;
- * x86_64 desktops only escaped because the leftover bytes happened to be zero.
- *
- * Writing the full pointer width instead leaves every member well defined -- the data8/16/32
- * views still read back the value on the little-endian targets these ports run on.
- */
 #define OS_MESG_8(x) ((OSMesg){ .ptr = (void*)(uintptr_t)(u8)(x) })
 #define OS_MESG_16(x) ((OSMesg){ .ptr = (void*)(uintptr_t)(u16)(x) })
 #define OS_MESG_32(x) ((OSMesg){ .ptr = (void*)(uintptr_t)(u32)(x) })

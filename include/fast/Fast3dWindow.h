@@ -85,12 +85,9 @@ class Fast3dWindow : public Ship::Window {
     void EnableSRGBMode();
     bool DrawAndRunGraphicsCommands(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtxReplacements);
 
-    // How many views the frame must be drawn into, and which one is next. A port that expands
-    // DrawAndRunGraphicsCommands itself has to loop over these to reach a headset.
     uint32_t BeginRenderFrame();
     void BeginRenderView(uint32_t view);
 
-    // Rates the display can be driven at, and a request for one of them. Empty off a headset.
     std::vector<float> GetSupportedRefreshRates();
     bool SetRefreshRate(float rate);
 

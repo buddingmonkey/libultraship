@@ -46,8 +46,6 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARA
 #endif
 
 #ifdef __VISIONOS__
-// imgui's SDL2 platform backend is never started here, because there is no SDL window, but its key
-// table is public and it stays right as imgui changes.
 ImGuiKey ImGui_ImplSDL2_KeyEventToImGuiKey(SDL_Keycode keycode, SDL_Scancode scancode);
 #endif
 
@@ -80,8 +78,6 @@ bool Fast3dGui::SupportsViewports() {
 }
 
 #ifdef __VISIONOS__
-// SDL fills its keymap inside SDL_VideoInit, which this build never runs, so name the key the way
-// SDL's own default table does: ASCII where the key has one, and the masked scancode otherwise.
 static SDL_Keycode VisionOSKeycode(SDL_Scancode scancode) {
     if (scancode >= SDL_SCANCODE_A && scancode <= SDL_SCANCODE_Z) {
         return SDLK_a + (scancode - SDL_SCANCODE_A);
@@ -107,8 +103,6 @@ static SDL_Keycode VisionOSKeycode(SDL_Scancode scancode) {
     }
 }
 
-// A US layout, which is what the keycode above describes. Anything else needs the layout the
-// system holds, and the Game Controller framework does not report one.
 static char VisionOSCharacter(SDL_Keycode keycode, bool shift) {
     static const char plain[] = "1234567890-=[]\\;',./`";
     static const char shifted[] = "!@#$%^&*()_+{}|:\"<>?~";
@@ -140,8 +134,6 @@ static void VisionOSHandleKey(int rawScancode, bool pressed) {
     ImGuiIO& io = ImGui::GetIO();
     io.AddKeyEvent(key, pressed);
 
-    // imgui only reads a queued key back at the next frame, so shift is counted here instead. A
-    // shift and the letter after it can arrive in the same batch.
     static bool sLeftShift = false;
     static bool sRightShift = false;
     if (scancode == SDL_SCANCODE_LSHIFT) {
@@ -186,7 +178,6 @@ void Fast3dGui::HandleWindowEvents(Fast::WindowEvent event) {
 }
 
 #ifdef __VISIONOS__
-// There is no platform backend to give ImGui a frame time, and ImGui needs one above zero.
 static float VisionOSDeltaTime() {
     static std::chrono::steady_clock::time_point sLast{};
     const auto now = std::chrono::steady_clock::now();
@@ -356,10 +347,6 @@ void Fast3dGui::ImGuiWMNewFrame() {
         case WindowBackend::FAST3D_SDL_OPENGL: {
             ImGui_ImplSDL2_NewFrame();
 #ifdef ENABLE_OPENXR
-            // ImGui's SDL2 backend takes the display size from the window. A headset window is a
-            // rectangle in the room, and the backend draws the eye it is on at the size of that
-            // rectangle, not at the size of the panel SDL holds. Take the size the window backend
-            // reports so the menu is laid out and drawn in the same units the picture is.
             auto interpreter = mInterpreter.lock();
             if (interpreter != nullptr) {
                 uint32_t width = 0;
@@ -378,12 +365,6 @@ void Fast3dGui::ImGuiWMNewFrame() {
         case WindowBackend::FAST3D_SDL_METAL: {
             ImGui_ImplSDL2_NewFrame();
 
-            // ImGui's SDL2 backend derives DisplayFramebufferScale from SDL_GL_GetDrawableSize().
-            // UIKit only implements that for GL views -- given a Metal view it falls through to
-            // SDL_GetWindowSize(), which reports points, so the scale comes out 1.0 on a 2x/3x iOS
-            // display instead of 2.0/3.0. GfxRenderingAPIMetal::RenderDrawData() then finds
-            // DisplaySize * scale disagreeing with its pixel-sized screen texture and drops every
-            // ImGui frame, leaving nothing but the cleared framebuffer on screen.
             SDL_Window* metalWindow = static_cast<SDL_Window*>(mImpl.Metal.Window);
             int pixelWidth = 0, pixelHeight = 0, pointWidth = 0, pointHeight = 0;
             SDL_Metal_GetDrawableSize(metalWindow, &pixelWidth, &pixelHeight);
@@ -396,8 +377,7 @@ void Fast3dGui::ImGuiWMNewFrame() {
         }
 #ifdef __VISIONOS__
         case WindowBackend::FAST3D_VISIONOS_METAL: {
-            // No SDL window means no platform backend, so nothing else fills these in. The size
-            // must equal the game texture, or RenderDrawData drops every ImGui frame.
+            // The size must equal the game texture, or RenderDrawData drops every ImGui frame.
             auto interpreter = mInterpreter.lock();
             uint32_t width = mImpl.VisionOS.Width;
             uint32_t height = mImpl.VisionOS.Height;
@@ -417,10 +397,6 @@ void Fast3dGui::ImGuiWMNewFrame() {
                 static float sY = -FLT_MAX;
                 static bool sPressed = false;
                 static bool sHavePos = false;
-                // The whole display list runs once per eye, so this is reached twice a frame in
-                // stereo. The pointer must still take one step a frame, or a press and the position
-                // it belongs to arrive together again and ImGui takes the item that was under the
-                // one before. Both eyes are then given the same state, so their frames agree.
                 VisionOSPointer next{};
                 if (GetXrViewIndex() == 0 && PeekVisionOSPointer(&next)) {
                     const bool newPlace = next.Valid && (!sHavePos || next.X != sX || next.Y != sY);
@@ -429,9 +405,6 @@ void Fast3dGui::ImGuiWMNewFrame() {
                         sY = next.Y;
                         sHavePos = true;
                     }
-                    // A press that arrives at a new place gives up the place on this frame and the
-                    // press on the next. A press that is already held only moves, and moves at once,
-                    // which is what a slider needs.
                     if (!(next.Valid && next.Pressed != sPressed && newPlace)) {
                         sPressed = next.Valid && next.Pressed;
                         PopVisionOSPointer();
