@@ -9,6 +9,8 @@ struct XrViewGeometry {
     float windowDistance;
 };
 
+bool IsXrPresenting();
+
 bool GetXrViewGeometry(XrViewGeometry* geometry);
 
 void SetXrSceneNear(float units);

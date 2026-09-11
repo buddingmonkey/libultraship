@@ -205,6 +205,10 @@ void SetXrSceneNear(float units) {
     }
 }
 
+bool IsXrPresenting() {
+    return true;
+}
+
 void SetXrFlatProjection(bool flat) {
     gFlatProjection = flat;
 }

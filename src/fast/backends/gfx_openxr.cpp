@@ -95,6 +95,7 @@ static constexpr float EDGE_FLOAT_MAX = 1.0f;
 
 static constexpr float RECENTER_YAW_MIN = 0.035f;
 
+static bool sPresenting = false;
 static float sWindowDistance = WINDOW_DISTANCE_DEFAULT;
 static float sWindowScale = WINDOW_SCALE_DEFAULT;
 static float sDioramaDepth = DIORAMA_DEPTH_DEFAULT;
@@ -142,6 +143,8 @@ void GfxWindowBackendOpenXR::Init(const char* gameName, const char* apiName, boo
     GfxWindowBackendSDL2::Init(gameName, apiName, startFullScreen, width, height, posX, posY);
 
     mActive = StartSession();
+    // A phone build defines ENABLE_OPENXR too, so this is the only proof of a headset.
+    sPresenting = mActive;
     if (!mActive) {
         SPDLOG_ERROR("OpenXR: no session; the game stays on the flat panel");
         Teardown();
@@ -900,6 +903,10 @@ void SetXrEdgeFloat(float fraction) {
 
 int GetXrViewIndex() {
     return sCurrentViewIndex;
+}
+
+bool IsXrPresenting() {
+    return sPresenting;
 }
 
 void SetXrFlatProjection(bool flat) {
