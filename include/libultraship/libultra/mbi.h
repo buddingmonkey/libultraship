@@ -23,6 +23,8 @@
  * (NOTE: _SHIFTL(v, 0, 32) won't work, just use an assignment)
  *
  */
+#undef _SHIFTL
+#undef _SHIFTR
 #define _SHIFTL(v, s, w) ((u32)(((u32)(v) & ((0x01 << (w)) - 1)) << (s)))
 #define _SHIFTR(v, s, w) ((u32)(((u32)(v) >> (s)) & ((0x01 << (w)) - 1)))
 

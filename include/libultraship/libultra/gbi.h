@@ -260,6 +260,9 @@
 
 /* macros for command parsing: */
 #define GDMACMD(x) (x)
+#ifdef GIMMCMD
+#undef GIMMCMD
+#endif
 #define GIMMCMD(x) (G_IMMFIRST - (x))
 #define GRDPCMD(x) (0xff - (x))
 
