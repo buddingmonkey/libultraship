@@ -30,7 +30,74 @@
 #include <pwd.h>
 #endif
 
+#ifdef __ANDROID__
+#include <jni.h>
+#include <filesystem>
+#endif
+
 namespace Ship {
+#ifdef __ANDROID__
+namespace {
+std::string AndroidMediaDirectory() {
+    auto* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+    auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+    if (env == nullptr || activity == nullptr) {
+        return "";
+    }
+    std::string path;
+    jclass contextClass = env->GetObjectClass(activity);
+    jmethodID getDirs = env->GetMethodID(contextClass, "getExternalMediaDirs", "()[Ljava/io/File;");
+    if (getDirs == nullptr) {
+        env->ExceptionClear();
+    } else {
+        auto dirs = static_cast<jobjectArray>(env->CallObjectMethod(activity, getDirs));
+        if (dirs != nullptr) {
+            jobject dir = env->GetArrayLength(dirs) > 0 ? env->GetObjectArrayElement(dirs, 0) : nullptr;
+            if (dir != nullptr) {
+                jclass fileClass = env->GetObjectClass(dir);
+                jmethodID getPath = env->GetMethodID(fileClass, "getAbsolutePath", "()Ljava/lang/String;");
+                auto jpath = getPath != nullptr ? static_cast<jstring>(env->CallObjectMethod(dir, getPath)) : nullptr;
+                if (jpath != nullptr) {
+                    const char* chars = env->GetStringUTFChars(jpath, nullptr);
+                    if (chars != nullptr) {
+                        path = chars;
+                        env->ReleaseStringUTFChars(jpath, chars);
+                    }
+                    env->DeleteLocalRef(jpath);
+                } else {
+                    env->ExceptionClear();
+                }
+                env->DeleteLocalRef(fileClass);
+                env->DeleteLocalRef(dir);
+            }
+            env->DeleteLocalRef(dirs);
+        } else {
+            env->ExceptionClear();
+        }
+    }
+    env->DeleteLocalRef(contextClass);
+    env->DeleteLocalRef(activity);
+    return path;
+}
+
+// Android 11 closed Android/data to the Files app, to USB and to the document picker.
+// Android/media stayed open to all three and needs no permission.
+const char* AndroidAppDirectory() {
+    static const std::string path = []() -> std::string {
+        std::string media = AndroidMediaDirectory();
+        std::error_code ec;
+        if (!media.empty() && (std::filesystem::is_directory(media, ec) ||
+                               std::filesystem::create_directories(media, ec))) {
+            return media;
+        }
+        const char* external = SDL_AndroidGetExternalStoragePath();
+        return external != nullptr ? std::string(external) : std::string();
+    }();
+    return path.empty() ? nullptr : path.c_str();
+}
+} // namespace
+#endif
+
 // Constructs spdlog's registry before mContext, so it outlives every destructor below that logs.
 [[maybe_unused]] const bool gSpdlogRegistryBeforeContext = spdlog::default_logger_raw() != nullptr;
 
@@ -485,9 +552,9 @@ std::string Context::GetShortName() const {
 
 std::string Context::GetAppBundlePath() {
 #if defined(__ANDROID__)
-    const char* externaldir = SDL_AndroidGetExternalStoragePath();
-    if (externaldir != NULL) {
-        return externaldir;
+    const char* appdir = AndroidAppDirectory();
+    if (appdir != NULL) {
+        return appdir;
     }
 #endif
 
@@ -543,9 +610,9 @@ std::string Context::GetAppBundlePath() {
 
 std::string Context::GetAppDirectoryPath(const std::string& appName) {
 #if defined(__ANDROID__)
-    const char* externaldir = SDL_AndroidGetExternalStoragePath();
-    if (externaldir != NULL) {
-        return externaldir;
+    const char* appdir = AndroidAppDirectory();
+    if (appdir != NULL) {
+        return appdir;
     }
 #endif
 
