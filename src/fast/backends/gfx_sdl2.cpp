@@ -804,7 +804,7 @@ void GfxWindowBackendSDL2::SyncFramerateWithTime() const {
 }
 
 void GfxWindowBackendSDL2::SwapBuffersBegin() {
-#ifdef ENABLE_DEBUG_TOOLS
+#if defined(ENABLE_DEBUG_TOOLS) && !defined(__APPLE__)
     DebugCapture::Arm();
     if (DebugCapture::Pending()) {
         int width = 0;
