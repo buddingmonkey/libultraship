@@ -15,6 +15,9 @@
 #include "ship/controller/controldeck/ControlDeck.h"
 #include "ship/window/FileDropMgr.h"
 #include "fast/backends/gfx_sdl.h"
+#ifdef ENABLE_DEBUG_TOOLS
+#include "fast/backends/gfx_debug_pointer.h"
+#endif
 
 #ifdef __OpenBSD__
 #include <sys/sysctl.h>
@@ -688,6 +691,53 @@ void GfxWindowBackendSDL2::HandleEvents() {
     while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_CONTROLLERDEVICEREMOVED + 1, SDL_LASTEVENT) > 0) {
         HandleSingleEvent(event);
     }
+
+#ifdef ENABLE_DEBUG_TOOLS
+    {
+        static bool sPointerWasLive = false;
+        static bool sPointerWasDown = false;
+        float u = 0.0f;
+        float v = 0.0f;
+        bool down = false;
+        const bool live = DebugPointer::Poll(&u, &v, &down);
+        const Uint32 windowId = SDL_GetWindowID(mWnd);
+        if (live) {
+            int w = 0;
+            int h = 0;
+            SDL_GetWindowSize(mWnd, &w, &h);
+            const Sint32 x = static_cast<Sint32>(u * (float)w);
+            const Sint32 y = static_cast<Sint32>(v * (float)h);
+            SDL_Event motion{};
+            motion.type = SDL_MOUSEMOTION;
+            motion.motion.windowID = windowId;
+            motion.motion.x = x;
+            motion.motion.y = y;
+            SDL_PushEvent(&motion);
+            if (down != sPointerWasDown) {
+                SDL_Event press{};
+                press.type = down ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
+                press.button.windowID = windowId;
+                press.button.button = SDL_BUTTON_LEFT;
+                press.button.state = down ? SDL_PRESSED : SDL_RELEASED;
+                press.button.clicks = 1;
+                press.button.x = x;
+                press.button.y = y;
+                SDL_PushEvent(&press);
+                sPointerWasDown = down;
+            }
+        } else if (sPointerWasLive && sPointerWasDown) {
+            SDL_Event release{};
+            release.type = SDL_MOUSEBUTTONUP;
+            release.button.windowID = windowId;
+            release.button.button = SDL_BUTTON_LEFT;
+            release.button.state = SDL_RELEASED;
+            release.button.clicks = 1;
+            SDL_PushEvent(&release);
+            sPointerWasDown = false;
+        }
+        sPointerWasLive = live;
+    }
+#endif
 
     // resync fullscreen state
 #if defined(__APPLE__) && !defined(__IOS__)

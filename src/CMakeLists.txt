@@ -143,9 +143,9 @@ if (ENABLE_OPENXR OR CMAKE_SYSTEM_NAME STREQUAL "visionOS")
     target_compile_definitions(libultraship PUBLIC ENABLE_XR_WINDOW)
 endif()
 
-# An Android device gives up neither a screenshot nor a log of its own. These tools let the app
-# hand a frame out and take a controller state in. They are for bring-up, never for a release.
-if (ENABLE_DEBUG_TOOLS AND CMAKE_SYSTEM_NAME STREQUAL "Android")
+# A device gives up neither a screenshot nor a log of its own. These tools let the app
+# hand a frame out and take a pointer or controller state in. Bring-up only, never a release.
+if (ENABLE_DEBUG_TOOLS)
     target_compile_definitions(libultraship PUBLIC ENABLE_DEBUG_TOOLS)
 endif()
 

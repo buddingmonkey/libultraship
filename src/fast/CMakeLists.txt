@@ -29,7 +29,7 @@ if (NOT ENABLE_OPENXR)
     list(FILTER Source_Files__Graphic EXCLUDE REGEX "gfx_openxr")
 endif()
 
-if (NOT ENABLE_DEBUG_TOOLS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Android")
+if (NOT ENABLE_DEBUG_TOOLS)
     list(FILTER Source_Files__Graphic EXCLUDE REGEX "gfx_debug_")
 endif()
 
