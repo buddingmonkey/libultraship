@@ -93,6 +93,8 @@ void UIKitRequestOrientationLock(SDL_Window* window) {
         SPDLOG_WARN("No UIKit view controller; the orientation lock is not requested");
         return;
     }
+    sWindow.backgroundColor = UIColor.blackColor;
+    controller.view.backgroundColor = UIColor.blackColor;
     if (@available(iOS 26.0, *)) {
         Method transition = class_getInstanceMethod([controller class], @selector(viewWillTransitionToSize:
                                                                                          withTransitionCoordinator:));
