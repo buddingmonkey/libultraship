@@ -16,6 +16,7 @@
 
 #include <any>
 #include <chrono>
+#include <fstream>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -246,6 +247,14 @@ ShaderProgram* Interpreter::LookupOrCreateShaderProgram(uint64_t id0, uint64_t i
         mRapi->UnloadShader(mRenderingState.mShaderProgram);
         prg = mRapi->CreateAndLoadNewShader(id0, id1);
         mRenderingState.mShaderProgram = prg;
+#ifdef ENABLE_DEBUG_TOOLS
+        // Feeds the port's prewarm list: every combination a session compiles lands here.
+        static std::ofstream harvest(Ship::Context::GetPathRelativeToAppDirectory("shader-prewarm-harvest.txt"),
+                                     std::ios::app);
+        if (harvest.is_open()) {
+            harvest << std::hex << id0 << "/" << id1 << std::dec << "\n" << std::flush;
+        }
+#endif
     }
     return prg;
 }
