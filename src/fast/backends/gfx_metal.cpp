@@ -141,6 +141,7 @@ void GfxRenderingAPIMetal::SetExternalClearColor(double red, double green, doubl
 }
 
 void GfxRenderingAPIMetal::NewFrame() {
+    mGuiDrawSkipped = false;
     if (mExternalTarget) {
         SetupScreenFramebuffer(mExternalColorTexture->width(), mExternalColorTexture->height());
         MTL::RenderPassDescriptor* external_render_pass = mFramebuffers[0].mRenderPassDescriptor;
@@ -180,6 +181,7 @@ void GfxRenderingAPIMetal::RenderDrawData(ImDrawData* drawData) {
                         screen_texture->width(), screen_texture->height(), fb_width, fb_height, drawData->DisplaySize.x,
                         drawData->DisplaySize.y, drawData->FramebufferScale.x, drawData->FramebufferScale.y);
         }
+        mGuiDrawSkipped = true;
         return;
     }
 
@@ -723,7 +725,8 @@ void GfxRenderingAPIMetal::EndFrame() {
         mScreenReadbackRequested = false;
     }
 
-    if (mCurrentDrawable != nullptr) {
+    // A skipped GUI pass leaves the drawable cleared; presenting it puts a black frame on screen.
+    if (mCurrentDrawable != nullptr && !mGuiDrawSkipped) {
         screen_framebuffer.mCommandBuffer->presentDrawable(mCurrentDrawable);
     }
     mCurrentVertexBufferPoolIndex = (mCurrentVertexBufferPoolIndex + 1) % kMaxVertexBufferPoolSize;

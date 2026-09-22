@@ -241,6 +241,7 @@ class GfxRenderingAPIMetal final : public GfxRenderingAPI {
     // Current state
     struct ShaderProgramMetal* mShaderProgram;
     CA::MetalDrawable* mCurrentDrawable;
+    bool mGuiDrawSkipped = false;
     std::set<int> mDrawnFramebuffers;
     NS::AutoreleasePool* mFrameAutoreleasePool;
 
