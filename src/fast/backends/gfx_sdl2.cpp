@@ -698,10 +698,6 @@ void GfxWindowBackendSDL2::HandleEvents() {
     while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_CONTROLLERDEVICEREMOVED + 1, SDL_LASTEVENT) > 0) {
         HandleSingleEvent(event);
     }
-#if defined(__IOS__) && !defined(__VISIONOS__)
-    UIKitUpdateOrientationLock(mWnd);
-#endif
-
 #ifdef ENABLE_DEBUG_TOOLS
     {
         static bool sPointerWasLive = false;
