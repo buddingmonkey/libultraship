@@ -120,6 +120,11 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR LUS_APPLE_MOBILE)
     target_link_libraries(libultraship PRIVATE ${OSX_FOUNDATION} ${OSX_AVFOUNDATION} ${METAL} ${QUARTZCORE} ${COREAUDIO} ${AUDIOTOOLBOX} ${CMAKE_DL_LIBS})
 endif()
 
+if (LUS_APPLE_MOBILE AND NOT CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+    find_library(COREMOTION CoreMotion)
+    target_link_libraries(libultraship PRIVATE ${COREMOTION})
+endif()
+
 if (USE_OPENGLES)
     if (CMAKE_SYSTEM_NAME STREQUAL "Android")
         find_library(OPENGLES_LIBRARY GLESv3)
