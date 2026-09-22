@@ -28,10 +28,7 @@ UIWindow* WindowOf(SDL_Window* window) {
     return info.info.uikit.window;
 }
 
-bool DeviceFacesOtherLandscape(UIDeviceOrientation device, UIInterfaceOrientation scene) {
-    return (device == UIDeviceOrientationLandscapeLeft && scene != UIInterfaceOrientationLandscapeRight) ||
-           (device == UIDeviceOrientationLandscapeRight && scene != UIInterfaceOrientationLandscapeLeft);
-}
+UIDeviceOrientation sLastDevice = UIDeviceOrientationUnknown;
 } // namespace
 
 void UIKitRequestOrientationLock(SDL_Window* window) {
@@ -76,7 +73,18 @@ void UIKitUpdateOrientationLock(SDL_Window* window) {
             sLandscapeRequested = false;
         }
 
-        const BOOL wanted = landscape && !DeviceFacesOtherLandscape(device, orientation);
+        if (device != sLastDevice) {
+            sLastDevice = device;
+            SPDLOG_INFO("Device orientation {}: interface orientation {}, orientation lock {}", (long)device,
+                        (long)orientation, scene.effectiveGeometry.isInterfaceOrientationLocked ? "held" : "not held");
+        }
+
+        BOOL wanted = sLockWanted;
+        if (UIDeviceOrientationIsPortrait(device)) {
+            wanted = landscape;
+        } else if (UIDeviceOrientationIsLandscape(device)) {
+            wanted = NO;
+        }
         if (wanted == sLockWanted) {
             return;
         }
