@@ -331,6 +331,9 @@ struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(uint64_t shad
     prg->numInputs = cc_features.numInputs;
     prg->numFloats = numFloats;
 
+#ifdef ENABLE_DEBUG_TOOLS
+    const auto pipelineCompileStart = std::chrono::steady_clock::now();
+#endif
     // Prepoluate pipeline state cache with program and available msaa levels
     for (int i = 0; i < ARRAY_COUNT(mMsaaNumQualityLevels); i++) {
         if (mMsaaNumQualityLevels[i] == 1) {
@@ -350,6 +353,14 @@ struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(uint64_t shad
             prg->pipeline_state_variants[msaa_level] = pipeline_state;
         }
     }
+
+#ifdef ENABLE_DEBUG_TOOLS
+    SPDLOG_INFO("metal pipeline compile: ids {:x}/{:x} took {} ms",
+                shader_id0, static_cast<uint32_t>(shader_id1),
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                      pipelineCompileStart)
+                    .count());
+#endif
 
     LoadShader((struct ShaderProgram*)prg);
 
