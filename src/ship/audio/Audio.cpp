@@ -1,4 +1,7 @@
 #include "ship/audio/Audio.h"
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 
 #ifdef __APPLE__
 #include "ship/audio/CoreAudioAudioPlayer.h"
@@ -49,6 +52,10 @@ void Audio::Init() {
     mAvailableAudioBackends->push_back(AudioBackend::WASAPI);
 #endif
 #ifdef __APPLE__
+#if TARGET_OS_SIMULATOR
+    // The Simulator's remote audio unit can abort inside AudioToolbox; SDL goes first there.
+    mAvailableAudioBackends->push_back(AudioBackend::SDL);
+#endif
     mAvailableAudioBackends->push_back(AudioBackend::COREAUDIO);
 #endif
     mAvailableAudioBackends->push_back(AudioBackend::SDL);
@@ -98,7 +105,11 @@ AudioBackend Audio::GetSavedAudioBackend() {
 #endif
 
 #ifdef __APPLE__
+#if TARGET_OS_SIMULATOR
+    return AudioBackend::SDL;
+#else
     return AudioBackend::COREAUDIO;
+#endif
 #endif
 
     return AudioBackend::SDL;
