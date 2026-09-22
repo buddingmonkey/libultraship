@@ -24,6 +24,7 @@ class Texture;
 class SamplerState;
 class CommandBuffer;
 class RenderPassDescriptor;
+class RenderPipelineDescriptor;
 class RenderCommandEncoder;
 class SamplerState;
 class ScissorRect;
