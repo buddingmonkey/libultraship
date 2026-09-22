@@ -11,8 +11,12 @@
 namespace Fast {
 
 namespace {
+BOOL sLockWanted = NO;
+bool sInstalled = false;
+bool sLandscapeRequested = false;
+
 BOOL PrefersInterfaceOrientationLocked(id, SEL) {
-    return YES;
+    return sLockWanted;
 }
 
 UIWindow* WindowOf(SDL_Window* window) {
@@ -22,6 +26,11 @@ UIWindow* WindowOf(SDL_Window* window) {
         return nil;
     }
     return info.info.uikit.window;
+}
+
+bool DeviceFacesOtherLandscape(UIDeviceOrientation device, UIInterfaceOrientation scene) {
+    return (device == UIDeviceOrientationLandscapeLeft && scene != UIInterfaceOrientationLandscapeRight) ||
+           (device == UIDeviceOrientationLandscapeRight && scene != UIInterfaceOrientationLandscapeLeft);
 }
 } // namespace
 
@@ -34,7 +43,47 @@ void UIKitRequestOrientationLock(SDL_Window* window) {
     if (@available(iOS 26.0, *)) {
         class_addMethod([controller class], @selector(prefersInterfaceOrientationLocked),
                         (IMP)PrefersInterfaceOrientationLocked, "B@:");
-        [controller setNeedsUpdateOfPrefersInterfaceOrientationLocked];
+        [UIDevice.currentDevice beginGeneratingDeviceOrientationNotifications];
+        sInstalled = true;
+        UIKitUpdateOrientationLock(window);
+    }
+}
+
+void UIKitUpdateOrientationLock(SDL_Window* window) {
+    if (!sInstalled) {
+        return;
+    }
+    if (@available(iOS 26.0, *)) {
+        UIWindow* uiWindow = WindowOf(window);
+        UIWindowScene* scene = uiWindow.windowScene;
+        if (scene == nil) {
+            return;
+        }
+        const UIInterfaceOrientation orientation = scene.effectiveGeometry.interfaceOrientation;
+        const UIDeviceOrientation device = UIDevice.currentDevice.orientation;
+        const bool landscape = UIInterfaceOrientationIsLandscape(orientation);
+
+        if (!landscape && !sLandscapeRequested) {
+            sLandscapeRequested = true;
+            UIWindowSceneGeometryPreferencesIOS* preferences = [[UIWindowSceneGeometryPreferencesIOS alloc]
+                initWithInterfaceOrientations:UIInterfaceOrientationMaskLandscape];
+            [scene requestGeometryUpdateWithPreferences:preferences
+                                           errorHandler:^(NSError* error) {
+                                               SPDLOG_WARN("Landscape geometry request refused: {}",
+                                                           error.localizedDescription.UTF8String);
+                                           }];
+        } else if (landscape) {
+            sLandscapeRequested = false;
+        }
+
+        const BOOL wanted = landscape && !DeviceFacesOtherLandscape(device, orientation);
+        if (wanted == sLockWanted) {
+            return;
+        }
+        sLockWanted = wanted;
+        [uiWindow.rootViewController setNeedsUpdateOfPrefersInterfaceOrientationLocked];
+        SPDLOG_INFO("Orientation lock {}: interface orientation {}, device orientation {}",
+                    wanted ? "requested" : "released", (long)orientation, (long)device);
     }
 }
 
