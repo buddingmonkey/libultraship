@@ -15,6 +15,7 @@
 #include "ship/controller/controldeck/ControlDeck.h"
 #include "ship/window/FileDropMgr.h"
 #include "fast/backends/gfx_sdl.h"
+#include "fast/backends/gfx_uikit.h"
 #ifdef ENABLE_DEBUG_TOOLS
 #include "fast/backends/gfx_debug_pointer.h"
 #endif
@@ -453,6 +454,9 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
         }
 
         SDL_GetRendererOutputSize(mRenderer, &mWindowWidth, &mWindowHeight);
+#if defined(__IOS__) && !defined(__VISIONOS__)
+        UIKitRequestOrientationLock(mWnd);
+#endif
         window_impl.Metal = { mWnd, mRenderer };
         window_impl.Backend = WindowBackend::FAST3D_SDL_METAL;
     }
@@ -662,6 +666,9 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
                     SDL_GetWindowSize(mWnd, &mWindowWidth, &mWindowHeight);
 #else
                     SDL_GL_GetDrawableSize(mWnd, &mWindowWidth, &mWindowHeight);
+#endif
+#if defined(__IOS__) && !defined(__VISIONOS__)
+                    UIKitLogOrientation(mWnd, mWindowWidth, mWindowHeight);
 #endif
                     break;
                 case SDL_WINDOWEVENT_CLOSE:

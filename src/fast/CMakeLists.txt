@@ -47,5 +47,9 @@ if (LUS_APPLE_MOBILE)
     list(FILTER Source_Files__Graphic EXCLUDE REGEX "graphic/Fast3D/backends/gfx_opengl*")
 endif()
 
+if (LUS_APPLE_MOBILE AND NOT CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+    list(APPEND Source_Files__Graphic backends/gfx_uikit.mm)
+endif()
+
 source_group("graphic" FILES ${Source_Files__Graphic})
 target_sources(libultraship PRIVATE ${Source_Files__Graphic})
