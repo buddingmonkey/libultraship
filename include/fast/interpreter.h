@@ -442,6 +442,7 @@ class Interpreter {
     ColorCombiner* LookupOrCreateColorCombiner(const ColorCombinerKey& key);
     void ShaderCacheClear();
     void TextureCacheClear();
+    void PrewarmShaders(const uint64_t (*idPairs)[2], size_t count);
     std::shared_ptr<Ship::IResource> ResolveResourceCached(const char* path);
     bool TextureCacheLookup(int i, const TextureCacheKey& key);
     void TextureCacheDelete(const uint8_t* origAddr);

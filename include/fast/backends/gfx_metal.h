@@ -70,6 +70,7 @@ struct ShaderProgramMetal {
 
     // hashed by msaa_level
     MTL::RenderPipelineState* pipeline_state_variants[9];
+    MTL::RenderPipelineDescriptor* pipeline_descriptor;
 };
 
 struct TextureDataMetal {
@@ -137,6 +138,7 @@ class GfxRenderingAPIMetal final : public GfxRenderingAPI {
     void UnloadShader(ShaderProgram* oldPrg) override;
     void LoadShader(ShaderProgram* newPrg) override;
     ShaderProgram* CreateAndLoadNewShader(uint64_t shaderId0, uint64_t shaderId1) override;
+    MTL::RenderPipelineState* EnsurePipelineVariant(struct ShaderProgramMetal* prg, int msaaLevel);
     ShaderProgram* LookupShader(uint64_t shaderId0, uint64_t shaderId1) override;
     void ShaderGetInfo(ShaderProgram* prg, uint8_t* numInputs, bool usedTextures[2]) override;
     void ClearShaderCache() override;

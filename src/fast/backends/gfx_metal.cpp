@@ -274,6 +274,24 @@ void GfxRenderingAPIMetal::ClearShaderCache() {
     }
 }
 
+MTL::RenderPipelineState* GfxRenderingAPIMetal::EnsurePipelineVariant(struct ShaderProgramMetal* prg, int msaaLevel) {
+    if (prg == nullptr || prg->pipeline_descriptor == nullptr || msaaLevel < 1 || msaaLevel > 8) {
+        return nullptr;
+    }
+    if (prg->pipeline_state_variants[msaaLevel] != nullptr) {
+        return prg->pipeline_state_variants[msaaLevel];
+    }
+    NS::Error* error = nullptr;
+    prg->pipeline_descriptor->setSampleCount(msaaLevel);
+    MTL::RenderPipelineState* pipeline_state = mDevice->newRenderPipelineState(prg->pipeline_descriptor, &error);
+    if (!pipeline_state || error != nullptr) {
+        SPDLOG_ERROR("Failed to create pipeline state, error {}",
+                     error->localizedDescription()->cString(NS::UTF8StringEncoding));
+    }
+    prg->pipeline_state_variants[msaaLevel] = pipeline_state;
+    return pipeline_state;
+}
+
 struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(uint64_t shader_id0, uint64_t shader_id1) {
     CCFeatures cc_features;
     gfx_cc_get_features(shader_id0, shader_id1, &cc_features);
@@ -334,32 +352,27 @@ struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(uint64_t shad
 #ifdef ENABLE_DEBUG_TOOLS
     const auto pipelineCompileStart = std::chrono::steady_clock::now();
 #endif
-    // Prepoluate pipeline state cache with program and available msaa levels
-    for (int i = 0; i < ARRAY_COUNT(mMsaaNumQualityLevels); i++) {
-        if (mMsaaNumQualityLevels[i] == 1) {
-            int msaa_level = i + 1;
-            pipeline_descriptor->setSampleCount(msaa_level);
-            MTL::RenderPipelineState* pipeline_state = mDevice->newRenderPipelineState(pipeline_descriptor, &error);
-
-            if (!pipeline_state || error != nullptr) {
-                // Pipeline State creation could fail if we haven't properly set up our pipeline descriptor.
-                // If the Metal API validation is enabled, we can find out more information about what
-                // went wrong.  (Metal API validation is enabled by default when a debug build is run
-                // from Xcode)
-                SPDLOG_ERROR("Failed to create pipeline state, error {}",
-                             error->localizedDescription()->cString(NS::UTF8StringEncoding));
-            }
-
-            prg->pipeline_state_variants[msaa_level] = pipeline_state;
+    // Compile only the msaa levels the current framebuffers can bind; the rest on demand.
+    pipeline_descriptor->retain();
+    prg->pipeline_descriptor = pipeline_descriptor;
+    bool wantedLevels[9] = {};
+    wantedLevels[1] = true;
+    for (const auto& fb : mFramebuffers) {
+        if (fb.mMsaaLevel >= 1 && fb.mMsaaLevel < 9) {
+            wantedLevels[fb.mMsaaLevel] = true;
+        }
+    }
+    for (int msaa_level = 1; msaa_level < 9; msaa_level++) {
+        if (wantedLevels[msaa_level] && mMsaaNumQualityLevels[msaa_level - 1] == 1) {
+            EnsurePipelineVariant(prg, msaa_level);
         }
     }
 
 #ifdef ENABLE_DEBUG_TOOLS
-    SPDLOG_INFO("metal pipeline compile: ids {:x}/{:x} took {} ms",
-                shader_id0, static_cast<uint32_t>(shader_id1),
-                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
-                                                                      pipelineCompileStart)
-                    .count());
+    SPDLOG_INFO(
+        "metal pipeline compile: ids {:x}/{:x} took {} ms", shader_id0, static_cast<uint32_t>(shader_id1),
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - pipelineCompileStart)
+            .count());
 #endif
 
     LoadShader((struct ShaderProgram*)prg);
@@ -614,6 +627,9 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
 
         MTL::RenderPipelineState* pipeline_state =
             mShaderProgram->pipeline_state_variants[current_framebuffer.mMsaaLevel];
+        if (pipeline_state == nullptr) {
+            pipeline_state = EnsurePipelineVariant(mShaderProgram, current_framebuffer.mMsaaLevel);
+        }
         current_framebuffer.mCommandEncoder->setRenderPipelineState(pipeline_state);
     }
 

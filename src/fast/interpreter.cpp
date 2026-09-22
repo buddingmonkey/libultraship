@@ -230,6 +230,16 @@ void Interpreter::Flush() {
     }
 }
 
+void Interpreter::PrewarmShaders(const uint64_t (*idPairs)[2], size_t count) {
+    const auto start = std::chrono::steady_clock::now();
+    for (size_t i = 0; i < count; i++) {
+        LookupOrCreateShaderProgram(idPairs[i][0], idPairs[i][1]);
+    }
+    SPDLOG_INFO(
+        "Prewarmed {} shader programs in {} ms", count,
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count());
+}
+
 ShaderProgram* Interpreter::LookupOrCreateShaderProgram(uint64_t id0, uint64_t id1) {
     ShaderProgram* prg = mRapi->LookupShader(id0, id1);
     if (prg == nullptr) {
