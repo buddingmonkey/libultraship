@@ -231,14 +231,17 @@ void Interpreter::Flush() {
     }
 }
 
-void Interpreter::PrewarmShaders(const uint64_t (*idPairs)[2], size_t count) {
-    const auto start = std::chrono::steady_clock::now();
-    for (size_t i = 0; i < count; i++) {
+size_t Interpreter::PrewarmShadersSlice(const uint64_t (*idPairs)[2], size_t count, size_t start, int budgetMs) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(budgetMs);
+    size_t i = start;
+    while (i < count) {
         LookupOrCreateShaderProgram(idPairs[i][0], idPairs[i][1]);
+        i++;
+        if (std::chrono::steady_clock::now() >= deadline) {
+            break;
+        }
     }
-    SPDLOG_INFO(
-        "Prewarmed {} shader programs in {} ms", count,
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count());
+    return i;
 }
 
 ShaderProgram* Interpreter::LookupOrCreateShaderProgram(uint64_t id0, uint64_t id1) {
