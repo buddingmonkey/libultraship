@@ -75,7 +75,7 @@
         @end
         gl_Position = aVtxPos;
         @if(opengles)
-            gl_Position.z *= 0.3f;
+            gl_Position.z *= 0.3;
         @end
     }
 @else
