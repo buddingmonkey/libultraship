@@ -18,6 +18,9 @@
 #include "fast/backends/gfx_uikit.h"
 #ifdef ENABLE_DEBUG_TOOLS
 #include "fast/backends/gfx_debug_pointer.h"
+#ifdef ENABLE_OPENXR
+#include "fast/backends/gfx_xr_view.h"
+#endif
 #endif
 
 #ifdef __OpenBSD__
@@ -699,6 +702,9 @@ void GfxWindowBackendSDL2::HandleEvents() {
         HandleSingleEvent(event);
     }
 #ifdef ENABLE_DEBUG_TOOLS
+#ifdef ENABLE_OPENXR
+    if (!IsXrPresenting())
+#endif
     {
         static bool sPointerWasLive = false;
         static bool sPointerWasDown = false;
