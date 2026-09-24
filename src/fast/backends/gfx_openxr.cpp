@@ -29,6 +29,8 @@
 
 namespace Fast {
 
+static constexpr const char* LOG_TAG = "ShipXR";
+
 static constexpr float WINDOW_DISTANCE_DEFAULT = 1.3f;
 static constexpr float WINDOW_DISTANCE_MIN = 0.5f;
 static constexpr float WINDOW_DISTANCE_MAX = 4.0f;
@@ -142,6 +144,8 @@ void GfxWindowBackendOpenXR::Init(const char* gameName, const char* apiName, boo
                                   uint32_t height, int32_t posX, int32_t posY) {
     GfxWindowBackendSDL2::Init(gameName, apiName, startFullScreen, width, height, posX, posY);
 
+    mGameName = (gameName != nullptr && gameName[0] != '\0') ? gameName : "OTR Game";
+
     mActive = StartSession();
     // A phone build defines ENABLE_OPENXR too, so this is the only proof of a headset.
     sPresenting = mActive;
@@ -229,7 +233,7 @@ bool GfxWindowBackendOpenXR::StartSession() {
 
     XrInstanceCreateInfo instanceInfo{ XR_TYPE_INSTANCE_CREATE_INFO };
     instanceInfo.next = &androidInfo;
-    snprintf(instanceInfo.applicationInfo.applicationName, XR_MAX_APPLICATION_NAME_SIZE, "Lighthouse");
+    snprintf(instanceInfo.applicationInfo.applicationName, XR_MAX_APPLICATION_NAME_SIZE, "%s", mGameName.c_str());
     instanceInfo.applicationInfo.applicationVersion = 1;
     snprintf(instanceInfo.applicationInfo.engineName, XR_MAX_ENGINE_NAME_SIZE, "Fast3D");
     instanceInfo.applicationInfo.engineVersion = 1;
@@ -310,7 +314,7 @@ bool GfxWindowBackendOpenXR::StartSession() {
                                                       (PFN_xrVoidFunction*)&mCreateAnchorSpace))) {
         mCreateAnchorSpace = nullptr;
     }
-    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "reference space %s",
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "reference space %s",
                         spaceInfo.referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL ? "LOCAL" : "UNBOUNDED");
 
     uint32_t blendModeCount = 0;
@@ -431,10 +435,10 @@ bool GfxWindowBackendOpenXR::StartSession() {
     }
 
     if (!StartActions(handInteraction)) {
-        __android_log_print(ANDROID_LOG_ERROR, "LighthouseXR", "pointer actions failed; pinch will not reach the game");
+        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "pointer actions failed; pinch will not reach the game");
     }
 
-    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR",
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
                         "session up: %u images %ux%u per eye, format 0x%04x, blend %d, srgb ctl %d", imageCount,
                         mSwapchainWidth, mSwapchainHeight, (unsigned)format, (int)mBlendMode, (int)mSrgbWriteControl);
     return true;
@@ -509,7 +513,7 @@ void GfxWindowBackendOpenXR::StartPassthrough() {
 
     Failed(mInstance, start(mPassthrough), "xrPassthroughStartFB");
     Failed(mInstance, resume(mPassthroughLayer), "xrPassthroughLayerResumeFB");
-    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "the room comes from a passthrough layer");
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "the room comes from a passthrough layer");
 }
 
 void GfxWindowBackendOpenXR::StartRefreshRates() {
@@ -542,7 +546,7 @@ void GfxWindowBackendOpenXR::StartRefreshRates() {
         snprintf(one, sizeof(one), "%s%.0f", list[0] == '\0' ? "" : " ", rate);
         strncat(list, one, sizeof(list) - strlen(list) - 1);
     }
-    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "display runs at %.0f Hz, offers %s", mRefreshRate, list);
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "display runs at %.0f Hz, offers %s", mRefreshRate, list);
 }
 
 std::vector<float> GfxWindowBackendOpenXR::GetSupportedRefreshRates() {
@@ -559,7 +563,7 @@ bool GfxWindowBackendOpenXR::SetRefreshRate(float rate) {
     mRefreshRate = rate;
     mWantedRate = rate;
     mRateRetries = 0;
-    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "asked the display for %.0f Hz", rate);
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "asked the display for %.0f Hz", rate);
     return true;
 }
 
@@ -570,7 +574,7 @@ void GfxWindowBackendOpenXR::HoldRefreshRate() {
     }
     mRateRetries++;
     if (!Failed(mInstance, mRequestRefreshRate(mSession, mWantedRate), "xrRequestDisplayRefreshRateFB")) {
-        __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "asked the display for %.0f Hz again", mWantedRate);
+        __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "asked the display for %.0f Hz again", mWantedRate);
     }
 }
 
@@ -1110,7 +1114,7 @@ void GfxWindowBackendOpenXR::EndGrab() {
     mBarHover = false;
     mCornerHover = -1;
     AnchorHere();
-    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR",
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
                         "window %s: %.2f x %.2f m at %.2f m, %.2f times its own size, %.1f degrees wide",
                         kind == Grab::Move ? "moved" : "resized", mWindowWidth, mWindowHeight, mWindowRadius,
                         mWindowScale, sWindowAngularWidth * 180.0f / (float)M_PI);
@@ -1406,7 +1410,7 @@ void GfxWindowBackendOpenXR::PollEvents() {
             HandleReferenceSpaceChange(*(const XrEventDataReferenceSpaceChangePending*)&event);
         } else if (event.type == XR_TYPE_EVENT_DATA_DISPLAY_REFRESH_RATE_CHANGED_FB) {
             mRefreshRate = ((const XrEventDataDisplayRefreshRateChangedFB*)&event)->toDisplayRefreshRate;
-            __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "display now runs at %.0f Hz", mRefreshRate);
+            __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "display now runs at %.0f Hz", mRefreshRate);
             HoldRefreshRate();
         }
         if (!mActive) {
@@ -1429,7 +1433,7 @@ void GfxWindowBackendOpenXR::HandleReferenceSpaceChange(const XrEventDataReferen
 
     sRecenterWanted = true;
     mRecenterAfter = change.changeTime;
-    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "space %d turned %.0f degrees, window re-fronted",
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "space %d turned %.0f degrees, window re-fronted",
                         (int)change.referenceSpaceType, turn * 180.0f / (float)M_PI);
 }
 
@@ -1497,8 +1501,8 @@ void GfxWindowBackendOpenXR::SizeRender() {
 
     sRenderScale = wanted;
     CreateGameTargets((uint32_t)lroundf((float)mGameWidth * wanted), (uint32_t)lroundf((float)mGameHeight * wanted));
-    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR", "the game draws %ux%u for a window %.0f pixels across",
-                        mTexWidth, mTexHeight, covered);
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "the game draws %ux%u for a window %.0f pixels across", mTexWidth,
+                        mTexHeight, covered);
 }
 
 void GfxWindowBackendOpenXR::GetDimensions(uint32_t* width, uint32_t* height, int32_t* posX, int32_t* posY) {
@@ -1570,7 +1574,7 @@ void GfxWindowBackendOpenXR::AnchorHere() {
         const XrResult result = mCreateAnchorSpace(mSession, &anchorInfo, &mAnchorSpace);
         if (XR_FAILED(result)) {
             mAnchorSpace = XR_NULL_HANDLE;
-            __android_log_print(ANDROID_LOG_WARN, "LighthouseXR", "anchor creation failed (%d)", (int)result);
+            __android_log_print(ANDROID_LOG_WARN, LOG_TAG, "anchor creation failed (%d)", (int)result);
         }
     }
 }
@@ -1589,12 +1593,11 @@ void GfxWindowBackendOpenXR::Recenter() {
     PlaceWindow();
     AnchorHere();
 
-    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR",
-                        "window placed at %.2f %.2f %.2f facing %.0f degrees%s, %.2f x %.2f m at %.2f m, %s",
-                        mAnchorPose.position.x, mAnchorPose.position.y, mAnchorPose.position.z,
-                        yaw * 180.0f / (float)M_PI, mAnchorSpace != XR_NULL_HANDLE ? " on an anchor" : "", mWindowWidth,
-                        mWindowHeight, mWindowRadius,
-                        mWindowSized ? "the game's own field of view" : "the shape of the picture");
+    __android_log_print(
+        ANDROID_LOG_INFO, LOG_TAG, "window placed at %.2f %.2f %.2f facing %.0f degrees%s, %.2f x %.2f m at %.2f m, %s",
+        mAnchorPose.position.x, mAnchorPose.position.y, mAnchorPose.position.z, yaw * 180.0f / (float)M_PI,
+        mAnchorSpace != XR_NULL_HANDLE ? " on an anchor" : "", mWindowWidth, mWindowHeight, mWindowRadius,
+        mWindowSized ? "the game's own field of view" : "the shape of the picture");
 }
 
 XrVector3f GfxWindowBackendOpenXR::ToWindowAxes(const XrVector3f& point) const {
@@ -1629,7 +1632,7 @@ void GfxWindowBackendOpenXR::ApplySettings() {
     if (ranged) {
         AnchorHere();
     }
-    __android_log_print(ANDROID_LOG_INFO, "LighthouseXR",
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
                         "window %.2f x %.2f m at %.2f m, %.1f degrees wide, the world within %.2f m behind it",
                         mWindowWidth, mWindowHeight, mWindowRadius, sWindowAngularWidth * 180.0f / (float)M_PI,
                         sDioramaDepth);

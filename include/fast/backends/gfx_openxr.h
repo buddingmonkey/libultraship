@@ -3,6 +3,7 @@
 #ifdef ENABLE_OPENXR
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include <jni.h>
@@ -200,6 +201,7 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     jobject mActivity = nullptr;
     bool mActive = false;
     bool mRunning = false;
+    std::string mGameName;
 };
 
 } // namespace Fast
