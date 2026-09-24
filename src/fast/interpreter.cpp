@@ -37,6 +37,9 @@
 #include "fast/backends/gfx_window_manager_api.h"
 #include "fast/backends/gfx_rendering_api.h"
 #include "fast/backends/gfx_xr_view.h"
+#ifdef ENABLE_XR_WINDOW
+#include "fast/backends/gfx_stereo_replay.h"
+#endif
 
 #include "ship/window/gui/Gui.h"
 #include "ship/resource/ResourceManager.h"
@@ -123,12 +126,18 @@ Interpreter::Interpreter() {
     mRsp = new RSP();
     mRdp = new RDP();
     mBufVbo = new float[MAX_TRI_BUFFER * (32 * 3)];
+#ifdef ENABLE_XR_WINDOW
+    mBufVboR = new float[MAX_TRI_BUFFER * (32 * 3)];
+#endif
 }
 
 Interpreter::~Interpreter() {
     delete mRsp;
     delete mRdp;
     delete[] mBufVbo;
+#ifdef ENABLE_XR_WINDOW
+    delete[] mBufVboR;
+#endif
 }
 
 static std::weak_ptr<Interpreter> mInstance;
@@ -172,6 +181,11 @@ void Interpreter::FlushToBucket() {
         bucket->node = node;
     }
     bucket->vbo.insert(bucket->vbo.end(), mBufVbo, mBufVbo + mBufVboLen);
+#ifdef ENABLE_XR_WINDOW
+    if (mXrStereoPass) {
+        bucket->vboR.insert(bucket->vboR.end(), mBufVboR, mBufVboR + mBufVboLen);
+    }
+#endif
     bucket->numTris += mBufVboNumTris;
     mBufVboLen = 0;
     mBufVboNumTris = 0;
@@ -192,7 +206,15 @@ void Interpreter::DrainBuckets() {
         size_t tri = 0;
         while (tri < bucket.numTris) {
             const size_t count = std::min(bucket.numTris - tri, MAX_TRI_BUFFER);
-            mRapi->DrawTriangles(bucket.vbo.data() + tri * floatsPerTri, count * floatsPerTri, count);
+#ifdef ENABLE_XR_WINDOW
+            if (mXrStereoPass) {
+                mStereo->DrawStereoTriangles(bucket.vbo.data() + tri * floatsPerTri,
+                                             bucket.vboR.data() + tri * floatsPerTri, count * floatsPerTri, count);
+            } else
+#endif
+            {
+                mRapi->DrawTriangles(bucket.vbo.data() + tri * floatsPerTri, count * floatsPerTri, count);
+            }
             tri += count;
 #ifdef ENABLE_DEBUG_TOOLS
             mDrawCallCount++;
@@ -204,6 +226,9 @@ void Interpreter::DrainBuckets() {
 #endif
         }
         bucket.vbo.clear();
+#ifdef ENABLE_XR_WINDOW
+        bucket.vboR.clear();
+#endif
         bucket.numTris = 0;
     }
     mPendingBucketsUsed = 0;
@@ -216,7 +241,14 @@ void Interpreter::Flush() {
     DrainBuckets();
     if (mBufVboLen > 0) {
         mRapi->SetCurrentPrimDepth((float)mRdp->prim_depth / N64_PRIM_DEPTH_MAX);
-        mRapi->DrawTriangles(mBufVbo, mBufVboLen, mBufVboNumTris);
+#ifdef ENABLE_XR_WINDOW
+        if (mXrStereoPass) {
+            mStereo->DrawStereoTriangles(mBufVbo, mBufVboR, mBufVboLen, mBufVboNumTris);
+        } else
+#endif
+        {
+            mRapi->DrawTriangles(mBufVbo, mBufVboLen, mBufVboNumTris);
+        }
         mBufVboLen = 0;
         mBufVboNumTris = 0;
 #ifdef ENABLE_DEBUG_TOOLS
@@ -1681,6 +1713,9 @@ void Interpreter::GfxSpMatrix(uint8_t parameters, const int32_t* addr) {
             MatrixMul(mRsp->P_matrix, matrix, mRsp->P_matrix);
 #ifdef ENABLE_XR_WINDOW
             MatrixMul(mXrProjectionPostMul, matrix, mXrProjectionPostMul);
+            if (mXrStereoPass) {
+                MatrixMul(mRsp->P_matrix_r, matrix, mRsp->P_matrix_r);
+            }
 #endif
         }
     } else { // G_MTX_MODELVIEW
@@ -1700,20 +1735,52 @@ void Interpreter::GfxSpMatrix(uint8_t parameters, const int32_t* addr) {
         mRsp->lights_changed = 1;
     }
     MatrixMul(mRsp->MP_matrix, mRsp->modelview_matrix_stack[mRsp->modelview_matrix_stack_size - 1], mRsp->P_matrix);
+#ifdef ENABLE_XR_WINDOW
+    if (mXrStereoPass) {
+        MatrixMul(mRsp->MP_matrix_r, mRsp->modelview_matrix_stack[mRsp->modelview_matrix_stack_size - 1],
+                  mRsp->P_matrix_r);
+    }
+#endif
 }
 
 void Interpreter::ApplyXrProjection() {
 #ifdef ENABLE_XR_WINDOW
     mXrProjection = false;
+    if (mXrStereoPass) {
+        memcpy(mRsp->P_matrix_r, mRsp->P_matrix, sizeof(mRsp->P_matrix));
+    }
 
     XrViewGeometry view;
     if (mFbActive || !GetXrViewGeometry(&view)) {
         return;
     }
 
-    float(&p)[4][4] = mRsp->P_matrix;
-    if (p[2][3] == 0.0f) {
+    float nearPlane;
+    float tangents[2] = { 0.0f, 0.0f };
+    const bool projected = ProjectXrView(view, mRsp->P_matrix, &mXrEyeZ, &nearPlane, tangents);
+    if (tangents[0] > 0.0f) {
+        SetXrViewTangents(tangents[0] * mCurDimensions.aspect_ratio * 0.75f, tangents[1]);
+    }
+    if (!projected) {
         return;
+    }
+    mXrProjection = true;
+    mXrNearPlane = nearPlane;
+
+    if (mXrStereoPass) {
+        XrViewGeometry right;
+        if (GetXrViewGeometryOf(1, &right)) {
+            ProjectXrView(right, mRsp->P_matrix_r, &mXrEyeZR, &nearPlane, nullptr);
+        }
+    }
+#endif
+}
+
+#ifdef ENABLE_XR_WINDOW
+bool Interpreter::ProjectXrView(const XrViewGeometry& view, float p[4][4], float* eyeZ, float* nearPlane,
+                                float* tangents) {
+    if (p[2][3] == 0.0f) {
+        return false;
     }
 
     const float unit = -1.0f / p[2][3];
@@ -1722,35 +1789,37 @@ void Interpreter::ApplyXrProjection() {
     const float tanHalfWidth = 1.0f / (p[0][0] * unit);
     const float tanHalfHeight = 1.0f / (p[1][1] * unit);
     if (depthScale >= -1.0f || depthBias >= 0.0f || tanHalfWidth <= 0.0f || tanHalfHeight <= 0.0f) {
-        return;
+        return false;
     }
-    const float nearPlane = depthBias / (depthScale - 1.0f);
+    const float near = depthBias / (depthScale - 1.0f);
     const float farPlane = depthBias / (depthScale + 1.0f);
-
-    SetXrViewTangents(tanHalfWidth * mCurDimensions.aspect_ratio * 0.75f, tanHalfHeight);
+    if (tangents != nullptr) {
+        tangents[0] = tanHalfWidth;
+        tangents[1] = tanHalfHeight;
+    }
 
     const float halfWidth = view.windowDistance * tanHalfWidth;
     const float halfHeight = view.windowDistance * tanHalfHeight;
     const float eyeX = view.eyeOffset[0];
     const float eyeY = view.eyeOffset[1];
-    const float eyeZ = view.windowDistance + view.eyeOffset[2];
-    if (eyeZ < 0.1f * view.windowDistance) {
-        return;
+    const float viewZ = view.windowDistance + view.eyeOffset[2];
+    if (viewZ < 0.1f * view.windowDistance) {
+        return false;
     }
 
-    const float left = (-halfWidth - eyeX) * nearPlane / eyeZ;
-    const float right = (halfWidth - eyeX) * nearPlane / eyeZ;
-    const float bottom = (-halfHeight - eyeY) * nearPlane / eyeZ;
-    const float top = (halfHeight - eyeY) * nearPlane / eyeZ;
+    const float left = (-halfWidth - eyeX) * near / viewZ;
+    const float right = (halfWidth - eyeX) * near / viewZ;
+    const float bottom = (-halfHeight - eyeY) * near / viewZ;
+    const float top = (halfHeight - eyeY) * near / viewZ;
 
-    const float scaleX = 2.0f * nearPlane / (right - left);
-    const float scaleY = 2.0f * nearPlane / (top - bottom);
+    const float scaleX = 2.0f * near / (right - left);
+    const float scaleY = 2.0f * near / (top - bottom);
     const float shearX = (right + left) / (right - left);
     const float shearY = (top + bottom) / (top - bottom);
-    const float depth = (farPlane + nearPlane) / (nearPlane - farPlane);
-    const float offset = 2.0f * farPlane * nearPlane / (nearPlane - farPlane);
+    const float depth = (farPlane + near) / (near - farPlane);
+    const float offset = 2.0f * farPlane * near / (near - farPlane);
 
-    memset(p, 0, sizeof(p));
+    memset(p, 0, sizeof(float) * 16);
     p[0][0] = scaleX;
     p[1][1] = scaleY;
     p[2][0] = shearX;
@@ -1762,11 +1831,11 @@ void Interpreter::ApplyXrProjection() {
     p[3][2] = -view.eyeOffset[2] * depth + offset;
     p[3][3] = view.eyeOffset[2];
 
-    mXrProjection = true;
-    mXrEyeZ = view.eyeOffset[2];
-    mXrNearPlane = nearPlane;
-#endif
+    *eyeZ = view.eyeOffset[2];
+    *nearPlane = near;
+    return true;
 }
+#endif
 
 #ifdef ENABLE_XR_WINDOW
 void Interpreter::ReapplyXrProjection() {
@@ -1778,27 +1847,26 @@ void Interpreter::ReapplyXrProjection() {
     MatrixMul(mRsp->P_matrix, mXrProjectionPostMul, mRsp->P_matrix);
     const int top = mRsp->modelview_matrix_stack_size > 0 ? mRsp->modelview_matrix_stack_size - 1 : 0;
     MatrixMul(mRsp->MP_matrix, mRsp->modelview_matrix_stack[top], mRsp->P_matrix);
+    if (mXrStereoPass) {
+        MatrixMul(mRsp->P_matrix_r, mXrProjectionPostMul, mRsp->P_matrix_r);
+        MatrixMul(mRsp->MP_matrix_r, mRsp->modelview_matrix_stack[top], mRsp->P_matrix_r);
+    }
 }
 
-float Interpreter::XrVisibleDepth(struct LoadedVertex* const vertices[3]) const {
+float Interpreter::XrVisibleDepth(const float pos[3][4], uint8_t clipRejAny, float eyeZ) const {
     float depth;
 
-    if (((vertices[0]->clip_rej | vertices[1]->clip_rej | vertices[2]->clip_rej) & 15) == 0) {
-        depth = vertices[0]->w;
+    if ((clipRejAny & 15) == 0) {
+        depth = pos[0][3];
         for (int i = 1; i < 3; i++) {
-            if (vertices[i]->w < depth) {
-                depth = vertices[i]->w;
+            if (pos[i][3] < depth) {
+                depth = pos[i][3];
             }
         }
     } else {
         float poly[2][8][4];
         int count = 3;
-        for (int i = 0; i < 3; i++) {
-            poly[0][i][0] = vertices[i]->x;
-            poly[0][i][1] = vertices[i]->y;
-            poly[0][i][2] = vertices[i]->z;
-            poly[0][i][3] = vertices[i]->w;
-        }
+        memcpy(poly[0], pos, sizeof(float) * 12);
         for (int plane = 0; plane < 5; plane++) {
             const int axis = plane >> 1;
             const float sign = (plane & 1) != 0 ? -1.0f : 1.0f;
@@ -1834,7 +1902,7 @@ float Interpreter::XrVisibleDepth(struct LoadedVertex* const vertices[3]) const 
         }
     }
 
-    return (depth < mXrNearPlane ? mXrNearPlane : depth) - mXrEyeZ;
+    return (depth < mXrNearPlane ? mXrNearPlane : depth) - eyeZ;
 }
 #endif
 
@@ -1845,6 +1913,12 @@ void Interpreter::GfxSpPopMatrix(uint32_t count) {
             if (mRsp->modelview_matrix_stack_size > 0) {
                 MatrixMul(mRsp->MP_matrix, mRsp->modelview_matrix_stack[mRsp->modelview_matrix_stack_size - 1],
                           mRsp->P_matrix);
+#ifdef ENABLE_XR_WINDOW
+                if (mXrStereoPass) {
+                    MatrixMul(mRsp->MP_matrix_r, mRsp->modelview_matrix_stack[mRsp->modelview_matrix_stack_size - 1],
+                              mRsp->P_matrix_r);
+                }
+#endif
             }
         }
     }
@@ -2061,6 +2135,53 @@ void Interpreter::GfxSpVertex(size_t n_vertices, size_t dest_index, const F3DVtx
         } else {
             d->color.a = v->cn[3];
         }
+
+#ifdef ENABLE_XR_WINDOW
+        if (mXrStereoPass) {
+            const float(*m)[4] = mRsp->MP_matrix_r;
+            float xr = v->ob[0] * m[0][0] + v->ob[1] * m[1][0] + v->ob[2] * m[2][0] + m[3][0];
+            const float yr = v->ob[0] * m[0][1] + v->ob[1] * m[1][1] + v->ob[2] * m[2][1] + m[3][1];
+            const float zr = v->ob[0] * m[0][2] + v->ob[1] * m[1][2] + v->ob[2] * m[2][2] + m[3][2];
+            float wr = v->ob[0] * m[0][3] + v->ob[1] * m[1][3] + v->ob[2] * m[2][3] + m[3][3];
+            xr = AdjXForAspectRatio(xr);
+
+            d->clip_rej_r = 0;
+            if (xr < -wr) {
+                d->clip_rej_r |= 1;
+            }
+            if (xr > wr) {
+                d->clip_rej_r |= 2;
+            }
+            if (yr < -wr) {
+                d->clip_rej_r |= 4;
+            }
+            if (yr > wr) {
+                d->clip_rej_r |= 8;
+            }
+            if (zr > wr) {
+                d->clip_rej_r |= 32;
+            }
+            d->xr = xr;
+            d->yr = yr;
+            d->zr = zr;
+            d->wr = wr;
+
+            if (mRsp->geometry_mode & G_FOG) {
+                if (fabsf(wr) < 0.001f) {
+                    wr = 0.001f;
+                }
+                float winv = 1.0f / wr;
+                if (winv < 0.0f) {
+                    winv = std::numeric_limits<int16_t>::max();
+                }
+                float fog_z = zr * winv * mRsp->fog_mul + mRsp->fog_offset;
+                fog_z = Ship::Math::clamp(fog_z, 0.0f, 255.0f);
+                d->fog_r = fog_z;
+            } else {
+                d->fog_r = v->cn[3];
+            }
+        }
+#endif
     }
 }
 
@@ -2083,7 +2204,23 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
 
     // if (rand()%2) return;
 
-    if (v1->clip_rej & v2->clip_rej & v3->clip_rej) {
+#ifdef ENABLE_XR_WINDOW
+    if (mXrStereoPass && is_rect) {
+        for (LoadedVertex* v : v_arr) {
+            v->xr = v->x;
+            v->yr = v->y;
+            v->zr = v->z;
+            v->wr = v->w;
+            v->clip_rej_r = v->clip_rej;
+            v->fog_r = v->color.a;
+        }
+    }
+    const bool rejectedR = mXrStereoPass ? (v1->clip_rej_r & v2->clip_rej_r & v3->clip_rej_r) != 0 : true;
+#else
+    const bool rejectedR = true;
+#endif
+    const bool rejectedL = (v1->clip_rej & v2->clip_rej & v3->clip_rej) != 0;
+    if (rejectedL && rejectedR) {
         // The whole triangle lies outside the visible area
         return;
     }
@@ -2092,44 +2229,76 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
     const uint32_t cull_front = get_attr(CULL_FRONT);
     const uint32_t cull_back = get_attr(CULL_BACK);
 
+    bool culledL = false;
+    bool culledR = false;
     if ((mRsp->geometry_mode & cull_both) != 0) {
-        float dx1 = v1->x / (v1->w) - v2->x / (v2->w);
-        float dy1 = v1->y / (v1->w) - v2->y / (v2->w);
-        float dx2 = v3->x / (v3->w) - v2->x / (v2->w);
-        float dy2 = v3->y / (v3->w) - v2->y / (v2->w);
-        float cross = dx1 * dy2 - dy1 * dx2;
+        const auto cull_type = mRsp->geometry_mode & cull_both;
+        const bool invert = (mRsp->extra_geometry_mode & G_EX_INVERT_CULLING) != 0;
+        const auto culled = [&](float x1, float y1, float w1, float x2, float y2, float w2, float x3, float y3,
+                                float w3) {
+            float dx1 = x1 / w1 - x2 / w2;
+            float dy1 = y1 / w1 - y2 / w2;
+            float dx2 = x3 / w3 - x2 / w2;
+            float dy2 = y3 / w3 - y2 / w2;
+            float cross = dx1 * dy2 - dy1 * dx2;
 
-        if ((v1->w < 0) ^ (v2->w < 0) ^ (v3->w < 0)) {
-            // If one vertex lies behind the eye, negating cross will give the correct result.
-            // If all vertices lie behind the eye, the triangle will be rejected anyway.
-            cross = -cross;
-        }
-
-        // G_EX_INVERT_CULLING is a LUS extension, not tied to a specific ucode,
-        // so apply it regardless of the active microcode handler.
-        if ((mRsp->extra_geometry_mode & G_EX_INVERT_CULLING) != 0) {
-            cross = -cross;
-        }
-
-        auto cull_type = mRsp->geometry_mode & cull_both;
-
-        if (cull_type == cull_front) {
-            if (cross <= 0) {
-                return;
+            if ((w1 < 0) ^ (w2 < 0) ^ (w3 < 0)) {
+                // If one vertex lies behind the eye, negating cross will give the correct result.
+                // If all vertices lie behind the eye, the triangle will be rejected anyway.
+                cross = -cross;
             }
-        } else if (cull_type == cull_back) {
-            if (cross >= 0) {
-                return;
+
+            // G_EX_INVERT_CULLING is a LUS extension, not tied to a specific ucode,
+            // so apply it regardless of the active microcode handler.
+            if (invert) {
+                cross = -cross;
             }
-        } else if (cull_type == cull_both) {
-            // Why is this even an option?
+
+            if (cull_type == cull_front) {
+                return cross <= 0;
+            } else if (cull_type == cull_back) {
+                return cross >= 0;
+            } else if (cull_type == cull_both) {
+                // Why is this even an option?
+                return true;
+            }
+            return false;
+        };
+        culledL = culled(v1->x, v1->y, v1->w, v2->x, v2->y, v2->w, v3->x, v3->y, v3->w);
+#ifdef ENABLE_XR_WINDOW
+        culledR =
+            mXrStereoPass ? culled(v1->xr, v1->yr, v1->wr, v2->xr, v2->yr, v2->wr, v3->xr, v3->yr, v3->wr) : culledL;
+#else
+        culledR = culledL;
+#endif
+        if (culledL && culledR) {
             return;
         }
     }
-
+    const bool drawnL = !rejectedL && !culledL;
 #ifdef ENABLE_XR_WINDOW
+    const bool drawnR = mXrStereoPass && !rejectedR && !culledR;
+
     if (mXrProjection && mXrSceneDepth && !is_rect && !mFbActive) {
-        SetXrSceneNear(XrVisibleDepth(v_arr));
+        float pos[3][4];
+        if (drawnL) {
+            for (int i = 0; i < 3; i++) {
+                pos[i][0] = v_arr[i]->x;
+                pos[i][1] = v_arr[i]->y;
+                pos[i][2] = v_arr[i]->z;
+                pos[i][3] = v_arr[i]->w;
+            }
+            SetXrSceneNear(XrVisibleDepth(pos, v1->clip_rej | v2->clip_rej | v3->clip_rej, mXrEyeZ));
+        }
+        if (drawnR) {
+            for (int i = 0; i < 3; i++) {
+                pos[i][0] = v_arr[i]->xr;
+                pos[i][1] = v_arr[i]->yr;
+                pos[i][2] = v_arr[i]->zr;
+                pos[i][3] = v_arr[i]->wr;
+            }
+            SetXrSceneNear(XrVisibleDepth(pos, v1->clip_rej_r | v2->clip_rej_r | v3->clip_rej_r, mXrEyeZR));
+        }
     }
 #endif
 
@@ -2438,11 +2607,23 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
         if (clip_parameters.z_is_from_0_to_1) {
             z = (z + w) / 2.0f;
         }
-
-        mBufVbo[mBufVboLen++] = v_arr[i]->x;
-        mBufVbo[mBufVboLen++] = clip_parameters.invertY ? -v_arr[i]->y : v_arr[i]->y;
-        mBufVbo[mBufVboLen++] = z;
-        mBufVbo[mBufVboLen++] = w;
+#ifdef ENABLE_XR_WINDOW
+        const size_t vertexStart = mBufVboLen;
+        size_t alphaSlots[6];
+        int alphaSlotCount = 0;
+        if (!drawnL) {
+            mBufVbo[mBufVboLen++] = 0.0f;
+            mBufVbo[mBufVboLen++] = 0.0f;
+            mBufVbo[mBufVboLen++] = 0.0f;
+            mBufVbo[mBufVboLen++] = 1.0f;
+        } else
+#endif
+        {
+            mBufVbo[mBufVboLen++] = v_arr[i]->x;
+            mBufVbo[mBufVboLen++] = clip_parameters.invertY ? -v_arr[i]->y : v_arr[i]->y;
+            mBufVbo[mBufVboLen++] = z;
+            mBufVbo[mBufVboLen++] = w;
+        }
 
         for (int t = 0; t < 2; t++) {
             if (!usedTextures[t]) {
@@ -2506,6 +2687,11 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
                 mBufVbo[mBufVboLen++] = mRdp->fog_color.r / 255.0f;
                 mBufVbo[mBufVboLen++] = mRdp->fog_color.g / 255.0f;
                 mBufVbo[mBufVboLen++] = mRdp->fog_color.b / 255.0f;
+#ifdef ENABLE_XR_WINDOW
+                if (alphaSlotCount < 6) {
+                    alphaSlots[alphaSlotCount++] = mBufVboLen;
+                }
+#endif
                 mBufVbo[mBufVboLen++] = v_arr[i]->color.a / 255.0f; // fog factor (not alpha)
             }
         }
@@ -2600,6 +2786,11 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
                         // it since fog alpha is the blend factor
                         mBufVbo[mBufVboLen++] = 1.0f;
                     } else {
+#ifdef ENABLE_XR_WINDOW
+                        if (color == &v_arr[i]->color && alphaSlotCount < 6) {
+                            alphaSlots[alphaSlotCount++] = mBufVboLen;
+                        }
+#endif
                         mBufVbo[mBufVboLen++] = color->a / 255.0f;
                     }
                 }
@@ -2611,6 +2802,31 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
         // mBufVbo[mBufVboLen++] = color->g / 255.0f;
         // mBufVbo[mBufVboLen++] = color->b / 255.0f;
         // mBufVbo[mBufVboLen++] = color->a / 255.0f;
+
+#ifdef ENABLE_XR_WINDOW
+        if (mXrStereoPass) {
+            memcpy(mBufVboR + vertexStart, mBufVbo + vertexStart, sizeof(float) * (mBufVboLen - vertexStart));
+            if (drawnR) {
+                float zr = v_arr[i]->zr;
+                const float wr = v_arr[i]->wr;
+                if (clip_parameters.z_is_from_0_to_1) {
+                    zr = (zr + wr) / 2.0f;
+                }
+                mBufVboR[vertexStart] = v_arr[i]->xr;
+                mBufVboR[vertexStart + 1] = clip_parameters.invertY ? -v_arr[i]->yr : v_arr[i]->yr;
+                mBufVboR[vertexStart + 2] = zr;
+                mBufVboR[vertexStart + 3] = wr;
+            } else {
+                mBufVboR[vertexStart] = 0.0f;
+                mBufVboR[vertexStart + 1] = 0.0f;
+                mBufVboR[vertexStart + 2] = 0.0f;
+                mBufVboR[vertexStart + 3] = 1.0f;
+            }
+            for (int k = 0; k < alphaSlotCount; k++) {
+                mBufVboR[alphaSlots[k]] = v_arr[i]->fog_r / 255.0f;
+            }
+        }
+#endif
     }
 
     if (++mBufVboNumTris == MAX_TRI_BUFFER) {
@@ -5560,6 +5776,14 @@ void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_r
 
     mCurMtxReplacements = &mtx_replacements;
 
+#ifdef ENABLE_XR_WINDOW
+    if (mXrStereoPass) {
+        memcpy(mRsp->P_matrix_r, mRsp->P_matrix, sizeof(mRsp->P_matrix));
+        memcpy(mRsp->MP_matrix_r, mRsp->MP_matrix, sizeof(mRsp->MP_matrix));
+        mXrEyeZR = mXrEyeZ;
+        mStereo->BeginRecord(&mStereoFbRight);
+    }
+#endif
     mRapi->UpdateFramebufferParameters(0, mGfxCurrentWindowDimensions.width, mGfxCurrentWindowDimensions.height, 1,
                                        false, true, true, !mRendersToFb);
     mRapi->StartFrame();
@@ -5623,6 +5847,16 @@ void Interpreter::EndFrame() {
     mRapi->FinishRender();
     mWapi->SwapBuffersEnd();
 }
+
+#ifdef ENABLE_XR_WINDOW
+void Interpreter::RunStereoReplay() {
+    mRapi->StartFrame();
+    const uint32_t draws = mStereo->Replay();
+#ifdef ENABLE_DEBUG_TOOLS
+    mDrawCallCount += draws;
+#endif
+}
+#endif
 
 void gfx_set_target_ucode(UcodeHandlers ucode) {
     ucode_handler_index = ucode;

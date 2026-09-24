@@ -13,6 +13,8 @@ bool IsXrPresenting();
 
 bool GetXrViewGeometry(XrViewGeometry* geometry);
 
+bool GetXrViewGeometryOf(int view, XrViewGeometry* geometry);
+
 void SetXrSceneNear(float units);
 
 void SetXrViewTangents(float tanHalfWidth, float tanHalfHeight);

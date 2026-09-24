@@ -98,6 +98,7 @@ static constexpr float EDGE_FLOAT_MAX = 1.0f;
 static constexpr float RECENTER_YAW_MIN = 0.035f;
 
 static bool sPresenting = false;
+static GfxWindowBackendOpenXR* sBackend = nullptr;
 static float sWindowDistance = WINDOW_DISTANCE_DEFAULT;
 static float sWindowScale = WINDOW_SCALE_DEFAULT;
 static float sDioramaDepth = DIORAMA_DEPTH_DEFAULT;
@@ -149,6 +150,7 @@ void GfxWindowBackendOpenXR::Init(const char* gameName, const char* apiName, boo
     mActive = StartSession();
     // A phone build defines ENABLE_OPENXR too, so this is the only proof of a headset.
     sPresenting = mActive;
+    sBackend = mActive ? this : nullptr;
     if (!mActive) {
         SPDLOG_ERROR("OpenXR: no session; the game stays on the flat panel");
         Teardown();
@@ -876,6 +878,13 @@ bool GetXrViewGeometry(XrViewGeometry* geometry) {
     }
     *geometry = sViewGeometry;
     return true;
+}
+
+bool GetXrViewGeometryOf(int view, XrViewGeometry* geometry) {
+    if (sFlatProjection || sBackend == nullptr || view < 0) {
+        return false;
+    }
+    return sBackend->ViewGeometry((uint32_t)view, geometry);
 }
 
 void SetXrViewTangents(float tanHalfWidth, float tanHalfHeight) {
@@ -1734,9 +1743,16 @@ uint32_t GfxWindowBackendOpenXR::BeginRenderFrame() {
 void GfxWindowBackendOpenXR::BeginRenderView(uint32_t view) {
     mCurrentView = view;
     sCurrentViewIndex = (int)view;
-    sViewGeometryValid = false;
+    sViewGeometryValid = ViewGeometry(view, &sViewGeometry);
+}
+
+bool GfxWindowBackendOpenXR::CanReplayStereo() {
+    return mFrameOpen && mViewCount == VIEW_COUNT;
+}
+
+bool GfxWindowBackendOpenXR::ViewGeometry(uint32_t view, XrViewGeometry* geometry) const {
     if (!mFrameOpen || !mViewsValid || !mAnchorValid || view >= VIEW_COUNT) {
-        return;
+        return false;
     }
 
     const float gain = sDioramaDepth / (mWindowRadius + sDioramaDepth);
@@ -1749,11 +1765,11 @@ void GfxWindowBackendOpenXR::BeginRenderView(uint32_t view) {
     const XrVector3f world =
         mono ? XrVector3f{ 0.5f * (left.x + right.x), 0.5f * (left.y + right.y), 0.5f * (left.z + right.z) } : eye;
     const XrVector3f offset = ToWindowAxes(world);
-    sViewGeometry.eyeOffset[0] = offset.x * acrossGlass;
-    sViewGeometry.eyeOffset[1] = (offset.y - mParallaxRise) * acrossGlass;
-    sViewGeometry.eyeOffset[2] = offset.z * alongNormal;
-    sViewGeometry.windowDistance = sGlassDepth;
-    sViewGeometryValid = true;
+    geometry->eyeOffset[0] = offset.x * acrossGlass;
+    geometry->eyeOffset[1] = (offset.y - mParallaxRise) * acrossGlass;
+    geometry->eyeOffset[2] = offset.z * alongNormal;
+    geometry->windowDistance = sGlassDepth;
+    return true;
 }
 
 static GLuint CompileShader(GLenum type, const char* source) {
@@ -2472,6 +2488,7 @@ void GfxWindowBackendOpenXR::Teardown() {
 }
 
 void GfxWindowBackendOpenXR::Destroy() {
+    sBackend = nullptr;
     Teardown();
     GfxWindowBackendSDL2::Destroy();
 }

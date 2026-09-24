@@ -194,6 +194,10 @@ bool GetXrViewGeometry(XrViewGeometry* geometry) {
     return true;
 }
 
+bool GetXrViewGeometryOf(int view, XrViewGeometry* geometry) {
+    return view == GetXrViewIndex() && GetXrViewGeometry(geometry);
+}
+
 void SetXrViewTangents(float tanHalfWidth, float tanHalfHeight) {
     gTanHalfWidth = tanHalfWidth;
     gTanHalfHeight = tanHalfHeight;

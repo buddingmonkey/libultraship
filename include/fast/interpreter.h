@@ -230,6 +230,11 @@ struct LoadedVertex {
     float u, v;
     struct RGBA color;
     uint8_t clip_rej;
+#ifdef ENABLE_XR_WINDOW
+    float xr, yr, zr, wr;
+    uint8_t fog_r;
+    uint8_t clip_rej_r;
+#endif
 };
 
 struct RawTexMetadata {
@@ -248,6 +253,10 @@ struct RSP {
 
     float MP_matrix[4][4];
     float P_matrix[4][4];
+#ifdef ENABLE_XR_WINDOW
+    float MP_matrix_r[4][4];
+    float P_matrix_r[4][4];
+#endif
 
     F3DLight_t lookat[2];
     F3DLight current_lights[MAX_LIGHTS + 1];
@@ -389,6 +398,10 @@ struct MaskedTextureEntry {
     uint8_t* replacementData;
 };
 
+#ifdef ENABLE_XR_WINDOW
+struct XrViewGeometry;
+#endif
+
 class Interpreter {
   public:
     Interpreter();
@@ -471,7 +484,10 @@ class Interpreter {
     void ApplyXrProjection();
 #ifdef ENABLE_XR_WINDOW
     void ReapplyXrProjection();
-    float XrVisibleDepth(struct LoadedVertex* const vertices[3]) const;
+    static bool ProjectXrView(const XrViewGeometry& view, float p[4][4], float* eyeZ, float* nearPlane,
+                              float* tangents);
+    float XrVisibleDepth(const float pos[3][4], uint8_t clipRejAny, float eyeZ) const;
+    void RunStereoReplay();
 #endif
     void GfxSpPopMatrix(uint32_t count);
     void GfxSpVertex(size_t numVertices, size_t destIndex, const F3DVtx* vertices);
@@ -558,6 +574,12 @@ class Interpreter {
     float* mBufVbo; // 3 vertices in a triangle and 32 floats per vtx
     size_t mBufVboLen{};
     size_t mBufVboNumTris{};
+#ifdef ENABLE_XR_WINDOW
+    float* mBufVboR;
+    class GfxStereoReplay* mStereo = nullptr;
+    bool mXrStereoPass{};
+    float mXrEyeZR{};
+#endif
 #ifdef ENABLE_DEBUG_TOOLS
     uint32_t mDrawCallCount{};
     uint32_t mMarkedDrawCount{};
@@ -567,6 +589,9 @@ class Interpreter {
         uint32_t textureId{};
         const void* node{};
         std::vector<float> vbo;
+#ifdef ENABLE_XR_WINDOW
+        std::vector<float> vboR;
+#endif
         size_t numTris{};
     };
     std::vector<PendingBucket> mPendingBuckets;

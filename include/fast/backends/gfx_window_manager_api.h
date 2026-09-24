@@ -41,6 +41,9 @@ class GfxWindowBackend {
     }
     virtual void BeginRenderView(uint32_t view) {
     }
+    virtual bool CanReplayStereo() {
+        return false;
+    }
     virtual void SwapBuffersBegin() = 0;
     virtual void SwapBuffersEnd() = 0;
     virtual double GetTime() = 0;

@@ -35,8 +35,11 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     bool SetRefreshRate(float rate) override;
     uint32_t BeginRenderFrame() override;
     void BeginRenderView(uint32_t view) override;
+    bool CanReplayStereo() override;
     void SwapBuffersBegin() override;
     void Destroy() override;
+
+    bool ViewGeometry(uint32_t view, XrViewGeometry* geometry) const;
 
   private:
     enum class Grab { None, Move, Resize };

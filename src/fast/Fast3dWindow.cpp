@@ -14,6 +14,7 @@
 #include "fast/backends/gfx_window_manager_api.h"
 #include "fast/backends/gfx_openxr.h"
 #include "fast/backends/gfx_visionos.h"
+#include "fast/backends/gfx_stereo_replay.h"
 
 #include "fast/Fast3dGui.h"
 
@@ -160,7 +161,9 @@ void Fast3dWindow::InitWindowManager() {
 #endif
 #ifdef ENABLE_OPENXR
         case WindowBackend::FAST3D_OPENXR_OPENGL:
-            mRenderingApi = new GfxRenderingAPIOGL();
+            mStereoReplay = new GfxStereoReplay(new GfxRenderingAPIOGL());
+            mRenderingApi = mStereoReplay;
+            mInterpreter->mStereo = mStereoReplay;
             mWindowManagerApi = new GfxWindowBackendOpenXR();
             break;
 #endif
@@ -231,6 +234,12 @@ bool Fast3dWindow::DrawAndRunGraphicsCommands(Gfx* commands, const std::unordere
     // Setup mouse state manager
     wnd->GetMouseStateManager()->StartFrame();
     const uint32_t views = BeginRenderFrame();
+    bool replay = false;
+#ifdef ENABLE_XR_WINDOW
+    replay = views > 1 && mStereoReplay != nullptr && mWindowManagerApi->CanReplayStereo() &&
+             !mGfxDebugger->IsDebugging() &&
+             Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(CVAR_XR_STEREO_REPLAY, 1) != 0;
+#endif
     for (uint32_t view = 0; view < views; view++) {
         BeginRenderView(view);
         // Setup of the backend frames and draw initial Window and GUI menus
@@ -238,7 +247,20 @@ bool Fast3dWindow::DrawAndRunGraphicsCommands(Gfx* commands, const std::unordere
         // Setup game framebuffers to match available window space
         mInterpreter->StartFrame();
         // Execute the games gfx commands
+#ifdef ENABLE_XR_WINDOW
+        if (replay && view > 0 && mStereoReplay->IsReplayable()) {
+            mInterpreter->RunStereoReplay();
+        } else {
+            mInterpreter->mXrStereoPass = replay && view == 0;
+            mInterpreter->Run(commands, mtxReplacements);
+            mInterpreter->mXrStereoPass = false;
+            if (replay && view == 0) {
+                mStereoReplay->EndRecord();
+            }
+        }
+#else
         mInterpreter->Run(commands, mtxReplacements);
+#endif
         // Renders the game frame buffer to the final window and finishes the GUI
         gui->EndDraw();
         // Finalize swap buffers

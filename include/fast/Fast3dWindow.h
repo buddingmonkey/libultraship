@@ -106,6 +106,9 @@ class Fast3dWindow : public Ship::Window {
 
   private:
     GfxRenderingAPI* mRenderingApi;
+#ifdef ENABLE_XR_WINDOW
+    class GfxStereoReplay* mStereoReplay = nullptr;
+#endif
     GfxWindowBackend* mWindowManagerApi;
     std::shared_ptr<Interpreter> mInterpreter = nullptr;
     std::shared_ptr<GfxDebugger> mGfxDebugger;
