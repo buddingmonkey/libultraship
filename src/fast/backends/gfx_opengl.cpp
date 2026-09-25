@@ -1057,6 +1057,10 @@ GfxRenderingAPIOGL::GetPixelDepth(int fb_id, const std::set<std::pair<float, flo
 
     FramebufferOGL& fb = mFrameBuffers[fb_id];
 
+#ifdef USE_OPENGLES
+    return ReadPixelDepthGles(fb, coordinates);
+#endif
+
     // When looking up one value and the framebuffer is single-sampled, we can read pixels directly
     // Otherwise we need to blit first to a new buffer then read it
     if (coordinates.size() == 1 && fb.msaa_level <= 1) {
@@ -1119,6 +1123,269 @@ GfxRenderingAPIOGL::GetPixelDepth(int fb_id, const std::set<std::pair<float, flo
 
     return res;
 }
+
+#ifdef USE_OPENGLES
+static GLuint CompileDepthReadShader(GLenum type, const char* source) {
+    GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, &source, nullptr);
+    glCompileShader(shader);
+    GLint ok = GL_FALSE;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+    if (ok != GL_TRUE) {
+        char log[512] = {};
+        glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
+        SPDLOG_ERROR("GLES depth read shader failed to compile: {}", log);
+        glDeleteShader(shader);
+        return 0;
+    }
+    return shader;
+}
+
+static constexpr int kDepthReadBatch = 64;
+
+bool GfxRenderingAPIOGL::InitDepthReadGles() {
+    if (mDepthReadProgram != 0) {
+        return true;
+    }
+    if (mDepthReadFailed) {
+        return false;
+    }
+    static const char* vs =
+        "#version 300 es\n"
+        "void main() {\n"
+        "    vec2 p = vec2(float((gl_VertexID & 1) << 2) - 1.0, float((gl_VertexID & 2) << 1) - 1.0);\n"
+        "    gl_Position = vec4(p, 0.0, 1.0);\n"
+        "}\n";
+    // The remap undoes gl_Position.z *= 0.3 in the GLES default shader; change both together.
+    static const char* fs =
+        "#version 300 es\n"
+        "precision highp float;\n"
+        "precision highp int;\n"
+        "uniform highp sampler2D uDepth;\n"
+        "uniform ivec2 uCoords[64];\n"
+        "uniform int uCount;\n"
+        "out vec4 oColor;\n"
+        "void main() {\n"
+        "    int i = int(gl_FragCoord.x);\n"
+        "    if (i >= uCount) {\n"
+        "        oColor = vec4(0.0);\n"
+        "        return;\n"
+        "    }\n"
+        "    float d = texelFetch(uDepth, uCoords[i], 0).r;\n"
+        "    d = clamp((d - 0.5) / 0.3 + 0.5, 0.0, 1.0);\n"
+        "    uint v = uint(d * 16777215.0 + 0.5);\n"
+        "    oColor = vec4(float((v >> 16) & 255u), float((v >> 8) & 255u), float(v & 255u), 255.0) / "
+        "255.0;\n"
+        "}\n";
+    GLuint vsId = CompileDepthReadShader(GL_VERTEX_SHADER, vs);
+    GLuint fsId = CompileDepthReadShader(GL_FRAGMENT_SHADER, fs);
+    if (vsId == 0 || fsId == 0) {
+        mDepthReadFailed = true;
+        return false;
+    }
+    GLuint program = glCreateProgram();
+    glAttachShader(program, vsId);
+    glAttachShader(program, fsId);
+    glLinkProgram(program);
+    glDeleteShader(vsId);
+    glDeleteShader(fsId);
+    GLint linked = GL_FALSE;
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    if (linked != GL_TRUE) {
+        SPDLOG_ERROR("GLES depth read program failed to link");
+        glDeleteProgram(program);
+        mDepthReadFailed = true;
+        return false;
+    }
+    mDepthReadProgram = program;
+    mDepthReadCoordsLoc = glGetUniformLocation(program, "uCoords");
+    mDepthReadCountLoc = glGetUniformLocation(program, "uCount");
+    mDepthReadSamplerLoc = glGetUniformLocation(program, "uDepth");
+
+    glGenVertexArrays(1, &mDepthReadVao);
+
+    glGenTextures(1, &mDepthReadTex);
+    glBindTexture(GL_TEXTURE_2D, mDepthReadTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kDepthReadBatch, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenFramebuffers(1, &mDepthReadFb);
+    glBindFramebuffer(GL_FRAMEBUFFER, mDepthReadFb);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mDepthReadTex, 0);
+
+    glGenTextures(1, &mDepthCopyTex);
+    glGenFramebuffers(1, &mDepthCopyFb);
+    return true;
+}
+
+std::unordered_map<std::pair<float, float>, uint16_t, hash_pair_ff>
+GfxRenderingAPIOGL::ReadPixelDepthGles(const FramebufferOGL& fb, const std::set<std::pair<float, float>>& coordinates) {
+    std::unordered_map<std::pair<float, float>, uint16_t, hash_pair_ff> res;
+    for (const auto& coord : coordinates) {
+        res.emplace(coord, 0);
+    }
+    if (coordinates.empty() || fb.width == 0 || fb.height == 0) {
+        return res;
+    }
+
+    GLint savedProgram, savedVao, savedActiveTexture, savedTexture, savedSampler, savedDrawFb, savedReadFb;
+    GLint savedViewport[4];
+    glGetIntegerv(GL_CURRENT_PROGRAM, &savedProgram);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &savedVao);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &savedActiveTexture);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTexture);
+    glGetIntegerv(GL_SAMPLER_BINDING, &savedSampler);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &savedDrawFb);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &savedReadFb);
+    glGetIntegerv(GL_VIEWPORT, savedViewport);
+    GLboolean savedScissor = glIsEnabled(GL_SCISSOR_TEST);
+    GLboolean savedDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean savedBlend = glIsEnabled(GL_BLEND);
+    GLboolean savedCull = glIsEnabled(GL_CULL_FACE);
+
+    if (InitDepthReadGles()) {
+        while (glGetError() != GL_NO_ERROR) {}
+
+        for (size_t n = 0; n < mDepthReadSlots.size(); n++) {
+            DepthReadSlot& slot = mDepthReadSlots[(mDepthReadNext + n) % mDepthReadSlots.size()];
+            if (slot.fence == nullptr) {
+                continue;
+            }
+            GLenum state = glClientWaitSync(slot.fence, 0, 0);
+            if (state != GL_ALREADY_SIGNALED && state != GL_CONDITION_SATISFIED) {
+                continue;
+            }
+            glDeleteSync(slot.fence);
+            slot.fence = nullptr;
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, slot.pbo);
+            auto* rgba = static_cast<const uint8_t*>(
+                glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, slot.pixels.size() * 4, GL_MAP_READ_BIT));
+            if (rgba != nullptr) {
+                mDepthReadLatest.clear();
+                for (size_t i = 0; i < slot.pixels.size(); i++) {
+                    uint32_t d24 = ((uint32_t)rgba[i * 4] << 16) | ((uint32_t)rgba[i * 4 + 1] << 8) | rgba[i * 4 + 2];
+                    mDepthReadLatest.emplace_back(slot.pixels[i], (uint16_t)((d24 >> 10) << 2));
+                }
+                glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+            }
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        }
+
+        if (mDepthCopyWidth != fb.width || mDepthCopyHeight != fb.height) {
+            glBindTexture(GL_TEXTURE_2D, mDepthCopyTex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, fb.width, fb.height, 0, GL_DEPTH_STENCIL,
+                         GL_UNSIGNED_INT_24_8, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+            glBindFramebuffer(GL_FRAMEBUFFER, mDepthCopyFb);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, mDepthCopyTex, 0);
+            mDepthCopyWidth = fb.width;
+            mDepthCopyHeight = fb.height;
+        }
+
+        std::vector<std::pair<int, int>> pixels;
+        pixels.reserve(coordinates.size());
+        int minX = INT32_MAX, minY = INT32_MAX, maxX = -1, maxY = -1;
+        for (const auto& coord : coordinates) {
+            int x = std::clamp((int)coord.first, 0, (int)fb.width - 1);
+            int y = (int)coord.second;
+            if (fb.invertY) {
+                y = fb.height - y;
+            }
+            y = std::clamp(y, 0, (int)fb.height - 1);
+            pixels.emplace_back(x, y);
+            minX = std::min(minX, x);
+            minY = std::min(minY, y);
+            maxX = std::max(maxX, x);
+            maxY = std::max(maxY, y);
+        }
+
+        glDisable(GL_SCISSOR_TEST);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fb.fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mDepthCopyFb);
+        glBlitFramebuffer(minX, minY, maxX + 1, maxY + 1, minX, minY, maxX + 1, maxY + 1, GL_DEPTH_BUFFER_BIT,
+                          GL_NEAREST);
+        GLenum blitError = glGetError();
+
+        if (blitError == GL_NO_ERROR) {
+            glBindFramebuffer(GL_FRAMEBUFFER, mDepthReadFb);
+            glViewport(0, 0, kDepthReadBatch, 1);
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_BLEND);
+            glDisable(GL_CULL_FACE);
+            glUseProgram(mDepthReadProgram);
+            glBindVertexArray(mDepthReadVao);
+            glBindTexture(GL_TEXTURE_2D, mDepthCopyTex);
+            glBindSampler(0, 0);
+            glUniform1i(mDepthReadSamplerLoc, 0);
+
+            DepthReadSlot& slot = mDepthReadSlots[mDepthReadNext];
+            if (slot.fence == nullptr) {
+                size_t batches = (pixels.size() + kDepthReadBatch - 1) / kDepthReadBatch;
+                size_t size = batches * kDepthReadBatch * 4;
+                if (slot.pbo == 0) {
+                    glGenBuffers(1, &slot.pbo);
+                }
+                glBindBuffer(GL_PIXEL_PACK_BUFFER, slot.pbo);
+                if (slot.size < size) {
+                    glBufferData(GL_PIXEL_PACK_BUFFER, size, nullptr, GL_STREAM_READ);
+                    slot.size = size;
+                }
+                for (size_t start = 0; start < pixels.size(); start += kDepthReadBatch) {
+                    int count = (int)std::min<size_t>(kDepthReadBatch, pixels.size() - start);
+                    GLint packed[kDepthReadBatch * 2] = {};
+                    for (int i = 0; i < count; i++) {
+                        packed[i * 2] = pixels[start + i].first;
+                        packed[i * 2 + 1] = pixels[start + i].second;
+                    }
+                    glUniform2iv(mDepthReadCoordsLoc, kDepthReadBatch, packed);
+                    glUniform1i(mDepthReadCountLoc, count);
+                    glDrawArrays(GL_TRIANGLES, 0, 3);
+                    glReadPixels(0, 0, kDepthReadBatch, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+                                 reinterpret_cast<void*>(start * 4));
+                }
+                glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+                slot.pixels = pixels;
+                slot.fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+                mDepthReadNext = (mDepthReadNext + 1) % mDepthReadSlots.size();
+            }
+        } else if (!mDepthReadFailed) {
+            SPDLOG_ERROR("GLES depth read: blit of framebuffer {} failed with 0x{:x}", fb.fbo, blitError);
+            mDepthReadFailed = true;
+        }
+    }
+
+    for (const auto& coord : coordinates) {
+        int x = (int)coord.first;
+        int y = fb.invertY ? (int)fb.height - (int)coord.second : (int)coord.second;
+        int best = 16 * 16 + 1;
+        for (const auto& [pixel, depth] : mDepthReadLatest) {
+            int dx = pixel.first - x;
+            int dy = pixel.second - y;
+            if (dx * dx + dy * dy < best) {
+                best = dx * dx + dy * dy;
+                res[coord] = depth;
+            }
+        }
+    }
+
+    glUseProgram(savedProgram);
+    glBindVertexArray(savedVao);
+    glBindTexture(GL_TEXTURE_2D, savedTexture);
+    glBindSampler(0, savedSampler);
+    glActiveTexture(savedActiveTexture);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, savedDrawFb);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, savedReadFb);
+    glViewport(savedViewport[0], savedViewport[1], savedViewport[2], savedViewport[3]);
+    savedScissor ? glEnable(GL_SCISSOR_TEST) : glDisable(GL_SCISSOR_TEST);
+    savedDepthTest ? glEnable(GL_DEPTH_TEST) : glDisable(GL_DEPTH_TEST);
+    savedBlend ? glEnable(GL_BLEND) : glDisable(GL_BLEND);
+    savedCull ? glEnable(GL_CULL_FACE) : glDisable(GL_CULL_FACE);
+    return res;
+}
+#endif
 
 void GfxRenderingAPIOGL::SetTextureFilter(FilteringMode mode) {
     gfx_texture_cache_clear();

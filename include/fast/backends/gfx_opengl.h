@@ -2,6 +2,7 @@
 #pragma once
 
 #include "gfx_rendering_api.h"
+#include <array>
 #include "../interpreter.h"
 
 #ifdef _MSC_VER
@@ -140,6 +141,32 @@ class GfxRenderingAPIOGL final : public GfxRenderingAPI {
     GLuint mPixelDepthRb = 0;
     GLuint mPixelDepthFb = 0;
     size_t mPixelDepthRbSize = 0;
+#ifdef USE_OPENGLES
+    std::unordered_map<std::pair<float, float>, uint16_t, hash_pair_ff>
+    ReadPixelDepthGles(const FramebufferOGL& fb, const std::set<std::pair<float, float>>& coordinates);
+    bool InitDepthReadGles();
+    GLuint mDepthCopyTex = 0;
+    GLuint mDepthCopyFb = 0;
+    uint32_t mDepthCopyWidth = 0;
+    uint32_t mDepthCopyHeight = 0;
+    GLuint mDepthReadTex = 0;
+    GLuint mDepthReadFb = 0;
+    GLuint mDepthReadProgram = 0;
+    GLuint mDepthReadVao = 0;
+    GLint mDepthReadCoordsLoc = -1;
+    GLint mDepthReadCountLoc = -1;
+    GLint mDepthReadSamplerLoc = -1;
+    bool mDepthReadFailed = false;
+    struct DepthReadSlot {
+        GLuint pbo = 0;
+        GLsync fence = nullptr;
+        size_t size = 0;
+        std::vector<std::pair<int, int>> pixels;
+    };
+    std::array<DepthReadSlot, 3> mDepthReadSlots;
+    size_t mDepthReadNext = 0;
+    std::vector<std::pair<std::pair<int, int>, uint16_t>> mDepthReadLatest;
+#endif
 };
 
 } // namespace Fast
