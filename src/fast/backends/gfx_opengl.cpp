@@ -1161,7 +1161,6 @@ bool GfxRenderingAPIOGL::InitDepthReadGles() {
         "    vec2 p = vec2(float((gl_VertexID & 1) << 2) - 1.0, float((gl_VertexID & 2) << 1) - 1.0);\n"
         "    gl_Position = vec4(p, 0.0, 1.0);\n"
         "}\n";
-    // The remap undoes gl_Position.z *= 0.3 in the GLES default shader; change both together.
     static const char* fs =
         "#version 300 es\n"
         "precision highp float;\n"
@@ -1173,7 +1172,7 @@ bool GfxRenderingAPIOGL::InitDepthReadGles() {
         "    ivec2 size = textureSize(uDepth, 0);\n"
         "    ivec2 p = min(ivec2(gl_FragCoord.xy * uScale), size - 1);\n"
         "    float d = texelFetch(uDepth, p, 0).r;\n"
-        "    d = clamp((d - 0.5) / 0.3 + 0.5, 0.0, 1.0);\n"
+        "    d = clamp(d, 0.0, 1.0);\n"
         "    uint v = min(uint(d * 16777215.0 + 0.5), 16777215u);\n"
         "    oColor = vec4(float((v >> 16) & 255u), float((v >> 8) & 255u), float(v & 255u), 255.0) / "
         "255.0;\n"
