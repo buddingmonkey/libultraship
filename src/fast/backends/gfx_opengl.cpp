@@ -778,6 +778,9 @@ void GfxRenderingAPIOGL::HoldFrameNoise(bool hold) {
 }
 
 void GfxRenderingAPIOGL::EndFrame() {
+#ifdef USE_OPENGLES
+    CaptureDepthMapGles();
+#endif
     glFlush();
 }
 
@@ -1058,7 +1061,7 @@ GfxRenderingAPIOGL::GetPixelDepth(int fb_id, const std::set<std::pair<float, flo
     FramebufferOGL& fb = mFrameBuffers[fb_id];
 
 #ifdef USE_OPENGLES
-    return ReadPixelDepthGles(fb, coordinates);
+    return ReadPixelDepthGles(fb_id, coordinates);
 #endif
 
     // When looking up one value and the framebuffer is single-sampled, we can read pixels directly
@@ -1171,7 +1174,7 @@ bool GfxRenderingAPIOGL::InitDepthReadGles() {
         "    ivec2 p = min(ivec2(gl_FragCoord.xy * uScale), size - 1);\n"
         "    float d = texelFetch(uDepth, p, 0).r;\n"
         "    d = clamp((d - 0.5) / 0.3 + 0.5, 0.0, 1.0);\n"
-        "    uint v = uint(d * 16777215.0 + 0.5);\n"
+        "    uint v = min(uint(d * 16777215.0 + 0.5), 16777215u);\n"
         "    oColor = vec4(float((v >> 16) & 255u), float((v >> 8) & 255u), float(v & 255u), 255.0) / "
         "255.0;\n"
         "}\n";
@@ -1223,7 +1226,8 @@ bool GfxRenderingAPIOGL::InitDepthReadGles() {
 }
 
 std::unordered_map<std::pair<float, float>, uint16_t, hash_pair_ff>
-GfxRenderingAPIOGL::ReadPixelDepthGles(const FramebufferOGL& fb, const std::set<std::pair<float, float>>& coordinates) {
+GfxRenderingAPIOGL::ReadPixelDepthGles(int fbId, const std::set<std::pair<float, float>>& coordinates) {
+    const FramebufferOGL& fb = mFrameBuffers[fbId];
     std::unordered_map<std::pair<float, float>, uint16_t, hash_pair_ff> res;
     for (const auto& coord : coordinates) {
         res.emplace(coord, 0);
@@ -1276,9 +1280,40 @@ GfxRenderingAPIOGL::ReadPixelDepthGles(const FramebufferOGL& fb, const std::set<
         }
     }
 
+    int minX = kDepthMapWidth, minY = kDepthMapHeight, maxX = -1, maxY = -1;
+    for (const auto& coord : coordinates) {
+        int y = fb.invertY ? (int)fb.height - (int)coord.second : (int)coord.second;
+        int mx = (int)(coord.first * kDepthMapWidth / fb.width);
+        int my = (int)((float)y * kDepthMapHeight / fb.height);
+        minX = std::min(minX, mx);
+        minY = std::min(minY, my);
+        maxX = std::max(maxX, mx);
+        maxY = std::max(maxY, my);
+    }
+    minX = std::clamp(minX - kDepthMapMargin, 0, kDepthMapWidth - 1);
+    minY = std::clamp(minY - kDepthMapMargin, 0, kDepthMapHeight - 1);
+    maxX = std::clamp(maxX + kDepthMapMargin, 0, kDepthMapWidth - 1);
+    maxY = std::clamp(maxY + kDepthMapMargin, 0, kDepthMapHeight - 1);
+    mDepthReadWantRect[0] = minX;
+    mDepthReadWantRect[1] = minY;
+    mDepthReadWantRect[2] = maxX - minX + 1;
+    mDepthReadWantRect[3] = maxY - minY + 1;
+    mDepthReadWantFb = fbId;
+    return res;
+}
+
+void GfxRenderingAPIOGL::CaptureDepthMapGles() {
+    if (mDepthReadWantFb < 0 || mDepthReadProgram == 0) {
+        return;
+    }
     DepthReadSlot& slot = mDepthReadSlots[mDepthReadNext];
     if (slot.fence != nullptr) {
-        return res;
+        return;
+    }
+    const FramebufferOGL& fb = mFrameBuffers[mDepthReadWantFb];
+    mDepthReadWantFb = -1;
+    if (fb.width == 0 || fb.height == 0) {
+        return;
     }
 
     GLint savedProgram, savedVao, savedActiveTexture, savedTexture, savedSampler, savedDrawFb, savedReadFb;
@@ -1314,24 +1349,11 @@ GfxRenderingAPIOGL::ReadPixelDepthGles(const FramebufferOGL& fb, const std::set<
         mDepthCopyHeight = fb.height;
     }
 
-    int minX = kDepthMapWidth, minY = kDepthMapHeight, maxX = -1, maxY = -1;
-    for (const auto& coord : coordinates) {
-        int y = fb.invertY ? (int)fb.height - (int)coord.second : (int)coord.second;
-        int mx = (int)(coord.first * kDepthMapWidth / fb.width);
-        int my = (int)((float)y * kDepthMapHeight / fb.height);
-        minX = std::min(minX, mx);
-        minY = std::min(minY, my);
-        maxX = std::max(maxX, mx);
-        maxY = std::max(maxY, my);
-    }
-    minX = std::clamp(minX - kDepthMapMargin, 0, kDepthMapWidth - 1);
-    minY = std::clamp(minY - kDepthMapMargin, 0, kDepthMapHeight - 1);
-    maxX = std::clamp(maxX + kDepthMapMargin, 0, kDepthMapWidth - 1);
-    maxY = std::clamp(maxY + kDepthMapMargin, 0, kDepthMapHeight - 1);
-    slot.rect[0] = minX;
-    slot.rect[1] = minY;
-    slot.rect[2] = maxX - minX + 1;
-    slot.rect[3] = maxY - minY + 1;
+    std::copy(std::begin(mDepthReadWantRect), std::end(mDepthReadWantRect), std::begin(slot.rect));
+    int minX = slot.rect[0];
+    int minY = slot.rect[1];
+    int maxX = slot.rect[0] + slot.rect[2] - 1;
+    int maxY = slot.rect[1] + slot.rect[3] - 1;
     int fx0 = (int)((int64_t)minX * fb.width / kDepthMapWidth);
     int fy0 = (int)((int64_t)minY * fb.height / kDepthMapHeight);
     int fx1 = std::min((int)fb.width, (int)((int64_t)(maxX + 2) * fb.width / kDepthMapWidth));
@@ -1385,7 +1407,6 @@ GfxRenderingAPIOGL::ReadPixelDepthGles(const FramebufferOGL& fb, const std::set<
     savedDepthTest ? glEnable(GL_DEPTH_TEST) : glDisable(GL_DEPTH_TEST);
     savedBlend ? glEnable(GL_BLEND) : glDisable(GL_BLEND);
     savedCull ? glEnable(GL_CULL_FACE) : glDisable(GL_CULL_FACE);
-    return res;
 }
 #endif
 

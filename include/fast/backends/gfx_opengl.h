@@ -143,7 +143,8 @@ class GfxRenderingAPIOGL final : public GfxRenderingAPI {
     size_t mPixelDepthRbSize = 0;
 #ifdef USE_OPENGLES
     std::unordered_map<std::pair<float, float>, uint16_t, hash_pair_ff>
-    ReadPixelDepthGles(const FramebufferOGL& fb, const std::set<std::pair<float, float>>& coordinates);
+    ReadPixelDepthGles(int fbId, const std::set<std::pair<float, float>>& coordinates);
+    void CaptureDepthMapGles();
     bool InitDepthReadGles();
     GLuint mDepthCopyTex = 0;
     GLuint mDepthCopyFb = 0;
@@ -172,6 +173,8 @@ class GfxRenderingAPIOGL final : public GfxRenderingAPI {
     uint32_t mDepthMapHeight = 0;
     std::vector<uint16_t> mDepthMap;
     int mDepthMapRect[4] = {};
+    int mDepthReadWantFb = -1;
+    int mDepthReadWantRect[4] = {};
 #endif
 };
 
