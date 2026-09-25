@@ -20,6 +20,9 @@
 #endif
 
 #include "fast/backends/gfx_opengl.h"
+#ifdef ENABLE_OPENXR
+#include "fast/backends/gfx_xr_view.h"
+#endif
 #include "ship/window/gui/Gui.h"
 #include <prism/processor.h>
 #include <fstream>
@@ -1234,6 +1237,12 @@ GfxRenderingAPIOGL::ReadPixelDepthGles(int fbId, const std::set<std::pair<float,
     if (coordinates.empty() || fb.width == 0 || fb.height == 0 || !InitDepthReadGles()) {
         return res;
     }
+#ifdef ENABLE_OPENXR
+    // The per-eye MSAA copy costs a headset about 2 of 90 frames in heavy scenes; keep depth reads off there.
+    if (IsXrPresenting()) {
+        return res;
+    }
+#endif
 
     for (size_t n = 0; n < mDepthReadSlots.size(); n++) {
         DepthReadSlot& slot = mDepthReadSlots[(mDepthReadNext + n) % mDepthReadSlots.size()];
@@ -1383,7 +1392,6 @@ void GfxRenderingAPIOGL::CaptureDepthMapGles() {
         glReadPixels(slot.rect[0], slot.rect[1], slot.rect[2], slot.rect[3], GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
         slot.fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-        glFlush();
         slot.serial = ++mDepthReadSerial;
         slot.fbWidth = fb.width;
         slot.fbHeight = fb.height;
