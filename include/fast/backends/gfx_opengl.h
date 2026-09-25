@@ -153,19 +153,25 @@ class GfxRenderingAPIOGL final : public GfxRenderingAPI {
     GLuint mDepthReadFb = 0;
     GLuint mDepthReadProgram = 0;
     GLuint mDepthReadVao = 0;
-    GLint mDepthReadCoordsLoc = -1;
-    GLint mDepthReadCountLoc = -1;
+    GLint mDepthReadScaleLoc = -1;
     GLint mDepthReadSamplerLoc = -1;
     bool mDepthReadFailed = false;
     struct DepthReadSlot {
         GLuint pbo = 0;
         GLsync fence = nullptr;
-        size_t size = 0;
-        std::vector<std::pair<int, int>> pixels;
+        uint64_t serial = 0;
+        uint32_t fbWidth = 0;
+        uint32_t fbHeight = 0;
+        int rect[4] = {};
     };
     std::array<DepthReadSlot, 3> mDepthReadSlots;
     size_t mDepthReadNext = 0;
-    std::vector<std::pair<std::pair<int, int>, uint16_t>> mDepthReadLatest;
+    uint64_t mDepthReadSerial = 0;
+    uint64_t mDepthMapSerial = 0;
+    uint32_t mDepthMapWidth = 0;
+    uint32_t mDepthMapHeight = 0;
+    std::vector<uint16_t> mDepthMap;
+    int mDepthMapRect[4] = {};
 #endif
 };
 
