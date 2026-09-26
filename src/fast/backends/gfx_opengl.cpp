@@ -754,15 +754,45 @@ void GfxRenderingAPIOGL::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, size
 
     SetPerDrawUniforms();
 
-    // printf("flushing %d tris\n", buf_vbo_num_tris);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(float) * buf_vbo_len, buf_vbo, GL_STREAM_DRAW);
-    glDrawArrays(GL_TRIANGLES, 0, 3 * buf_vbo_num_tris);
+    if (mBatchBase != nullptr && buf_vbo >= mBatchBase && buf_vbo < mBatchEnd) {
+        glDrawArrays(GL_TRIANGLES, (GLint)((buf_vbo - mBatchBase) / mCurrentShaderProgram->numFloats),
+                     3 * buf_vbo_num_tris);
+    } else {
+        glBufferData(GL_ARRAY_BUFFER, sizeof(float) * buf_vbo_len, buf_vbo, GL_STREAM_DRAW);
+        glDrawArrays(GL_TRIANGLES, 0, 3 * buf_vbo_num_tris);
+    }
 
 #ifdef USE_OPENGLES
     if (baseProgram != nullptr) {
         LoadShader(baseProgram);
     }
 #endif
+}
+
+bool GfxRenderingAPIOGL::BeginVertexBatch(const float* base, size_t len) {
+    if (len == 0) {
+        return false;
+    }
+    if (mBatchVbo == 0) {
+        glGenBuffers(1, &mBatchVbo);
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, mBatchVbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(float) * len, base, GL_STREAM_DRAW);
+    mBatchBase = base;
+    mBatchEnd = base + len;
+    if (mLastLoadedShader != nullptr) {
+        VertexArraySetAttribs(mLastLoadedShader);
+    }
+    return true;
+}
+
+void GfxRenderingAPIOGL::EndVertexBatch() {
+    mBatchBase = nullptr;
+    mBatchEnd = nullptr;
+    glBindBuffer(GL_ARRAY_BUFFER, mOpenglVbo);
+    if (mLastLoadedShader != nullptr) {
+        VertexArraySetAttribs(mLastLoadedShader);
+    }
 }
 
 void GfxRenderingAPIOGL::Init() {

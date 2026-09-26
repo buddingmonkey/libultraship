@@ -110,6 +110,8 @@ class GfxRenderingAPIOGL final : public GfxRenderingAPI {
     FilteringMode GetTextureFilter() override;
     void SetSrgbMode() override;
     ImTextureID GetTextureById(int id) override;
+    bool BeginVertexBatch(const float* base, size_t len) override;
+    void EndVertexBatch() override;
 
   private:
     void SetUniforms(ShaderProgram* prg) const;
@@ -134,6 +136,9 @@ class GfxRenderingAPIOGL final : public GfxRenderingAPI {
     ShaderProgram* mLastLoadedShader = nullptr;
 
     GLuint mOpenglVbo = 0;
+    GLuint mBatchVbo = 0;
+    const float* mBatchBase = nullptr;
+    const float* mBatchEnd = nullptr;
 #if defined(__APPLE__) || defined(USE_OPENGLES)
     GLuint mOpenglVao;
 #endif

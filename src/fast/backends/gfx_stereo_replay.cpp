@@ -86,8 +86,11 @@ void GfxStereoReplay::RecordState() {
 void GfxStereoReplay::DrawStereoTriangles(float* left, const float* right, size_t len, size_t tris) {
     mInner->DrawTriangles(left, len, tris);
     if (mRecording) {
+        const size_t stride = tris > 0 ? len / (3 * tris) : 1;
+        const size_t off = stride > 1 ? (mVbo.size() + stride - 1) / stride * stride : mVbo.size();
+        mVbo.resize(off);
         Cmd& cmd = Push(Op::Triangles);
-        cmd.off = mVbo.size();
+        cmd.off = off;
         cmd.len = len;
         cmd.tris = tris;
         mVbo.insert(mVbo.end(), right, right + len);
@@ -96,6 +99,7 @@ void GfxStereoReplay::DrawStereoTriangles(float* left, const float* right, size_
 
 uint32_t GfxStereoReplay::Replay() {
     uint32_t draws = 0;
+    const bool batch = !mVbo.empty() && mInner->BeginVertexBatch(mVbo.data(), mVbo.size());
     for (const Cmd& cmd : mCmds) {
         switch (cmd.op) {
             case Op::UnloadShader:
@@ -157,6 +161,9 @@ uint32_t GfxStereoReplay::Replay() {
                 mInner->SetCurrentPrimDepth(cmd.f);
                 break;
         }
+    }
+    if (batch) {
+        mInner->EndVertexBatch();
     }
     return draws;
 }
