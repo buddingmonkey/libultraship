@@ -159,15 +159,14 @@ class GfxRenderingAPIOGL final : public GfxRenderingAPI {
     GLuint mDepthCopyFb = 0;
     uint32_t mDepthCopyWidth = 0;
     uint32_t mDepthCopyHeight = 0;
-    GLuint mDepthReadTex = 0;
-    GLuint mDepthReadFb = 0;
     GLuint mDepthReadProgram = 0;
     GLuint mDepthReadVao = 0;
     GLint mDepthReadScaleLoc = -1;
     GLint mDepthReadSamplerLoc = -1;
+    GLint mDepthReadRectLoc = -1;
     bool mDepthReadFailed = false;
     struct DepthReadSlot {
-        GLuint pbo = 0;
+        GLuint buffer = 0;
         GLsync fence = nullptr;
         uint64_t serial = 0;
         uint32_t fbWidth = 0;

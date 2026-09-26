@@ -20,9 +20,6 @@
 #endif
 
 #include "fast/backends/gfx_opengl.h"
-#ifdef ENABLE_OPENXR
-#include "fast/backends/gfx_xr_view.h"
-#endif
 #include "ship/window/gui/Gui.h"
 #include <prism/processor.h>
 #include <fstream>
@@ -1210,28 +1207,27 @@ bool GfxRenderingAPIOGL::InitDepthReadGles() {
     if (mDepthReadFailed) {
         return false;
     }
-    static const char* vs =
-        "#version 300 es\n"
-        "void main() {\n"
-        "    vec2 p = vec2(float((gl_VertexID & 1) << 2) - 1.0, float((gl_VertexID & 2) << 1) - 1.0);\n"
-        "    gl_Position = vec4(p, 0.0, 1.0);\n"
-        "}\n";
-    static const char* fs =
-        "#version 300 es\n"
-        "precision highp float;\n"
-        "precision highp int;\n"
-        "uniform highp sampler2D uDepth;\n"
-        "uniform vec2 uScale;\n"
-        "out vec4 oColor;\n"
-        "void main() {\n"
-        "    ivec2 size = textureSize(uDepth, 0);\n"
-        "    ivec2 p = min(ivec2(gl_FragCoord.xy * uScale), size - 1);\n"
-        "    float d = texelFetch(uDepth, p, 0).r;\n"
-        "    d = clamp(d, 0.0, 1.0);\n"
-        "    uint v = min(uint(d * 16777215.0 + 0.5), 16777215u);\n"
-        "    oColor = vec4(float((v >> 16) & 255u), float((v >> 8) & 255u), float(v & 255u), 255.0) / "
-        "255.0;\n"
-        "}\n";
+    static const char* vs = "#version 300 es\n"
+                            "precision highp float;\n"
+                            "precision highp int;\n"
+                            "uniform highp sampler2D uDepth;\n"
+                            "uniform vec2 uScale;\n"
+                            "uniform ivec4 uRect;\n"
+                            "flat out uint vDepth;\n"
+                            "void main() {\n"
+                            "    ivec2 cell = uRect.xy + ivec2(gl_VertexID % uRect.z, gl_VertexID / uRect.z);\n"
+                            "    ivec2 size = textureSize(uDepth, 0);\n"
+                            "    ivec2 p = min(ivec2((vec2(cell) + 0.5) * uScale), size - 1);\n"
+                            "    float d = clamp(texelFetch(uDepth, p, 0).r, 0.0, 1.0);\n"
+                            "    vDepth = min(uint(d * 16777215.0 + 0.5), 16777215u);\n"
+                            "    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);\n"
+                            "}\n";
+    static const char* fs = "#version 300 es\n"
+                            "precision mediump float;\n"
+                            "out vec4 oColor;\n"
+                            "void main() {\n"
+                            "    oColor = vec4(0.0);\n"
+                            "}\n";
     GLuint vsId = CompileDepthReadShader(GL_VERTEX_SHADER, vs);
     GLuint fsId = CompileDepthReadShader(GL_FRAGMENT_SHADER, fs);
     if (vsId == 0 || fsId == 0) {
@@ -1241,6 +1237,8 @@ bool GfxRenderingAPIOGL::InitDepthReadGles() {
     GLuint program = glCreateProgram();
     glAttachShader(program, vsId);
     glAttachShader(program, fsId);
+    const char* varyings[] = { "vDepth" };
+    glTransformFeedbackVaryings(program, 1, varyings, GL_INTERLEAVED_ATTRIBS);
     glLinkProgram(program);
     glDeleteShader(vsId);
     glDeleteShader(fsId);
@@ -1255,26 +1253,18 @@ bool GfxRenderingAPIOGL::InitDepthReadGles() {
     mDepthReadProgram = program;
     mDepthReadScaleLoc = glGetUniformLocation(program, "uScale");
     mDepthReadSamplerLoc = glGetUniformLocation(program, "uDepth");
+    mDepthReadRectLoc = glGetUniformLocation(program, "uRect");
 
     glGenVertexArrays(1, &mDepthReadVao);
-
-    glGenTextures(1, &mDepthReadTex);
-    glBindTexture(GL_TEXTURE_2D, mDepthReadTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kDepthMapWidth, kDepthMapHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glGenFramebuffers(1, &mDepthReadFb);
-    glBindFramebuffer(GL_FRAMEBUFFER, mDepthReadFb);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mDepthReadTex, 0);
 
     glGenTextures(1, &mDepthCopyTex);
     glGenFramebuffers(1, &mDepthCopyFb);
     for (auto& slot : mDepthReadSlots) {
-        glGenBuffers(1, &slot.pbo);
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, slot.pbo);
-        glBufferData(GL_PIXEL_PACK_BUFFER, kDepthMapWidth * kDepthMapHeight * 4, nullptr, GL_STREAM_READ);
+        glGenBuffers(1, &slot.buffer);
+        glBindBuffer(GL_COPY_READ_BUFFER, slot.buffer);
+        glBufferData(GL_COPY_READ_BUFFER, kDepthMapWidth * kDepthMapHeight * 4, nullptr, GL_STREAM_READ);
     }
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    glBindBuffer(GL_COPY_READ_BUFFER, 0);
     mDepthMap.assign(kDepthMapWidth * kDepthMapHeight, 0);
     return true;
 }
@@ -1289,12 +1279,6 @@ GfxRenderingAPIOGL::ReadPixelDepthGles(int fbId, const std::set<std::pair<float,
     if (coordinates.empty() || fb.width == 0 || fb.height == 0 || !InitDepthReadGles()) {
         return res;
     }
-#ifdef ENABLE_OPENXR
-    // The per-eye MSAA copy costs a headset about 2 of 90 frames in heavy scenes; keep depth reads off there.
-    if (IsXrPresenting()) {
-        return res;
-    }
-#endif
 
     for (size_t n = 0; n < mDepthReadSlots.size(); n++) {
         DepthReadSlot& slot = mDepthReadSlots[(mDepthReadNext + n) % mDepthReadSlots.size()];
@@ -1310,21 +1294,20 @@ GfxRenderingAPIOGL::ReadPixelDepthGles(int fbId, const std::set<std::pair<float,
         if (slot.serial < mDepthMapSerial) {
             continue;
         }
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, slot.pbo);
-        auto* rgba = static_cast<const uint8_t*>(
-            glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, slot.rect[2] * slot.rect[3] * 4, GL_MAP_READ_BIT));
-        if (rgba != nullptr) {
+        glBindBuffer(GL_COPY_READ_BUFFER, slot.buffer);
+        auto* d24 = static_cast<const uint32_t*>(
+            glMapBufferRange(GL_COPY_READ_BUFFER, 0, slot.rect[2] * slot.rect[3] * 4, GL_MAP_READ_BIT));
+        if (d24 != nullptr) {
             for (int i = 0; i < slot.rect[2] * slot.rect[3]; i++) {
-                uint32_t d24 = ((uint32_t)rgba[i * 4] << 16) | ((uint32_t)rgba[i * 4 + 1] << 8) | rgba[i * 4 + 2];
-                mDepthMap[i] = (uint16_t)((d24 >> 10) << 2);
+                mDepthMap[i] = (uint16_t)((d24[i] >> 10) << 2);
             }
-            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+            glUnmapBuffer(GL_COPY_READ_BUFFER);
             mDepthMapSerial = slot.serial;
             mDepthMapWidth = slot.fbWidth;
             mDepthMapHeight = slot.fbHeight;
             std::copy(std::begin(slot.rect), std::end(slot.rect), std::begin(mDepthMapRect));
         }
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        glBindBuffer(GL_COPY_READ_BUFFER, 0);
     }
 
     if (mDepthMapSerial > 0 && mDepthMapWidth > 0 && mDepthMapHeight > 0) {
@@ -1377,9 +1360,6 @@ void GfxRenderingAPIOGL::CaptureDepthMapGles() {
     }
 
     GLint savedProgram, savedVao, savedActiveTexture, savedTexture, savedSampler, savedDrawFb, savedReadFb;
-    GLint savedViewport[4];
-    GLint savedScissorBox[4];
-    glGetIntegerv(GL_SCISSOR_BOX, savedScissorBox);
     glGetIntegerv(GL_CURRENT_PROGRAM, &savedProgram);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &savedVao);
     glGetIntegerv(GL_ACTIVE_TEXTURE, &savedActiveTexture);
@@ -1388,11 +1368,7 @@ void GfxRenderingAPIOGL::CaptureDepthMapGles() {
     glGetIntegerv(GL_SAMPLER_BINDING, &savedSampler);
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &savedDrawFb);
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &savedReadFb);
-    glGetIntegerv(GL_VIEWPORT, savedViewport);
     GLboolean savedScissor = glIsEnabled(GL_SCISSOR_TEST);
-    GLboolean savedDepthTest = glIsEnabled(GL_DEPTH_TEST);
-    GLboolean savedBlend = glIsEnabled(GL_BLEND);
-    GLboolean savedCull = glIsEnabled(GL_CULL_FACE);
 
     while (glGetError() != GL_NO_ERROR) {}
 
@@ -1426,23 +1402,20 @@ void GfxRenderingAPIOGL::CaptureDepthMapGles() {
     GLenum blitError = glGetError();
 
     if (blitError == GL_NO_ERROR) {
-        glBindFramebuffer(GL_FRAMEBUFFER, mDepthReadFb);
-        glViewport(0, 0, kDepthMapWidth, kDepthMapHeight);
-        glEnable(GL_SCISSOR_TEST);
-        glScissor(slot.rect[0], slot.rect[1], slot.rect[2], slot.rect[3]);
-        glDisable(GL_DEPTH_TEST);
-        glDisable(GL_BLEND);
-        glDisable(GL_CULL_FACE);
+        glEnable(GL_RASTERIZER_DISCARD);
         glUseProgram(mDepthReadProgram);
         glBindVertexArray(mDepthReadVao);
         glBindTexture(GL_TEXTURE_2D, mDepthCopyTex);
         glBindSampler(0, 0);
         glUniform1i(mDepthReadSamplerLoc, 0);
         glUniform2f(mDepthReadScaleLoc, (float)fb.width / kDepthMapWidth, (float)fb.height / kDepthMapHeight);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, slot.pbo);
-        glReadPixels(slot.rect[0], slot.rect[1], slot.rect[2], slot.rect[3], GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        glUniform4i(mDepthReadRectLoc, slot.rect[0], slot.rect[1], slot.rect[2], slot.rect[3]);
+        glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, slot.buffer);
+        glBeginTransformFeedback(GL_POINTS);
+        glDrawArrays(GL_POINTS, 0, slot.rect[2] * slot.rect[3]);
+        glEndTransformFeedback();
+        glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, 0);
+        glDisable(GL_RASTERIZER_DISCARD);
         slot.fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         slot.serial = ++mDepthReadSerial;
         slot.fbWidth = fb.width;
@@ -1460,12 +1433,7 @@ void GfxRenderingAPIOGL::CaptureDepthMapGles() {
     glActiveTexture(savedActiveTexture);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, savedDrawFb);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, savedReadFb);
-    glViewport(savedViewport[0], savedViewport[1], savedViewport[2], savedViewport[3]);
-    glScissor(savedScissorBox[0], savedScissorBox[1], savedScissorBox[2], savedScissorBox[3]);
     savedScissor ? glEnable(GL_SCISSOR_TEST) : glDisable(GL_SCISSOR_TEST);
-    savedDepthTest ? glEnable(GL_DEPTH_TEST) : glDisable(GL_DEPTH_TEST);
-    savedBlend ? glEnable(GL_BLEND) : glDisable(GL_BLEND);
-    savedCull ? glEnable(GL_CULL_FACE) : glDisable(GL_CULL_FACE);
 }
 #endif
 
