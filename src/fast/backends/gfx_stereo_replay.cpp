@@ -16,14 +16,32 @@ GfxStereoReplay::~GfxStereoReplay() {
 void GfxStereoReplay::BeginRecord(const std::unordered_map<int, int>* fbTwins) {
     mCmds.clear();
     mVbo.clear();
+    mVboL.clear();
+    mDrawnTextures.clear();
+    mLeftDone = 0;
     mFbTwins = fbTwins;
     mRecording = true;
     mReplayable = true;
+    mDefer = true;
     RecordState();
 }
 
 void GfxStereoReplay::EndRecord() {
+    FlushLeft();
+    mDefer = false;
     mRecording = false;
+}
+
+void GfxStereoReplay::FlushLeft() {
+    if (mDefer && mLeftDone < mCmds.size()) {
+        ReplayRange(mLeftDone, mCmds.size(), mVboL, false);
+        mLeftDone = mCmds.size();
+    }
+}
+
+void GfxStereoReplay::StopDefer() {
+    FlushLeft();
+    mDefer = false;
 }
 
 bool GfxStereoReplay::IsRecording() const {
@@ -84,23 +102,40 @@ void GfxStereoReplay::RecordState() {
 }
 
 void GfxStereoReplay::DrawStereoTriangles(float* left, const float* right, size_t len, size_t tris) {
-    mInner->DrawTriangles(left, len, tris);
-    if (mRecording) {
-        const size_t stride = tris > 0 ? len / (3 * tris) : 1;
-        const size_t off = stride > 1 ? (mVbo.size() + stride - 1) / stride * stride : mVbo.size();
-        mVbo.resize(off);
-        Cmd& cmd = Push(Op::Triangles);
-        cmd.off = off;
-        cmd.len = len;
-        cmd.tris = tris;
-        mVbo.insert(mVbo.end(), right, right + len);
+    if (!mRecording) {
+        mInner->DrawTriangles(left, len, tris);
+        return;
+    }
+    for (int tile = 0; tile < 2; tile++) {
+        if (mTiles[tile].valid && !mTiles[tile].isFb) {
+            mDrawnTextures.insert((uint32_t)mTiles[tile].id);
+        }
+    }
+    const size_t stride = tris > 0 ? len / (3 * tris) : 1;
+    const size_t off = stride > 1 ? (mVbo.size() + stride - 1) / stride * stride : mVbo.size();
+    mVbo.resize(off);
+    Cmd& cmd = Push(Op::Triangles);
+    cmd.off = off;
+    cmd.len = len;
+    cmd.tris = tris;
+    mVbo.insert(mVbo.end(), right, right + len);
+    if (mDefer) {
+        mVboL.resize(off);
+        mVboL.insert(mVboL.end(), left, left + len);
+    } else {
+        mInner->DrawTriangles(left, len, tris);
     }
 }
 
 uint32_t GfxStereoReplay::Replay() {
+    return ReplayRange(0, mCmds.size(), mVbo, true);
+}
+
+uint32_t GfxStereoReplay::ReplayRange(size_t begin, size_t end, const std::vector<float>& vbo, bool twin) {
     uint32_t draws = 0;
-    const bool batch = !mVbo.empty() && mInner->BeginVertexBatch(mVbo.data(), mVbo.size());
-    for (const Cmd& cmd : mCmds) {
+    const bool batch = !vbo.empty() && mInner->BeginVertexBatch(vbo.data(), vbo.size());
+    for (size_t i = begin; i < end; i++) {
+        const Cmd& cmd = mCmds[i];
         switch (cmd.op) {
             case Op::UnloadShader:
                 mInner->UnloadShader(cmd.prg);
@@ -112,7 +147,7 @@ uint32_t GfxStereoReplay::Replay() {
                 mInner->SelectTexture(cmd.a[0], (uint32_t)cmd.a[1]);
                 break;
             case Op::SelectTextureFb:
-                mInner->SelectTextureFb(Twin(cmd.a[1]));
+                mInner->SelectTextureFb(twin ? Twin(cmd.a[1]) : cmd.a[1]);
                 break;
             case Op::SamplerParameters:
                 mInner->SetSamplerParameters(cmd.a[0], cmd.a[1] != 0, (uint32_t)cmd.a[2], (uint32_t)cmd.a[3]);
@@ -133,20 +168,20 @@ uint32_t GfxStereoReplay::Replay() {
                 mInner->SetUseAlpha(cmd.a[0] != 0);
                 break;
             case Op::Triangles:
-                mInner->DrawTriangles(mVbo.data() + cmd.off, cmd.len, cmd.tris);
+                mInner->DrawTriangles(const_cast<float*>(vbo.data()) + cmd.off, cmd.len, cmd.tris);
                 draws++;
                 break;
             case Op::FramebufferParameters:
-                mInner->UpdateFramebufferParameters(Twin(cmd.a[0]), (uint32_t)cmd.a[1], (uint32_t)cmd.a[2],
-                                                    (uint32_t)cmd.a[3], cmd.a[4] != 0, cmd.a[5] != 0, cmd.a[6] != 0,
-                                                    cmd.a[7] != 0);
+                mInner->UpdateFramebufferParameters(twin ? Twin(cmd.a[0]) : cmd.a[0], (uint32_t)cmd.a[1],
+                                                    (uint32_t)cmd.a[2], (uint32_t)cmd.a[3], cmd.a[4] != 0,
+                                                    cmd.a[5] != 0, cmd.a[6] != 0, cmd.a[7] != 0);
                 break;
             case Op::DrawToFramebuffer:
-                mInner->StartDrawToFramebuffer(Twin(cmd.a[0]), cmd.f);
+                mInner->StartDrawToFramebuffer(twin ? Twin(cmd.a[0]) : cmd.a[0], cmd.f);
                 break;
             case Op::CopyFramebuffer:
-                mInner->CopyFramebuffer(Twin(cmd.a[0]), Twin(cmd.a[1]), cmd.a[2], cmd.a[3], cmd.a[4], cmd.a[5],
-                                        cmd.a[6], cmd.a[7], cmd.a[8], cmd.a[9]);
+                mInner->CopyFramebuffer(twin ? Twin(cmd.a[0]) : cmd.a[0], twin ? Twin(cmd.a[1]) : cmd.a[1], cmd.a[2],
+                                        cmd.a[3], cmd.a[4], cmd.a[5], cmd.a[6], cmd.a[7], cmd.a[8], cmd.a[9]);
                 break;
             case Op::ClearFramebuffer:
                 mInner->ClearFramebuffer(cmd.a[0] != 0, cmd.a[1] != 0);
@@ -155,7 +190,7 @@ uint32_t GfxStereoReplay::Replay() {
                 mInner->ClearDepthRegion(cmd.a[0], cmd.a[1], cmd.a[2], cmd.a[3]);
                 break;
             case Op::ResolveMsaa:
-                mInner->ResolveMSAAColorBuffer(Twin(cmd.a[0]), Twin(cmd.a[1]));
+                mInner->ResolveMSAAColorBuffer(twin ? Twin(cmd.a[0]) : cmd.a[0], twin ? Twin(cmd.a[1]) : cmd.a[1]);
                 break;
             case Op::PrimDepth:
                 mInner->SetCurrentPrimDepth(cmd.f);
@@ -196,6 +231,9 @@ void GfxStereoReplay::LoadShader(ShaderProgram* newPrg) {
 }
 
 void GfxStereoReplay::ClearShaderCache() {
+    if (mRecording) {
+        StopDefer();
+    }
     mInner->ClearShaderCache();
     mShader = nullptr;
     mReplayable = false;
@@ -224,6 +262,7 @@ uint32_t GfxStereoReplay::NewTexture() {
 
 void GfxStereoReplay::SelectTexture(int tile, uint32_t textureId) {
     mInner->SelectTexture(tile, textureId);
+    mSelectedTexture = textureId;
     if (tile >= 0 && tile < TRACKED_TILES) {
         mTiles[tile].valid = true;
         mTiles[tile].isFb = false;
@@ -238,6 +277,10 @@ void GfxStereoReplay::SelectTexture(int tile, uint32_t textureId) {
 }
 
 void GfxStereoReplay::UploadTexture(const uint8_t* rgba32Buf, uint32_t width, uint32_t height) {
+    if (mRecording && mDrawnTextures.count(mSelectedTexture) != 0) {
+        StopDefer();
+        mReplayable = false;
+    }
     mInner->UploadTexture(rgba32Buf, width, height);
 }
 
@@ -361,7 +404,9 @@ void GfxStereoReplay::UpdateFramebufferParameters(int fbId, uint32_t width, uint
 }
 
 void GfxStereoReplay::StartDrawToFramebuffer(int fbId, float noiseScale) {
-    mInner->StartDrawToFramebuffer(fbId, noiseScale);
+    if (!mDefer) {
+        mInner->StartDrawToFramebuffer(fbId, noiseScale);
+    }
     if (mRecording) {
         Cmd& cmd = Push(Op::DrawToFramebuffer);
         cmd.a[0] = fbId;
@@ -371,7 +416,9 @@ void GfxStereoReplay::StartDrawToFramebuffer(int fbId, float noiseScale) {
 
 void GfxStereoReplay::CopyFramebuffer(int fbDstId, int fbSrcId, int srcX0, int srcY0, int srcX1, int srcY1, int dstX0,
                                       int dstY0, int dstX1, int dstY1) {
-    mInner->CopyFramebuffer(fbDstId, fbSrcId, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1);
+    if (!mDefer) {
+        mInner->CopyFramebuffer(fbDstId, fbSrcId, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1);
+    }
     if (mRecording) {
         Cmd& cmd = Push(Op::CopyFramebuffer);
         const int32_t args[10] = { fbDstId, fbSrcId, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1 };
@@ -380,7 +427,9 @@ void GfxStereoReplay::CopyFramebuffer(int fbDstId, int fbSrcId, int srcX0, int s
 }
 
 void GfxStereoReplay::ClearFramebuffer(bool color, bool depth) {
-    mInner->ClearFramebuffer(color, depth);
+    if (!mDefer) {
+        mInner->ClearFramebuffer(color, depth);
+    }
     if (mRecording) {
         Cmd& cmd = Push(Op::ClearFramebuffer);
         cmd.a[0] = color;
@@ -389,7 +438,9 @@ void GfxStereoReplay::ClearFramebuffer(bool color, bool depth) {
 }
 
 void GfxStereoReplay::ClearDepthRegion(int x, int y, int w, int h) {
-    mInner->ClearDepthRegion(x, y, w, h);
+    if (!mDefer) {
+        mInner->ClearDepthRegion(x, y, w, h);
+    }
     if (mRecording) {
         Cmd& cmd = Push(Op::ClearDepthRegion);
         cmd.a[0] = x;
@@ -400,11 +451,14 @@ void GfxStereoReplay::ClearDepthRegion(int x, int y, int w, int h) {
 }
 
 void GfxStereoReplay::ReadFramebufferToCPU(int fbId, uint32_t width, uint32_t height, uint16_t* rgba16Buf) {
+    FlushLeft();
     mInner->ReadFramebufferToCPU(fbId, width, height, rgba16Buf);
 }
 
 void GfxStereoReplay::ResolveMSAAColorBuffer(int fbIdTarget, int fbIdSrc) {
-    mInner->ResolveMSAAColorBuffer(fbIdTarget, fbIdSrc);
+    if (!mDefer) {
+        mInner->ResolveMSAAColorBuffer(fbIdTarget, fbIdSrc);
+    }
     if (mRecording) {
         Cmd& cmd = Push(Op::ResolveMsaa);
         cmd.a[0] = fbIdTarget;
@@ -414,6 +468,7 @@ void GfxStereoReplay::ResolveMSAAColorBuffer(int fbIdTarget, int fbIdSrc) {
 
 std::unordered_map<std::pair<float, float>, uint16_t, hash_pair_ff>
 GfxStereoReplay::GetPixelDepth(int fbId, const std::set<std::pair<float, float>>& coordinates) {
+    FlushLeft();
     return mInner->GetPixelDepth(fbId, coordinates);
 }
 
@@ -435,6 +490,9 @@ void GfxStereoReplay::SelectTextureFb(int fbId) {
 }
 
 void GfxStereoReplay::DeleteTexture(uint32_t texId) {
+    if (mRecording) {
+        StopDefer();
+    }
     mInner->DeleteTexture(texId);
     for (TrackedTile& tile : mTiles) {
         if (tile.valid && !tile.isFb && tile.id == (int)texId) {

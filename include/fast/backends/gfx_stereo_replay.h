@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "gfx_rendering_api.h"
@@ -114,12 +115,20 @@ class GfxStereoReplay final : public GfxRenderingAPI {
     Cmd& Push(Op op);
     int Twin(int fbId) const;
     void RecordState();
+    uint32_t ReplayRange(size_t begin, size_t end, const std::vector<float>& vbo, bool twin);
+    void FlushLeft();
+    void StopDefer();
 
     GfxRenderingAPI* mInner;
     bool mRecording = false;
     bool mReplayable = false;
     std::vector<Cmd> mCmds;
     std::vector<float> mVbo;
+    std::vector<float> mVboL;
+    bool mDefer = false;
+    size_t mLeftDone = 0;
+    uint32_t mSelectedTexture = 0;
+    std::unordered_set<uint32_t> mDrawnTextures;
     const std::unordered_map<int, int>* mFbTwins = nullptr;
 
     TrackedTile mTiles[TRACKED_TILES];
