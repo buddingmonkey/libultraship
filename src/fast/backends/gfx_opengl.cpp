@@ -243,7 +243,7 @@ std::optional<std::string> opengl_include_fs(const std::string& path) {
     return *inc;
 }
 
-std::string GfxRenderingAPIOGL::BuildFsShader(const CCFeatures& cc_features) {
+std::string GfxRenderingAPIOGL::BuildFsShader(const CCFeatures& cc_features, bool depthClamp) {
     prism::Processor processor;
     prism::ContextItems mContext = {
         { "VERTEX_SHADER", false },
@@ -257,6 +257,7 @@ std::string GfxRenderingAPIOGL::BuildFsShader(const CCFeatures& cc_features) {
         { "o_invisible", cc_features.opt_invisible },
         { "o_grayscale", cc_features.opt_grayscale },
         { "o_prim_depth", cc_features.opt_prim_depth },
+        { "o_depth_clamp", depthClamp },
         { "o_textures", M_ARRAY(cc_features.usedTextures, bool, 2) },
         { "o_masks", M_ARRAY(cc_features.used_masks, bool, 2) },
         { "o_blend", M_ARRAY(cc_features.used_blend, bool, 2) },
@@ -347,7 +348,7 @@ static prism::ContextTypes* UpdateFloats(prism::ContextTypes* _, prism::ContextT
     return nullptr;
 }
 
-static std::string BuildVsShader(const CCFeatures& cc_features) {
+static std::string BuildVsShader(const CCFeatures& cc_features, bool depthClamp) {
     numFloats = 4;
     prism::Processor processor;
     prism::ContextItems mContext = { { "VERTEX_SHADER", true },
@@ -357,6 +358,7 @@ static std::string BuildVsShader(const CCFeatures& cc_features) {
                                      { "o_grayscale", cc_features.opt_grayscale },
                                      { "o_alpha", cc_features.opt_alpha },
                                      { "o_inputs", cc_features.numInputs },
+                                     { "o_depth_clamp", depthClamp },
                                      { "update_floats", (InvokeFunc)UpdateFloats },
 #ifdef __APPLE__
                                      { "GLSL_VERSION", "#version 410 core" },
@@ -408,13 +410,20 @@ static std::string BuildVsShader(const CCFeatures& cc_features) {
 
 void GfxRenderingAPIOGL::ClearShaderCache() {
     mShaderProgramPool.clear();
+#ifdef USE_OPENGLES
+    mDepthClampProgramPool.clear();
+#endif
 }
 
 ShaderProgram* GfxRenderingAPIOGL::CreateAndLoadNewShader(uint64_t shader_id0, uint64_t shader_id1) {
+    return BuildShaderProgram(shader_id0, shader_id1, false);
+}
+
+ShaderProgram* GfxRenderingAPIOGL::BuildShaderProgram(uint64_t shader_id0, uint64_t shader_id1, bool depthClamp) {
     CCFeatures cc_features;
     gfx_cc_get_features(shader_id0, shader_id1, &cc_features);
-    const auto fs_buf = BuildFsShader(cc_features);
-    const auto vs_buf = BuildVsShader(cc_features);
+    const auto fs_buf = BuildFsShader(cc_features, depthClamp);
+    const auto vs_buf = BuildVsShader(cc_features, depthClamp);
     const GLchar* sources[2] = { vs_buf.data(), fs_buf.data() };
     const GLint lengths[2] = { (GLint)vs_buf.size(), (GLint)fs_buf.size() };
     GLint success;
@@ -454,7 +463,12 @@ ShaderProgram* GfxRenderingAPIOGL::CreateAndLoadNewShader(uint64_t shader_id0, u
 
     size_t cnt = 0;
 
-    struct ShaderProgram* prg = &mShaderProgramPool[std::make_pair(shader_id0, shader_id1)];
+#ifdef USE_OPENGLES
+    auto& pool = depthClamp ? mDepthClampProgramPool : mShaderProgramPool;
+#else
+    auto& pool = mShaderProgramPool;
+#endif
+    struct ShaderProgram* prg = &pool[std::make_pair(shader_id0, shader_id1)];
     prg->attribLocations[cnt] = glGetAttribLocation(shader_program, "aVtxPos");
     prg->attribSizes[cnt] = 4;
     ++cnt;
@@ -515,6 +529,10 @@ ShaderProgram* GfxRenderingAPIOGL::CreateAndLoadNewShader(uint64_t shader_id0, u
     prg->texture_width_location = glGetUniformLocation(shader_program, "texture_width");
     prg->texture_height_location = glGetUniformLocation(shader_program, "texture_height");
     prg->texture_filtering_location = glGetUniformLocation(shader_program, "texture_filtering");
+    prg->depth_offset_location = glGetUniformLocation(shader_program, "depth_offset");
+    prg->shaderId0 = shader_id0;
+    prg->shaderId1 = shader_id1;
+    prg->primDepth = cc_features.opt_prim_depth;
 
     LoadShader(prg);
 
@@ -703,17 +721,51 @@ void GfxRenderingAPIOGL::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, size
             }
             glPolygonOffset(SSDB, -2);
             glEnable(GL_POLYGON_OFFSET_FILL);
+#ifdef USE_OPENGLES
+            mDecalSlopeFactor = SSDB;
+#endif
         } else {
             glPolygonOffset(0, 0);
             glDisable(GL_POLYGON_OFFSET_FILL);
         }
     }
 
+#ifdef USE_OPENGLES
+    ShaderProgram* baseProgram = nullptr;
+    if (!mCurrentShaderProgram->primDepth && mCurrentShaderProgram->numFloats > 0) {
+        // GLES has no depth clamp; a per-vertex clamp breaks decal coplanarity, so clamp per fragment.
+        const size_t stride = mCurrentShaderProgram->numFloats;
+        const size_t vertexCount = 3 * buf_vbo_num_tris;
+        bool outside = false;
+        for (size_t i = 0; i < vertexCount && !outside; i++) {
+            const float z = buf_vbo[i * stride + 2];
+            const float w = buf_vbo[i * stride + 3];
+            outside = w > 0.0f && (z < -w || z > w);
+        }
+        if (outside) {
+            auto key = std::make_pair(mCurrentShaderProgram->shaderId0, mCurrentShaderProgram->shaderId1);
+            auto it = mDepthClampProgramPool.find(key);
+            baseProgram = mCurrentShaderProgram;
+            ShaderProgram* variant =
+                it != mDepthClampProgramPool.end() ? &it->second : BuildShaderProgram(key.first, key.second, true);
+            LoadShader(variant);
+            glUniform2f(variant->depth_offset_location, mCurrentZmodeDecal ? mDecalSlopeFactor : 0.0f,
+                        mCurrentZmodeDecal ? -2.0f : 0.0f);
+        }
+    }
+#endif
+
     SetPerDrawUniforms();
 
     // printf("flushing %d tris\n", buf_vbo_num_tris);
     glBufferData(GL_ARRAY_BUFFER, sizeof(float) * buf_vbo_len, buf_vbo, GL_STREAM_DRAW);
     glDrawArrays(GL_TRIANGLES, 0, 3 * buf_vbo_num_tris);
+
+#ifdef USE_OPENGLES
+    if (baseProgram != nullptr) {
+        LoadShader(baseProgram);
+    }
+#endif
 }
 
 void GfxRenderingAPIOGL::Init() {

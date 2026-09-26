@@ -37,6 +37,10 @@
         @{update_floats(4)}
     @end
 
+    @if(o_depth_clamp)
+        @{out} vec2 vClipZW;
+    @end
+
     @for(i in 0..o_inputs)
         @if(o_alpha)
             @{attr} vec4 aInput@{i + 1};
@@ -74,6 +78,9 @@
             vInput@{i + 1} = aInput@{i + 1};
         @end
         gl_Position = aVtxPos;
+        @if(o_depth_clamp)
+            vClipZW = gl_Position.zw;
+        @end
         @if(opengles)
             if (gl_Position.w > 0.0) {
                 gl_Position.z = clamp(gl_Position.z, -gl_Position.w, gl_Position.w);
@@ -127,6 +134,11 @@
     uniform float prim_depth;
     @end
 
+    @if(o_depth_clamp)
+    @{attr} vec2 vClipZW;
+    uniform vec2 depth_offset;
+    @end
+
     uniform int texture_width[2];
     uniform int texture_height[2];
     uniform int texture_filtering[2];
@@ -167,6 +179,11 @@
     #define TEX_SIZE(tex) vec2(texture_width[tex], texture_height[tex])
 
     void main() {
+        @if(o_depth_clamp)
+            float fragDepth = 0.5 * vClipZW.x / vClipZW.y + 0.5;
+            float depthSlope = max(abs(dFdx(fragDepth)), abs(dFdy(fragDepth)));
+            fragDepth = clamp(fragDepth + depth_offset.x * depthSlope + depth_offset.y / 16777216.0, 0.0, 1.0);
+        @end
         @for(i in 0..2)
             @if(o_textures[i])
                 @{s = o_clamp[i][0]}
@@ -294,6 +311,10 @@
 
         @if(o_prim_depth)
             gl_FragDepth = prim_depth;
+        @else
+            @if(o_depth_clamp)
+                gl_FragDepth = fragDepth;
+            @end
         @end
     }
 @end

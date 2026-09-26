@@ -40,6 +40,10 @@ struct ShaderProgram {
     GLint texture_width_location;
     GLint texture_height_location;
     GLint texture_filtering_location;
+    GLint depth_offset_location;
+    uint64_t shaderId0;
+    uint32_t shaderId1;
+    bool primDepth;
 };
 
 struct FramebufferOGL {
@@ -109,7 +113,7 @@ class GfxRenderingAPIOGL final : public GfxRenderingAPI {
 
   private:
     void SetUniforms(ShaderProgram* prg) const;
-    std::string BuildFsShader(const CCFeatures& cc_features);
+    std::string BuildFsShader(const CCFeatures& cc_features, bool depthClamp);
     void SetPerDrawUniforms();
 
     std::vector<TextureInfo> textures;
@@ -121,6 +125,11 @@ class GfxRenderingAPIOGL final : public GfxRenderingAPI {
     int8_t mLastScissorEnabled = -1;
 
     std::map<std::pair<uint64_t, uint32_t>, ShaderProgram> mShaderProgramPool;
+#ifdef USE_OPENGLES
+    std::map<std::pair<uint64_t, uint32_t>, ShaderProgram> mDepthClampProgramPool;
+    float mDecalSlopeFactor = 0.0f;
+#endif
+    ShaderProgram* BuildShaderProgram(uint64_t shaderId0, uint64_t shaderId1, bool depthClamp);
     ShaderProgram* mCurrentShaderProgram;
     ShaderProgram* mLastLoadedShader = nullptr;
 
