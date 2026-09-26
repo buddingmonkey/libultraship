@@ -1402,6 +1402,7 @@ void GfxRenderingAPIOGL::CaptureDepthMapGles() {
     GLenum blitError = glGetError();
 
     if (blitError == GL_NO_ERROR) {
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, savedDrawFb);
         glEnable(GL_RASTERIZER_DISCARD);
         glUseProgram(mDepthReadProgram);
         glBindVertexArray(mDepthReadVao);
