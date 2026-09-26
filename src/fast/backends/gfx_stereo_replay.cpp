@@ -221,6 +221,7 @@ void GfxStereoReplay::SelectTexture(int tile, uint32_t textureId) {
         mTiles[tile].valid = true;
         mTiles[tile].isFb = false;
         mTiles[tile].id = (int)textureId;
+        mTiles[tile].samplerValid = false;
     }
     if (mRecording) {
         Cmd& cmd = Push(Op::SelectTexture);
@@ -418,6 +419,7 @@ void GfxStereoReplay::SelectTextureFb(int fbId) {
     mTiles[0].valid = true;
     mTiles[0].isFb = true;
     mTiles[0].id = fbId;
+    mTiles[0].samplerValid = false;
     if (mRecording) {
         Cmd& cmd = Push(Op::SelectTextureFb);
         cmd.a[0] = 0;
