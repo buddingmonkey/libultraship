@@ -18,6 +18,7 @@
 
 #if defined(__ANDROID__) || defined(__IOS__)
 #include <imgui_internal.h>
+#include "ship/port/mobile/MobileImpl.h"
 #endif
 
 namespace Ship {
@@ -386,6 +387,7 @@ void Gui::StartFrame() {
     ImGui::NewFrame();
 #if defined(__ANDROID__) || defined(__IOS__)
     DragScroll();
+    Mobile::SyncTextInput();
 #endif
 }
 
@@ -424,6 +426,9 @@ void Gui::StartDraw() {
 void Gui::EndDraw() {
     // Draw the game framebuffer into ImGui
     DrawGame();
+#if defined(__ANDROID__) || defined(__IOS__)
+    Mobile::DrawScreenKeyboard();
+#endif
     // End the frame
     EndFrame();
     // Draw the ImGui floating windows.
