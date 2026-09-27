@@ -2,7 +2,12 @@
 #include "ship/port/mobile/MobileImpl.h"
 #include <SDL2/SDL.h>
 
+#ifdef __ANDROID__
+#include <jni.h>
+#endif
+
 #include <imgui_internal.h>
+#include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <cctype>
@@ -18,12 +23,64 @@ namespace {
 
 bool sSystemKeyboardShown = false;
 
-bool UseScreenKeyboard() {
+enum class SystemKeyboard { Unknown, Works, Missing };
+SystemKeyboard sSystemKeyboard = SystemKeyboard::Unknown;
+Uint32 sSystemKeyboardAskedAt = 0;
+constexpr Uint32 kSystemKeyboardWaitMs = 3000;
+constexpr int kResultUnchangedShown = 0;
+constexpr int kResultShown = 2;
+
+bool IsHeadset() {
 #ifdef ENABLE_OPENXR
     return Fast::IsXrPresenting();
 #else
     return false;
 #endif
+}
+
+bool UseScreenKeyboard() {
+    return IsHeadset() && sSystemKeyboard == SystemKeyboard::Missing;
+}
+
+#ifdef __ANDROID__
+bool CallActivity(const char* name, const char* signature, int* result) {
+    JNIEnv* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+    jobject activity = static_cast<jobject>(SDL_AndroidGetActivity());
+    if (env == nullptr || activity == nullptr) {
+        return false;
+    }
+    jclass cls = env->GetObjectClass(activity);
+    jmethodID method = env->GetMethodID(cls, name, signature);
+    bool called = false;
+    if (method == nullptr) {
+        env->ExceptionClear();
+    } else if (result != nullptr) {
+        *result = env->CallIntMethod(activity, method);
+        called = true;
+    } else {
+        env->CallVoidMethod(activity, method);
+        called = true;
+    }
+    env->DeleteLocalRef(cls);
+    env->DeleteLocalRef(activity);
+    return called;
+}
+#endif
+
+bool ProbeSystemKeyboard() {
+#ifdef __ANDROID__
+    return CallActivity("probeSoftKeyboard", "()V", nullptr);
+#else
+    return false;
+#endif
+}
+
+int SystemKeyboardResult() {
+    int result = -1;
+#ifdef __ANDROID__
+    CallActivity("softKeyboardResult", "()I", &result);
+#endif
+    return result;
 }
 
 enum class KeyKind { Character, Shift, Backspace, Space, Done };
@@ -147,6 +204,29 @@ void Ship::Mobile::SyncTextInput() {
             }
             sSystemKeyboardShown = true;
             SDL_StartTextInput();
+            if (IsHeadset() && sSystemKeyboard == SystemKeyboard::Unknown) {
+                if (ProbeSystemKeyboard()) {
+                    sSystemKeyboardAskedAt = SDL_GetTicks();
+                } else {
+                    sSystemKeyboard = SystemKeyboard::Missing;
+                    sSystemKeyboardShown = false;
+                    SDL_StopTextInput();
+                }
+            }
+        } else if (sSystemKeyboardAskedAt != 0) {
+            const int result = SystemKeyboardResult();
+            const Uint32 waited = SDL_GetTicks() - sSystemKeyboardAskedAt;
+            if (result == kResultShown || result == kResultUnchangedShown) {
+                sSystemKeyboardAskedAt = 0;
+                sSystemKeyboard = SystemKeyboard::Works;
+                SPDLOG_INFO("The system keyboard is shown ({} ms)", waited);
+            } else if (result >= 0 || waited > kSystemKeyboardWaitMs) {
+                sSystemKeyboardAskedAt = 0;
+                sSystemKeyboard = SystemKeyboard::Missing;
+                sSystemKeyboardShown = false;
+                SDL_StopTextInput();
+                SPDLOG_INFO("No system keyboard (result {}, {} ms); drawing the menu keyboard", result, waited);
+            }
         } else if (!SDL_IsTextInputActive()) {
             sSystemKeyboardShown = false;
             ImGui::ClearActiveID();
@@ -156,6 +236,7 @@ void Ship::Mobile::SyncTextInput() {
         }
     } else if (sSystemKeyboardShown) {
         sSystemKeyboardShown = false;
+        sSystemKeyboardAskedAt = 0;
         SDL_StopTextInput();
     }
 }
