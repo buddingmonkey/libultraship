@@ -103,6 +103,12 @@ static constexpr float EDGE_FLOAT_MAX = 1.0f;
 
 static constexpr float RECENTER_YAW_MIN = 0.035f;
 
+static constexpr float KEYBOARD_WIDTH_SHARE = 0.8f;
+static constexpr float KEYBOARD_WIDTH_MIN = 0.5f;
+static constexpr float KEYBOARD_WIDTH_MAX = 1.3f;
+static constexpr float KEYBOARD_GAP = 0.06f;
+static constexpr float KEYBOARD_TILT = 0.35f;
+
 static bool sPresenting = false;
 static bool sInputFocused = false;
 static bool sAwaitSelectRelease = true;
@@ -238,6 +244,13 @@ bool GfxWindowBackendOpenXR::StartSession() {
     const bool passthrough = HasExtension(extensions, XR_FB_PASSTHROUGH_EXTENSION_NAME);
     if (passthrough) {
         enabled.push_back(XR_FB_PASSTHROUGH_EXTENSION_NAME);
+    }
+    const bool virtualKeyboard = XrVirtualKeyboard::Wanted(extensions);
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "virtual keyboard extensions: %s, render model: %s",
+                        HasExtension(extensions, XR_META_VIRTUAL_KEYBOARD_EXTENSION_NAME) ? "yes" : "no",
+                        HasExtension(extensions, XR_FB_RENDER_MODEL_EXTENSION_NAME) ? "yes" : "no");
+    if (virtualKeyboard) {
+        XrVirtualKeyboard::AddExtensions(&enabled);
     }
 
     XrInstanceCreateInfoAndroidKHR androidInfo{ XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR };
@@ -449,6 +462,11 @@ bool GfxWindowBackendOpenXR::StartSession() {
 
     if (!StartActions(handInteraction)) {
         __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "pointer actions failed; pinch will not reach the game");
+    }
+    xrStringToPath(mInstance, "/interaction_profiles/ext/hand_interaction_ext", &mHandInteractionProfile);
+
+    if (virtualKeyboard && mKeyboard.Start(mInstance, mSystemId, mSession, mSpace)) {
+        __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "the headset keyboard is ready");
     }
 
     __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
@@ -849,6 +867,11 @@ static bool sCursorValid = false;
 static float sCursorX = 0.0f;
 static float sCursorY = 0.0f;
 
+static bool sKeyboardRay[2] = { false, false };
+static bool sKeyboardPress[2] = { false, false };
+static bool sKeyboardPrevious[2] = { false, false };
+static XrVector3f sKeyboardFrom[2] = {};
+static XrVector3f sKeyboardPoint[2] = {};
 static bool sHandValid[2] = { false, false };
 static XrVector3f sHandFrom[2] = {};
 static float sHandX[2] = { 0.0f, 0.0f };
@@ -931,6 +954,28 @@ int GetXrViewIndex() {
 
 bool IsXrPresenting() {
     return sPresenting;
+}
+
+bool IsXrVirtualKeyboardAvailable() {
+    return sPresenting && sBackend != nullptr && sBackend->Keyboard().Available();
+}
+
+void ShowXrVirtualKeyboard(bool shown, const char* textContext) {
+    if (sBackend != nullptr) {
+        sBackend->Keyboard().SetVisible(shown, textContext);
+    }
+}
+
+bool TakeXrVirtualKeyboardInput(XrKeyboardInput* input) {
+    if (sBackend == nullptr) {
+        return false;
+    }
+    XrVirtualKeyboard& keyboard = sBackend->Keyboard();
+    input->text = keyboard.TakeText();
+    input->backspaces = keyboard.TakeBackspaces();
+    input->enter = keyboard.TakeEnter();
+    input->closed = keyboard.TakeClosed();
+    return true;
 }
 
 bool IsXrInputFocused() {
@@ -1170,6 +1215,8 @@ static void PushPointerButton(bool down, int x, int y) {
 }
 
 void GfxWindowBackendOpenXR::ClearPointer() {
+    sKeyboardRay[0] = false;
+    sKeyboardRay[1] = false;
     sMenuHover = false;
     sMenuHeld = false;
     sCursorValid = false;
@@ -1246,6 +1293,7 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
     const float menuRise = MenuRise();
 
     struct HandAim {
+        bool located;
         bool onPlane;
         XrPosef pose;
         float planeX;
@@ -1269,18 +1317,99 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
             (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) == 0) {
             continue;
         }
-        if (!PlaneHit(location.pose, &aims[hand].planeX, &aims[hand].planeY)) {
-            continue;
-        }
-        aims[hand].onPlane = true;
+        aims[hand].located = true;
         aims[hand].pose = location.pose;
         aims[hand].pinching = held;
+        aims[hand].onPlane = PlaneHit(location.pose, &aims[hand].planeX, &aims[hand].planeY);
     }
     if (sAwaitSelectRelease) {
         sAwaitSelectRelease = selectHeld;
         aims[0].pinching = false;
         aims[1].pinching = false;
     }
+
+    bool debugKey = false;
+#ifdef ENABLE_DEBUG_TOOLS
+    float keyU = 0.0f;
+    float keyV = 0.0f;
+    bool keyDown = false;
+    XrVector3f keyPoint{};
+    XrVector3f keyNormal{};
+    static int sDebugKeyFrames = 0;
+    static int sDebugKeyTail = 0;
+    static float sDebugKey[2] = {};
+    debugKey = mKeyboard.Visible() && DebugPointer::PollKeyboard(&keyU, &keyV, &keyDown);
+    if (debugKey) {
+        sDebugKeyFrames++;
+        sDebugKeyTail = 10;
+        sDebugKey[0] = keyU;
+        sDebugKey[1] = keyV;
+    } else if (sDebugKeyTail > 0 && mKeyboard.Visible()) {
+        sDebugKeyTail--;
+        sDebugKeyFrames = 0;
+        keyU = sDebugKey[0];
+        keyV = sDebugKey[1];
+        keyDown = false;
+        debugKey = true;
+    } else {
+        sDebugKeyFrames = 0;
+    }
+    debugKey = debugKey && mKeyboard.KeyboardPoint(keyU, keyV, &keyPoint, &keyNormal);
+    keyDown = keyDown && sDebugKeyFrames > 6;
+#endif
+
+    for (int hand = 0; hand < 2; hand++) {
+        sKeyboardRay[hand] = false;
+        const bool pressing = aims[hand].located && aims[hand].pinching;
+        if (!mKeyboard.Visible() || !aims[hand].located || (debugKey && hand == 1)) {
+            sKeyboardPress[hand] = false;
+            sKeyboardPrevious[hand] = pressing;
+            continue;
+        }
+        XrVector3f point{};
+        const bool onKeyboard = mKeyboard.RayHit(aims[hand].pose, &point);
+        if (!pressing) {
+            sKeyboardPress[hand] = false;
+        } else if (!sKeyboardPrevious[hand] && onKeyboard) {
+            sKeyboardPress[hand] = true;
+        }
+        sKeyboardPrevious[hand] = pressing;
+        mKeyboard.SendRay(hand, mHandTracked[hand], aims[hand].pose, pressing && sKeyboardPress[hand]);
+        if (onKeyboard || sKeyboardPress[hand]) {
+            sKeyboardRay[hand] = true;
+            sKeyboardFrom[hand] = aims[hand].pose.position;
+            if (onKeyboard) {
+                sKeyboardPoint[hand] = point;
+            }
+            aims[hand].onPlane = false;
+        }
+    }
+#ifdef ENABLE_DEBUG_TOOLS
+    if (debugKey) {
+        XrPosef aim{};
+        const float w = 1.0f + keyNormal.z;
+        if (w > 1e-4f) {
+            const float length = sqrtf(keyNormal.y * keyNormal.y + keyNormal.x * keyNormal.x + w * w);
+            aim.orientation = { -keyNormal.y / length, keyNormal.x / length, 0.0f, w / length };
+        } else {
+            aim.orientation = { 0.0f, 1.0f, 0.0f, 0.0f };
+        }
+        aim.position = { keyPoint.x + keyNormal.x * 0.3f, keyPoint.y + keyNormal.y * 0.3f,
+                         keyPoint.z + keyNormal.z * 0.3f };
+        mKeyboard.SendRay(1, false, aim, keyDown);
+        static bool sDebugKeyWasDown = false;
+        if (keyDown != sDebugKeyWasDown) {
+            __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "debug keyboard %s at %.2f %.2f",
+                                keyDown ? "press" : "release", keyU, keyV);
+            sDebugKeyWasDown = keyDown;
+        }
+        sKeyboardRay[1] = true;
+        sKeyboardPress[1] = keyDown;
+        sKeyboardFrom[1] = aim.position;
+        sKeyboardPoint[1] = keyPoint;
+        aims[1].onPlane = false;
+    }
+#endif
 
     for (int hand = 0; hand < 2; hand++) {
         if (!aims[hand].onPlane) {
@@ -1453,6 +1582,9 @@ void GfxWindowBackendOpenXR::PollEvents() {
             mActive = false;
         } else if (event.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
             HandleReferenceSpaceChange(*(const XrEventDataReferenceSpaceChangePending*)&event);
+        } else if (event.type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) {
+            UpdateInteractionProfiles();
+        } else if (mKeyboard.HandleEvent(event)) {
         } else if (event.type == XR_TYPE_EVENT_DATA_DISPLAY_REFRESH_RATE_CHANGED_FB) {
             mRefreshRate = ((const XrEventDataDisplayRefreshRateChangedFB*)&event)->toDisplayRefreshRate;
             __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "display now runs at %.0f Hz", mRefreshRate);
@@ -1765,6 +1897,7 @@ bool GfxWindowBackendOpenXR::OpenFrame() {
         }
     }
 
+    PlaceKeyboard();
     PumpPointer(mDisplayTime);
     SizeRender();
 
@@ -2159,6 +2292,64 @@ static void RayMatrix(const XrView& eye, const XrVector3f& from, const XrVector3
     MulMatrix(eyeMatrix, model, mvp);
 }
 
+static XrQuaternionf MultiplyQuaternion(const XrQuaternionf& a, const XrQuaternionf& b) {
+    return { a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y, a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+             a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w, a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z };
+}
+
+void GfxWindowBackendOpenXR::PlaceKeyboard() {
+    if (mState == XR_SESSION_STATE_FOCUSED) {
+        mKeyboard.Poll();
+    }
+    if (!mKeyboard.Available() || !mAnchorValid) {
+        return;
+    }
+    const float width = Clamp(KEYBOARD_WIDTH_SHARE * mWindowWidth, KEYBOARD_WIDTH_MIN, KEYBOARD_WIDTH_MAX);
+    const float height = width * mKeyboard.Aspect();
+    const float top = BarDrop() - 0.5f * BarHeight() - KEYBOARD_GAP * mWindowHeight;
+    XrPosef pose = PlanePose(0.0f, top);
+    const XrQuaternionf tilt = { -sinf(0.5f * KEYBOARD_TILT), 0.0f, 0.0f, cosf(0.5f * KEYBOARD_TILT) };
+    pose.orientation = MultiplyQuaternion(mAnchorPose.orientation, tilt);
+    const XrVector3f down = RotateByQuaternion(pose.orientation, { 0.0f, -0.5f * height, 0.0f });
+    pose.position = { pose.position.x + down.x, pose.position.y + down.y, pose.position.z + down.z };
+    mKeyboard.Place(pose, width);
+    mKeyboard.Update(mDisplayTime);
+}
+
+void GfxWindowBackendOpenXR::UpdateInteractionProfiles() {
+    for (int hand = 0; hand < 2; hand++) {
+        XrInteractionProfileState state{ XR_TYPE_INTERACTION_PROFILE_STATE };
+        mHandTracked[hand] = mHandInteractionProfile != XR_NULL_PATH && mSession != XR_NULL_HANDLE &&
+                             XR_SUCCEEDED(xrGetCurrentInteractionProfile(mSession, mHandPath[hand], &state)) &&
+                             state.interactionProfile == mHandInteractionProfile;
+    }
+}
+
+void GfxWindowBackendOpenXR::AttachKeyboardDepth(bool attach) {
+    if (attach == mKeyboardDepthAttached) {
+        return;
+    }
+    GLint framebuffer = 0;
+    GLint renderbuffer = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &framebuffer);
+    glGetIntegerv(GL_RENDERBUFFER_BINDING, &renderbuffer);
+    for (uint32_t view = 0; view < VIEW_COUNT; view++) {
+        if (attach && mKeyboardDepth[view] == 0) {
+            glGenRenderbuffers(1, &mKeyboardDepth[view]);
+            glBindRenderbuffer(GL_RENDERBUFFER, mKeyboardDepth[view]);
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, mSwapchainWidth, mSwapchainHeight);
+        }
+        for (uint32_t fbo : mImageFbos[view]) {
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER,
+                                      attach ? mKeyboardDepth[view] : 0);
+        }
+    }
+    glBindRenderbuffer(GL_RENDERBUFFER, (GLuint)renderbuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)framebuffer);
+    mKeyboardDepthAttached = attach;
+}
+
 void GfxWindowBackendOpenXR::PresentView(uint32_t view) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mGameFbo[view]);
@@ -2261,6 +2452,32 @@ void GfxWindowBackendOpenXR::DrawOverlays(uint32_t eye) {
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
 
+    for (int hand = 0; hand < 2; hand++) {
+        if (!sKeyboardRay[hand]) {
+            continue;
+        }
+        const XrVector3f& from = sKeyboardFrom[hand];
+        const XrVector3f along = Subtract(sKeyboardPoint[hand], from);
+        const float reach = Length(along);
+        const float span = fminf(RAY_REACH, reach - RAY_GAP);
+        if (span <= RAY_HIDDEN + 2.0f * RAY_RAMP) {
+            continue;
+        }
+        const XrVector3f end = { from.x + along.x * span / reach, from.y + along.y * span / reach,
+                                 from.z + along.z * span / reach };
+        const float atHand = Length(Subtract(from, mViews[eye].pose.position));
+        const float atEnd = Length(Subtract(end, mViews[eye].pose.position));
+        const float wide = atHand > 1e-4f ? RAY_WIDTH * atEnd / atHand : RAY_WIDTH;
+        RayMatrix(mViews[eye], from, end, mvp);
+        glUseProgram(mRayProgram);
+        glUniformMatrix4fv(mRayMvpLoc, 1, GL_FALSE, mvp);
+        glUniform2f(mRayWidthLoc, RAY_WIDTH, wide);
+        glUniform4f(mRayFadeLoc, RAY_HIDDEN, RAY_HIDDEN + RAY_RAMP, span - RAY_RAMP, span);
+        glUniform2f(mRayTaperLoc, span - RAY_RAMP - RAY_TAPER, RAY_TAPER_TO);
+        glUniform3fv(mRayTintLoc, 1, sKeyboardPress[hand] ? POINTER_HELD : POINTER_IDLE);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
+
     const float cursor = CursorSide();
     bool anyHand = false;
     for (int hand = 0; hand < 2; hand++) {
@@ -2326,6 +2543,7 @@ bool GfxWindowBackendOpenXR::DrawEye(uint32_t eye, uint32_t sourceView) {
 
     SavedGlState saved;
     saved.Save(mSrgbWriteControl);
+    AttachKeyboardDepth(mKeyboard.Visible());
 
     if (mSrgbWriteControl) {
         glDisable(GL_FRAMEBUFFER_SRGB_EXT);
@@ -2353,6 +2571,21 @@ bool GfxWindowBackendOpenXR::DrawEye(uint32_t eye, uint32_t sourceView) {
     glBindTexture(GL_TEXTURE_2D, mGameTex[sourceView]);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
+    if (mKeyboardDepthAttached) {
+        GLboolean depthMask = GL_TRUE;
+        GLint depthFunc = GL_LESS;
+        glGetBooleanv(GL_DEPTH_WRITEMASK, &depthMask);
+        glGetIntegerv(GL_DEPTH_FUNC, &depthFunc);
+        glDepthMask(GL_TRUE);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        float viewProjection[16];
+        EyeMatrix(mViews[eye], viewProjection);
+        mKeyboard.Draw(viewProjection);
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(depthMask);
+        glDepthFunc((GLenum)depthFunc);
+    }
+
     DrawOverlays(eye);
 
 #ifdef ENABLE_DEBUG_TOOLS
@@ -2364,6 +2597,10 @@ bool GfxWindowBackendOpenXR::DrawEye(uint32_t eye, uint32_t sourceView) {
     }
 #endif
 
+    if (mKeyboardDepthAttached) {
+        const GLenum depth = GL_DEPTH_ATTACHMENT;
+        glInvalidateFramebuffer(GL_FRAMEBUFFER, 1, &depth);
+    }
     saved.Restore();
 
     XrSwapchainImageReleaseInfo releaseInfo{ XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
@@ -2444,6 +2681,14 @@ void GfxWindowBackendOpenXR::SwapBuffersBegin() {
 }
 
 void GfxWindowBackendOpenXR::Teardown() {
+    mKeyboard.Stop();
+    for (uint32_t view = 0; view < VIEW_COUNT; view++) {
+        if (mKeyboardDepth[view] != 0) {
+            glDeleteRenderbuffers(1, &mKeyboardDepth[view]);
+            mKeyboardDepth[view] = 0;
+        }
+    }
+    mKeyboardDepthAttached = false;
     for (uint32_t view = 0; view < VIEW_COUNT; view++) {
         if (!mImageFbos[view].empty()) {
             glDeleteFramebuffers((GLsizei)mImageFbos[view].size(), mImageFbos[view].data());

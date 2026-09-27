@@ -17,6 +17,7 @@
 #include <SDL2/SDL.h>
 #include "gfx_sdl.h"
 #include "gfx_xr_view.h"
+#include "gfx_openxr_keyboard.h"
 
 namespace Fast {
 
@@ -40,6 +41,9 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     void Destroy() override;
 
     bool ViewGeometry(uint32_t view, XrViewGeometry* geometry) const;
+    XrVirtualKeyboard& Keyboard() {
+        return mKeyboard;
+    }
 
   private:
     float DepthGain() const;
@@ -66,6 +70,9 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     bool UpdateGrab(XrTime displayTime);
     void EndGrab();
     void PumpPointer(XrTime displayTime);
+    void PlaceKeyboard();
+    void UpdateInteractionProfiles();
+    void AttachKeyboardDepth(bool attach);
     bool OpenFrame();
     void LocateViews();
     void SizeWindow();
@@ -202,6 +209,13 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     XrAction mStickClickAction = XR_NULL_HANDLE;
     XrSpace mAimSpace[2] = { XR_NULL_HANDLE, XR_NULL_HANDLE };
     XrPath mHandPath[2] = { XR_NULL_PATH, XR_NULL_PATH };
+    XrPath mHandInteractionProfile = XR_NULL_PATH;
+    bool mHandTracked[2] = { false, false };
+
+    XrVirtualKeyboard mKeyboard;
+    uint32_t mKeyboardDepth[VIEW_COUNT] = { 0, 0 };
+    bool mKeyboardDepthAttached = false;
+
     jobject mActivity = nullptr;
     bool mActive = false;
     bool mRunning = false;

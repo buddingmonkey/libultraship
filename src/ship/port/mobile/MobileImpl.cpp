@@ -13,6 +13,7 @@
 #include <cctype>
 #include <cfloat>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #ifdef ENABLE_OPENXR
@@ -48,6 +49,57 @@ bool HasInputFocus() {
     return Fast::IsXrInputFocused();
 #else
     return true;
+#endif
+}
+
+bool sVirtualKeyboardShown = false;
+
+bool UseVirtualKeyboard() {
+#ifdef ENABLE_OPENXR
+    return IsHeadset() && Fast::IsXrVirtualKeyboardAvailable();
+#else
+    return false;
+#endif
+}
+
+void SyncVirtualKeyboard() {
+#ifdef ENABLE_OPENXR
+    ImGuiIO& io = ImGui::GetIO();
+    Fast::XrKeyboardInput input{};
+    Fast::TakeXrVirtualKeyboardInput(&input);
+    if (sVirtualKeyboardShown) {
+        if (!input.text.empty()) {
+            io.AddInputCharactersUTF8(input.text.c_str());
+        }
+        for (int i = 0; i < input.backspaces; i++) {
+            io.AddKeyEvent(ImGuiKey_Backspace, true);
+            io.AddKeyEvent(ImGuiKey_Backspace, false);
+        }
+        if (input.enter) {
+            io.AddKeyEvent(ImGuiKey_Enter, true);
+            io.AddKeyEvent(ImGuiKey_Enter, false);
+        }
+        if (input.closed) {
+            sVirtualKeyboardShown = false;
+            ImGui::ClearActiveID();
+            SPDLOG_INFO("The headset keyboard closed itself; the text field is released");
+            return;
+        }
+    }
+
+    if (io.WantTextInput && !sVirtualKeyboardShown) {
+        std::string context;
+        if (ImGuiInputTextState* state = ImGui::GetInputTextState(ImGui::GetActiveID())) {
+            context.assign(state->TextA.Data, std::max(state->TextLen, 0));
+        }
+        sVirtualKeyboardShown = true;
+        Fast::ShowXrVirtualKeyboard(true, context.c_str());
+        SPDLOG_INFO("A text field took focus; showing the headset keyboard");
+    } else if (!io.WantTextInput && sVirtualKeyboardShown) {
+        sVirtualKeyboardShown = false;
+        Fast::ShowXrVirtualKeyboard(false, nullptr);
+        SPDLOG_INFO("The text field closed; hiding the headset keyboard");
+    }
 #endif
 }
 
@@ -212,6 +264,15 @@ const char* KeyLabel(const ScreenKey& key, char* buffer) {
 } // namespace
 
 void Ship::Mobile::SyncTextInput() {
+    if (UseVirtualKeyboard() || sVirtualKeyboardShown) {
+        if (sSystemKeyboardShown) {
+            sSystemKeyboardShown = false;
+            SDL_StopTextInput();
+        }
+        SyncVirtualKeyboard();
+        return;
+    }
+
     const bool hasInputFocus = HasInputFocus();
     const bool regainedInputFocus = hasInputFocus && !sHadInputFocus;
     sHadInputFocus = hasInputFocus;

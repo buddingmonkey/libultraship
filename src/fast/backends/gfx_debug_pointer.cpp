@@ -14,20 +14,23 @@
 
 namespace Fast::DebugPointer {
 
-static float sU = 0.0f;
-static float sV = 0.0f;
-static bool sDown = false;
-static bool sLive = false;
-static bool sHolding = false;
-static std::chrono::steady_clock::time_point sExpiry;
-static std::filesystem::file_time_type sStamp;
-static bool sHasStamp = false;
+struct Channel {
+    const char* file;
+    float u = 0.0f;
+    float v = 0.0f;
+    bool down = false;
+    bool live = false;
+    bool holding = false;
+    std::chrono::steady_clock::time_point expiry;
+    std::filesystem::file_time_type stamp;
+    bool hasStamp = false;
+    int framesUntilPoll = 0;
+};
 
-static std::string RequestPath() {
-    return Ship::Context::GetPathRelativeToAppDirectory("debug-pointer");
-}
+static Channel sPointer{ "debug-pointer" };
+static Channel sKeyboard{ "debug-keyboard" };
 
-static void Apply(const std::string& line) {
+static void Apply(Channel& channel, const std::string& line) {
     float u = 0.0f;
     float v = 0.0f;
     bool down = false;
@@ -51,47 +54,53 @@ static void Apply(const std::string& line) {
         }
     }
 
-    sLive = placed;
-    sU = u;
-    sV = v;
-    sDown = placed && down;
-    sHolding = holdMs > 0;
-    if (sHolding) {
-        sExpiry = std::chrono::steady_clock::now() + std::chrono::milliseconds(holdMs);
+    channel.live = placed;
+    channel.u = u;
+    channel.v = v;
+    channel.down = placed && down;
+    channel.holding = holdMs > 0;
+    if (channel.holding) {
+        channel.expiry = std::chrono::steady_clock::now() + std::chrono::milliseconds(holdMs);
     }
 }
 
-bool Poll(float* u, float* v, bool* down) {
-    static int framesUntilPoll = 0;
-
-    if (--framesUntilPoll <= 0) {
-        framesUntilPoll = 6;
+static bool Poll(Channel& channel, float* u, float* v, bool* down) {
+    if (--channel.framesUntilPoll <= 0) {
+        channel.framesUntilPoll = 6;
         std::error_code ec;
-        const std::string path = RequestPath();
+        const std::string path = Ship::Context::GetPathRelativeToAppDirectory(channel.file);
         const std::filesystem::file_time_type stamp = std::filesystem::last_write_time(path, ec);
-        if (!ec && (!sHasStamp || stamp != sStamp)) {
-            sStamp = stamp;
-            sHasStamp = true;
+        if (!ec && (!channel.hasStamp || stamp != channel.stamp)) {
+            channel.stamp = stamp;
+            channel.hasStamp = true;
             std::ifstream file(path);
             std::string line;
             std::getline(file, line);
-            Apply(line);
+            Apply(channel, line);
         }
     }
 
-    if (sHolding && std::chrono::steady_clock::now() >= sExpiry) {
-        sLive = false;
-        sDown = false;
-        sHolding = false;
+    if (channel.holding && std::chrono::steady_clock::now() >= channel.expiry) {
+        channel.live = false;
+        channel.down = false;
+        channel.holding = false;
     }
-    if (!sLive) {
+    if (!channel.live) {
         return false;
     }
 
-    *u = sU;
-    *v = sV;
-    *down = sDown;
+    *u = channel.u;
+    *v = channel.v;
+    *down = channel.down;
     return true;
+}
+
+bool Poll(float* u, float* v, bool* down) {
+    return Poll(sPointer, u, v, down);
+}
+
+bool PollKeyboard(float* u, float* v, bool* down) {
+    return Poll(sKeyboard, u, v, down);
 }
 
 } // namespace Fast::DebugPointer

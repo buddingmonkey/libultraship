@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace Fast {
 
@@ -69,5 +70,18 @@ struct XrPadState {
 };
 
 bool GetXrPad(XrPadState* pad);
+
+#ifdef ENABLE_OPENXR
+struct XrKeyboardInput {
+    std::string text;
+    int backspaces;
+    bool enter;
+    bool closed;
+};
+
+bool IsXrVirtualKeyboardAvailable();
+void ShowXrVirtualKeyboard(bool shown, const char* textContext);
+bool TakeXrVirtualKeyboardInput(XrKeyboardInput* input);
+#endif
 
 } // namespace Fast
