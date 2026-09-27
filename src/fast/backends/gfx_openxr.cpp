@@ -50,6 +50,12 @@ static constexpr float DIORAMA_DEPTH_DEFAULT = 2.0f;
 static constexpr float DIORAMA_DEPTH_MIN = 0.5f;
 static constexpr float DIORAMA_DEPTH_MAX = 4.0f;
 
+static constexpr float DEPTH_LIMIT_DEFAULT = 1.0f;
+static constexpr float DEPTH_LIMIT_MIN = 0.25f;
+static constexpr float DEPTH_LIMIT_MAX = 3.0f;
+static constexpr float DEPTH_GAIN_MAX = 0.95f;
+static constexpr float STEADY_SUBJECT_SHARE = 0.35f;
+
 static constexpr float WINDOW_RISE_FLAT = 0.35f;
 static constexpr float WINDOW_RISE_MAX = 1.22f;
 
@@ -104,6 +110,9 @@ static GfxWindowBackendOpenXR* sBackend = nullptr;
 static float sWindowDistance = WINDOW_DISTANCE_DEFAULT;
 static float sWindowScale = WINDOW_SCALE_DEFAULT;
 static float sDioramaDepth = DIORAMA_DEPTH_DEFAULT;
+static float sDepthLimit = DEPTH_LIMIT_DEFAULT;
+static bool sSteadyDepth = true;
+static float sSubjectDistance = 0.0f;
 
 static float Clamp(float value, float low, float high) {
     return value < low ? low : (value > high ? high : value);
@@ -948,6 +957,18 @@ void SetXrDioramaDepth(float meters) {
     sDioramaDepth = Clamp(meters, DIORAMA_DEPTH_MIN, DIORAMA_DEPTH_MAX);
 }
 
+void SetXrDepthLimit(float degrees) {
+    sDepthLimit = Clamp(degrees, DEPTH_LIMIT_MIN, DEPTH_LIMIT_MAX);
+}
+
+void SetXrSteadyDepth(bool enabled) {
+    sSteadyDepth = enabled;
+}
+
+void SetXrSubjectDistance(float units) {
+    sSubjectDistance = units > 0.0f ? units : 0.0f;
+}
+
 float GetXrWindowScale() {
     return sWindowScale;
 }
@@ -1766,12 +1787,25 @@ bool GfxWindowBackendOpenXR::CanReplayStereo() {
     return mFrameOpen && mViewCount == VIEW_COUNT;
 }
 
+float GfxWindowBackendOpenXR::DepthGain() const {
+    float gain = sDioramaDepth / (mWindowRadius + sDioramaDepth);
+    const float separation = Length(Subtract(mViews[1].pose.position, mViews[0].pose.position));
+    if (separation > 0.0f) {
+        gain = fminf(gain, tanf(sDepthLimit * (float)M_PI / 180.0f) * mWindowRadius / separation);
+    }
+    const float reference = STEADY_SUBJECT_SHARE * sSubjectDistance;
+    if (sSteadyDepth && sGlassDepth < reference) {
+        gain *= (1.0f - reference / sSubjectDistance) / (1.0f - sGlassDepth / sSubjectDistance);
+    }
+    return fminf(gain, DEPTH_GAIN_MAX);
+}
+
 bool GfxWindowBackendOpenXR::ViewGeometry(uint32_t view, XrViewGeometry* geometry) const {
     if (!mFrameOpen || !mViewsValid || !mAnchorValid || view >= VIEW_COUNT) {
         return false;
     }
 
-    const float gain = sDioramaDepth / (mWindowRadius + sDioramaDepth);
+    const float gain = DepthGain();
     const float acrossGlass = gain * sGlassDepth / (WINDOW_SIZE_RANGE * mWindowScale);
     const float alongNormal = sGlassDepth / mWindowRadius;
     const XrVector3f& left = mViews[0].pose.position;

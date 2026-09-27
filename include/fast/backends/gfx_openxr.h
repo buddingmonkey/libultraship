@@ -42,6 +42,7 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     bool ViewGeometry(uint32_t view, XrViewGeometry* geometry) const;
 
   private:
+    float DepthGain() const;
     enum class Grab { None, Move, Resize };
 
     bool StartSession();

@@ -26,6 +26,12 @@ float GetXrWindowDistance();
 
 void SetXrDioramaDepth(float meters);
 
+void SetXrDepthLimit(float degrees);
+
+void SetXrSteadyDepth(bool enabled);
+
+void SetXrSubjectDistance(float units);
+
 void SetXrWindowScale(float scale);
 float GetXrWindowScale();
 
