@@ -98,6 +98,8 @@ static constexpr float EDGE_FLOAT_MAX = 1.0f;
 static constexpr float RECENTER_YAW_MIN = 0.035f;
 
 static bool sPresenting = false;
+static bool sInputFocused = false;
+static bool sAwaitSelectRelease = true;
 static GfxWindowBackendOpenXR* sBackend = nullptr;
 static float sWindowDistance = WINDOW_DISTANCE_DEFAULT;
 static float sWindowScale = WINDOW_SCALE_DEFAULT;
@@ -922,6 +924,10 @@ bool IsXrPresenting() {
     return sPresenting;
 }
 
+bool IsXrInputFocused() {
+    return sInputFocused;
+}
+
 void SetXrFlatProjection(bool flat) {
     sFlatProjection = flat;
 }
@@ -1164,6 +1170,7 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
     if (mActionSet == XR_NULL_HANDLE || mState != XR_SESSION_STATE_FOCUSED) {
         ClearPointer();
         sPadValid = false;
+        sAwaitSelectRelease = true;
         return;
     }
 
@@ -1225,7 +1232,16 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         bool pinching;
     } aims[2] = {};
 
+    bool selectHeld = false;
     for (int hand = 0; hand < 2; hand++) {
+        XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
+        getInfo.action = mSelectAction;
+        getInfo.subactionPath = mHandPath[hand];
+        XrActionStateBoolean select{ XR_TYPE_ACTION_STATE_BOOLEAN };
+        const bool held = XR_SUCCEEDED(xrGetActionStateBoolean(mSession, &getInfo, &select)) && select.isActive &&
+                          select.currentState == XR_TRUE;
+        selectHeld = selectHeld || held;
+
         XrSpaceLocation location{ XR_TYPE_SPACE_LOCATION };
         if (XR_FAILED(xrLocateSpace(mAimSpace[hand], mSpace, displayTime, &location)) ||
             (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) == 0 ||
@@ -1235,15 +1251,14 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         if (!PlaneHit(location.pose, &aims[hand].planeX, &aims[hand].planeY)) {
             continue;
         }
-
-        XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
-        getInfo.action = mSelectAction;
-        getInfo.subactionPath = mHandPath[hand];
-        XrActionStateBoolean select{ XR_TYPE_ACTION_STATE_BOOLEAN };
         aims[hand].onPlane = true;
         aims[hand].pose = location.pose;
-        aims[hand].pinching = XR_SUCCEEDED(xrGetActionStateBoolean(mSession, &getInfo, &select)) && select.isActive &&
-                              select.currentState == XR_TRUE;
+        aims[hand].pinching = held;
+    }
+    if (sAwaitSelectRelease) {
+        sAwaitSelectRelease = selectHeld;
+        aims[0].pinching = false;
+        aims[1].pinching = false;
     }
 
     for (int hand = 0; hand < 2; hand++) {
@@ -1458,6 +1473,7 @@ void GfxWindowBackendOpenXR::PollLocalSpace() {
 void GfxWindowBackendOpenXR::HandleStateChange(const XrEventDataSessionStateChanged& changed) {
     mState = changed.state;
     SPDLOG_INFO("OpenXR: session state {}", (int)mState);
+    sInputFocused = mState == XR_SESSION_STATE_FOCUSED;
 
     if (mState == XR_SESSION_STATE_READY) {
         XrSessionBeginInfo beginInfo{ XR_TYPE_SESSION_BEGIN_INFO };

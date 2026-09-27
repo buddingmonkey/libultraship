@@ -213,6 +213,10 @@ bool IsXrPresenting() {
     return true;
 }
 
+bool IsXrInputFocused() {
+    return true;
+}
+
 void SetXrFlatProjection(bool flat) {
     gFlatProjection = flat;
 }

@@ -11,6 +11,8 @@ struct XrViewGeometry {
 
 bool IsXrPresenting();
 
+bool IsXrInputFocused();
+
 bool GetXrViewGeometry(XrViewGeometry* geometry);
 
 bool GetXrViewGeometryOf(int view, XrViewGeometry* geometry);

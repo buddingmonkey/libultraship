@@ -29,12 +29,25 @@ Uint32 sSystemKeyboardAskedAt = 0;
 constexpr Uint32 kSystemKeyboardWaitMs = 3000;
 constexpr int kResultUnchangedShown = 0;
 constexpr int kResultShown = 2;
+constexpr Uint32 kSystemKeyboardFocusMs = 800;
+bool sHadInputFocus = true;
+bool sSystemKeyboardRetried = false;
+Uint32 sSystemKeyboardReshowAt = 0;
+constexpr Uint32 kSystemKeyboardReshowMs = 250;
 
 bool IsHeadset() {
 #ifdef ENABLE_OPENXR
     return Fast::IsXrPresenting();
 #else
     return false;
+#endif
+}
+
+bool HasInputFocus() {
+#ifdef ENABLE_OPENXR
+    return Fast::IsXrInputFocused();
+#else
+    return true;
 #endif
 }
 
@@ -81,6 +94,17 @@ int SystemKeyboardResult() {
     CallActivity("softKeyboardResult", "()I", &result);
 #endif
     return result;
+}
+
+bool SystemKeyboardTakesFocus() {
+    static int takesFocus = -1;
+    if (takesFocus < 0) {
+        takesFocus = 0;
+#ifdef __ANDROID__
+        CallActivity("systemKeyboardTakesFocus", "()I", &takesFocus);
+#endif
+    }
+    return takesFocus == 1;
 }
 
 enum class KeyKind { Character, Shift, Backspace, Space, Done };
@@ -188,6 +212,17 @@ const char* KeyLabel(const ScreenKey& key, char* buffer) {
 } // namespace
 
 void Ship::Mobile::SyncTextInput() {
+    const bool hasInputFocus = HasInputFocus();
+    const bool regainedInputFocus = hasInputFocus && !sHadInputFocus;
+    sHadInputFocus = hasInputFocus;
+    if (regainedInputFocus && sSystemKeyboardShown && sSystemKeyboard == SystemKeyboard::Works) {
+        sSystemKeyboardShown = false;
+        SDL_StopTextInput();
+        ImGui::ClearActiveID();
+        SPDLOG_INFO("The system keyboard closed; the menu has input again");
+        return;
+    }
+
     const bool wantsTextInput = ImGui::GetIO().WantTextInput;
     if (UseScreenKeyboard()) {
         if (sSystemKeyboardShown) {
@@ -204,28 +239,50 @@ void Ship::Mobile::SyncTextInput() {
             }
             sSystemKeyboardShown = true;
             SDL_StartTextInput();
-            if (IsHeadset() && sSystemKeyboard == SystemKeyboard::Unknown) {
-                if (ProbeSystemKeyboard()) {
-                    sSystemKeyboardAskedAt = SDL_GetTicks();
-                } else {
+            if (IsHeadset() && (sSystemKeyboard == SystemKeyboard::Unknown || SystemKeyboardTakesFocus())) {
+                sSystemKeyboardAskedAt = SDL_GetTicks();
+                sSystemKeyboardRetried = false;
+                if (sSystemKeyboard == SystemKeyboard::Unknown && !ProbeSystemKeyboard()) {
+                    sSystemKeyboardAskedAt = 0;
                     sSystemKeyboard = SystemKeyboard::Missing;
                     sSystemKeyboardShown = false;
                     SDL_StopTextInput();
                 }
             }
         } else if (sSystemKeyboardAskedAt != 0) {
-            const int result = SystemKeyboardResult();
             const Uint32 waited = SDL_GetTicks() - sSystemKeyboardAskedAt;
-            if (result == kResultShown || result == kResultUnchangedShown) {
+            const int result = sSystemKeyboard == SystemKeyboard::Unknown ? SystemKeyboardResult() : kResultShown;
+            const bool shown = result == kResultShown || result == kResultUnchangedShown;
+            if (sSystemKeyboardReshowAt != 0) {
+                if (SDL_GetTicks() >= sSystemKeyboardReshowAt) {
+                    sSystemKeyboardReshowAt = 0;
+                    sSystemKeyboardAskedAt = SDL_GetTicks();
+                    SDL_StartTextInput();
+                }
+            } else if (!hasInputFocus) {
                 sSystemKeyboardAskedAt = 0;
                 sSystemKeyboard = SystemKeyboard::Works;
-                SPDLOG_INFO("The system keyboard is shown ({} ms)", waited);
-            } else if (result >= 0 || waited > kSystemKeyboardWaitMs) {
+                SPDLOG_INFO("The system keyboard took the input focus ({} ms{})", waited,
+                            sSystemKeyboardRetried ? ", after a second show" : "");
+            } else if (sSystemKeyboard == SystemKeyboard::Unknown &&
+                       (result >= 0 ? !shown : waited > kSystemKeyboardWaitMs)) {
                 sSystemKeyboardAskedAt = 0;
                 sSystemKeyboard = SystemKeyboard::Missing;
                 sSystemKeyboardShown = false;
                 SDL_StopTextInput();
                 SPDLOG_INFO("No system keyboard (result {}, {} ms); drawing the menu keyboard", result, waited);
+            } else if (shown && !SystemKeyboardTakesFocus()) {
+                sSystemKeyboardAskedAt = 0;
+                sSystemKeyboard = SystemKeyboard::Works;
+                SPDLOG_INFO("The system keyboard is shown ({} ms)", waited);
+            } else if (shown && !sSystemKeyboardRetried && waited > kSystemKeyboardFocusMs) {
+                sSystemKeyboard = SystemKeyboard::Works;
+                SDL_StopTextInput();
+                sSystemKeyboardRetried = true;
+                sSystemKeyboardReshowAt = SDL_GetTicks() + kSystemKeyboardReshowMs;
+                SPDLOG_INFO("The system keyboard is shown without the input focus; showing it again");
+            } else if (waited > kSystemKeyboardWaitMs) {
+                sSystemKeyboardAskedAt = 0;
             }
         } else if (!SDL_IsTextInputActive()) {
             sSystemKeyboardShown = false;
@@ -237,6 +294,7 @@ void Ship::Mobile::SyncTextInput() {
     } else if (sSystemKeyboardShown) {
         sSystemKeyboardShown = false;
         sSystemKeyboardAskedAt = 0;
+        sSystemKeyboardReshowAt = 0;
         SDL_StopTextInput();
     }
 }
