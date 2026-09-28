@@ -18,6 +18,7 @@
 #include <imgui_internal.h>
 
 #include "fast/Fast3dGui.h"
+#include "fast/backends/gfx_debug_pointer.h"
 #include "fast/backends/gfx_metal.h"
 #include "fast/backends/gfx_xr_view.h"
 #include "ship/Context.h"
@@ -556,6 +557,21 @@ void GfxWindowBackendVisionOS::HandleEvents() {
             }
         }
     }
+
+#ifdef ENABLE_DEBUG_TOOLS
+    static VisionOSPointer sDebugPointer{ 0.0f, 0.0f, false, false };
+    float u = 0.0f;
+    float v = 0.0f;
+    bool down = false;
+    if (DebugPointer::Poll(&u, &v, &down)) {
+        sDebugPointer = { u * static_cast<float>(mWidth), v * static_cast<float>(mHeight), true, down };
+        PushVisionOSPointer(sDebugPointer);
+    } else if (sDebugPointer.Valid) {
+        sDebugPointer.Pressed = false;
+        PushVisionOSPointer(sDebugPointer);
+        sDebugPointer.Valid = false;
+    }
+#endif
 
     SDL_PumpEvents();
 

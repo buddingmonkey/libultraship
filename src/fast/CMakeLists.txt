@@ -33,6 +33,10 @@ if (NOT ENABLE_DEBUG_TOOLS)
     list(FILTER Source_Files__Graphic EXCLUDE REGEX "gfx_debug_")
 endif()
 
+if (APPLE)
+    list(FILTER Source_Files__Graphic EXCLUDE REGEX "gfx_debug_capture")
+endif()
+
 if (NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
     list(FILTER Source_Files__Graphic EXCLUDE REGEX "graphic/Fast3D/backends/gfx_dxgi*")
     list(FILTER Source_Files__Graphic EXCLUDE REGEX "graphic/Fast3D/backends/gfx_direct3d*")
