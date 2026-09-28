@@ -126,6 +126,8 @@ class GfxStereoReplay final : public GfxRenderingAPI {
     std::vector<float> mVbo;
     std::vector<float> mVboL;
     bool mDefer = false;
+    int mDeferredFb = -1;
+    std::unordered_map<int, bool> mFbInvertY;
     size_t mLeftDone = 0;
     uint32_t mSelectedTexture = 0;
     std::unordered_set<uint32_t> mDrawnTextures;

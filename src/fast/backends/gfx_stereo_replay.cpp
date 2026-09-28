@@ -23,6 +23,7 @@ void GfxStereoReplay::BeginRecord(const std::unordered_map<int, int>* fbTwins) {
     mRecording = true;
     mReplayable = true;
     mDefer = true;
+    mDeferredFb = -1;
     RecordState();
 }
 
@@ -212,7 +213,14 @@ int GfxStereoReplay::GetMaxTextureSize() {
 }
 
 GfxClipParameters GfxStereoReplay::GetClipParameters() {
-    return mInner->GetClipParameters();
+    GfxClipParameters parameters = mInner->GetClipParameters();
+    if (mDefer && mDeferredFb >= 0) {
+        auto it = mFbInvertY.find(mDeferredFb);
+        if (it != mFbInvertY.end()) {
+            parameters.invertY = it->second;
+        }
+    }
+    return parameters;
 }
 
 void GfxStereoReplay::UnloadShader(ShaderProgram* oldPrg) {
@@ -390,6 +398,7 @@ void GfxStereoReplay::UpdateFramebufferParameters(int fbId, uint32_t width, uint
                                                   bool canExtractDepth) {
     mInner->UpdateFramebufferParameters(fbId, width, height, msaaLevel, openglInvertY, renderTarget, hasDepthBuffer,
                                         canExtractDepth);
+    mFbInvertY[fbId] = openglInvertY;
     if (mRecording) {
         Cmd& cmd = Push(Op::FramebufferParameters);
         cmd.a[0] = fbId;
@@ -406,6 +415,8 @@ void GfxStereoReplay::UpdateFramebufferParameters(int fbId, uint32_t width, uint
 void GfxStereoReplay::StartDrawToFramebuffer(int fbId, float noiseScale) {
     if (!mDefer) {
         mInner->StartDrawToFramebuffer(fbId, noiseScale);
+    } else {
+        mDeferredFb = fbId;
     }
     if (mRecording) {
         Cmd& cmd = Push(Op::DrawToFramebuffer);
