@@ -56,6 +56,11 @@ constexpr float kWindowDepthRelease = 2.0f;
 constexpr float kDioramaDepthDefault = 2.0f;
 constexpr float kDioramaDepthMin = 0.5f;
 constexpr float kDioramaDepthMax = 4.0f;
+constexpr float kDepthLimitDefault = 1.0f;
+constexpr float kDepthLimitMin = 0.25f;
+constexpr float kDepthLimitMax = 3.0f;
+constexpr float kDepthGainMax = 0.95f;
+constexpr float kSteadySubjectShare = 0.35f;
 constexpr float kWindowSizeRange = 0.5f;
 constexpr float kWindowRangeDefault = 1.3f;
 constexpr float kWindowRangeMin = 0.5f;
@@ -80,6 +85,9 @@ float gParallaxRise = 0.0f;
 float gWindowRange = kWindowRangeDefault;
 float gWindowScale = kWindowScaleDefault;
 float gDioramaDepth = kDioramaDepthDefault;
+float gDepthLimit = kDepthLimitDefault;
+bool gSteadyDepth = true;
+float gSubjectDistance = 0.0f;
 float gTanHalfWidth = kTanHalfWidthDefault;
 float gTanHalfHeight = 0.0f;
 float gSceneNear = std::numeric_limits<float>::max();
@@ -117,6 +125,24 @@ float TanHalfHeight() {
     return gRenderTarget.Width > 0
                ? gTanHalfWidth * static_cast<float>(gRenderTarget.Height) / static_cast<float>(gRenderTarget.Width)
                : gTanHalfWidth;
+}
+
+float DepthGain(float range) {
+    float gain = gDioramaDepth / (range + gDioramaDepth);
+    if (gEyes[0].Valid && gEyes[1].Valid) {
+        const float dx = gEyes[1].X - gEyes[0].X;
+        const float dy = gEyes[1].Y - gEyes[0].Y;
+        const float dz = gEyes[1].Z - gEyes[0].Z;
+        const float separation = sqrtf(dx * dx + dy * dy + dz * dz);
+        if (separation > 0.0f) {
+            gain = fminf(gain, tanf(gDepthLimit * static_cast<float>(M_PI) / 180.0f) * range / separation);
+        }
+    }
+    const float reference = kSteadySubjectShare * gSubjectDistance;
+    if (gSteadyDepth && gGlassDepth < reference) {
+        gain *= (1.0f - reference / gSubjectDistance) / (1.0f - gGlassDepth / gSubjectDistance);
+    }
+    return fminf(gain, kDepthGainMax);
 }
 } // namespace
 
@@ -170,6 +196,18 @@ float GetXrWindowScale() {
 
 void SetXrDioramaDepth(float meters) {
     gDioramaDepth = Clamp(meters, kDioramaDepthMin, kDioramaDepthMax);
+}
+
+void SetXrDepthLimit(float degrees) {
+    gDepthLimit = Clamp(degrees, kDepthLimitMin, kDepthLimitMax);
+}
+
+void SetXrSteadyDepth(bool enabled) {
+    gSteadyDepth = enabled;
+}
+
+void SetXrSubjectDistance(float units) {
+    gSubjectDistance = units > 0.0f ? units : 0.0f;
 }
 
 void RecenterXrWindow() {
@@ -453,7 +491,7 @@ void GfxWindowBackendVisionOS::BeginRenderView(uint32_t view) {
     const float eyeY = mono ? 0.5f * (gEyes[0].Y + gEyes[1].Y) : gEyes[view].Y;
     const float eyeZ = mono ? 0.5f * (gEyes[0].Z + gEyes[1].Z) : gEyes[view].Z;
 
-    const float gain = gDioramaDepth / (window.Range + gDioramaDepth);
+    const float gain = DepthGain(window.Range);
     const float acrossGlass = gain * gGlassDepth * gTanHalfWidth / window.HalfWidth;
     const float alongNormal = gGlassDepth / window.Range;
 
