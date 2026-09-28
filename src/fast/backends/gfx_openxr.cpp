@@ -108,6 +108,7 @@ static constexpr float KEYBOARD_WIDTH_MIN = 0.5f;
 static constexpr float KEYBOARD_WIDTH_MAX = 1.3f;
 static constexpr float KEYBOARD_GAP = 0.06f;
 static constexpr float KEYBOARD_TILT = 0.35f;
+static constexpr float KEYBOARD_CURSOR_LIFT = 0.002f;
 
 static bool sPresenting = false;
 static bool sInputFocused = false;
@@ -872,6 +873,8 @@ static bool sKeyboardPress[2] = { false, false };
 static bool sKeyboardPrevious[2] = { false, false };
 static XrVector3f sKeyboardFrom[2] = {};
 static XrVector3f sKeyboardPoint[2] = {};
+static bool sKeyboardCursor[2] = { false, false };
+static XrPosef sKeyboardCursorPose[2] = {};
 static bool sHandValid[2] = { false, false };
 static XrVector3f sHandFrom[2] = {};
 static float sHandX[2] = { 0.0f, 0.0f };
@@ -1217,6 +1220,8 @@ static void PushPointerButton(bool down, int x, int y) {
 void GfxWindowBackendOpenXR::ClearPointer() {
     sKeyboardRay[0] = false;
     sKeyboardRay[1] = false;
+    sKeyboardCursor[0] = false;
+    sKeyboardCursor[1] = false;
     sMenuHover = false;
     sMenuHeld = false;
     sCursorValid = false;
@@ -1360,6 +1365,8 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
 
     for (int hand = 0; hand < 2; hand++) {
         sKeyboardRay[hand] = false;
+        const bool wasOnKeyboard = sKeyboardCursor[hand];
+        sKeyboardCursor[hand] = false;
         const bool pressing = aims[hand].located && aims[hand].pinching;
         if (!mKeyboard.Visible() || !aims[hand].located || (debugKey && hand == 1)) {
             sKeyboardPress[hand] = false;
@@ -1380,6 +1387,9 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
             sKeyboardFrom[hand] = aims[hand].pose.position;
             if (onKeyboard) {
                 sKeyboardPoint[hand] = point;
+                sKeyboardCursor[hand] = mKeyboard.SurfacePose(aims[hand].pose, &sKeyboardCursorPose[hand]);
+            } else {
+                sKeyboardCursor[hand] = wasOnKeyboard;
             }
             aims[hand].onPlane = false;
         }
@@ -1407,6 +1417,7 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         sKeyboardPress[1] = keyDown;
         sKeyboardFrom[1] = aim.position;
         sKeyboardPoint[1] = keyPoint;
+        sKeyboardCursor[1] = mKeyboard.SurfacePose(aim, &sKeyboardCursorPose[1]);
         aims[1].onPlane = false;
     }
 #endif
@@ -2452,14 +2463,27 @@ void GfxWindowBackendOpenXR::DrawOverlays(uint32_t eye) {
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
 
+    const XrVector3f head = { 0.5f * (mViews[0].pose.position.x + mViews[1].pose.position.x),
+                              0.5f * (mViews[0].pose.position.y + mViews[1].pose.position.y),
+                              0.5f * (mViews[0].pose.position.z + mViews[1].pose.position.z) };
+    const float windowRange = Length(Subtract(mAnchorPose.position, head));
+    float keyboardCursor[2] = { 0.0f, 0.0f };
+    for (int hand = 0; hand < 2; hand++) {
+        if (sKeyboardRay[hand] && sKeyboardCursor[hand] && windowRange > 1e-4f) {
+            keyboardCursor[hand] =
+                CursorSide() * Length(Subtract(sKeyboardCursorPose[hand].position, head)) / windowRange;
+        }
+    }
+
     for (int hand = 0; hand < 2; hand++) {
         if (!sKeyboardRay[hand]) {
             continue;
         }
         const XrVector3f& from = sKeyboardFrom[hand];
-        const XrVector3f along = Subtract(sKeyboardPoint[hand], from);
+        const XrVector3f target = sKeyboardCursor[hand] ? sKeyboardCursorPose[hand].position : sKeyboardPoint[hand];
+        const XrVector3f along = Subtract(target, from);
         const float reach = Length(along);
-        const float span = fminf(RAY_REACH, reach - RAY_GAP);
+        const float span = fminf(RAY_REACH, reach - keyboardCursor[hand] * CURSOR_RING - RAY_GAP);
         if (span <= RAY_HIDDEN + 2.0f * RAY_RAMP) {
             continue;
         }
@@ -2476,6 +2500,30 @@ void GfxWindowBackendOpenXR::DrawOverlays(uint32_t eye) {
         glUniform2f(mRayTaperLoc, span - RAY_RAMP - RAY_TAPER, RAY_TAPER_TO);
         glUniform3fv(mRayTintLoc, 1, sKeyboardPress[hand] ? POINTER_HELD : POINTER_IDLE);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
+
+    for (int hand = 0; hand < 2; hand++) {
+        if (keyboardCursor[hand] <= 0.0f) {
+            continue;
+        }
+        XrPosef dot = sKeyboardCursorPose[hand];
+        const XrVector3f lift = RotateByQuaternion(dot.orientation, { 0.0f, 0.0f, KEYBOARD_CURSOR_LIFT });
+        dot.position = { dot.position.x + lift.x, dot.position.y + lift.y, dot.position.z + lift.z };
+        if (mKeyboardDepthAttached) {
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LEQUAL);
+            glDepthMask(GL_FALSE);
+        }
+        PlacementMatrix(mViews[eye], dot, keyboardCursor[hand], keyboardCursor[hand], mvp);
+        glUseProgram(mCursorProgram);
+        glUniformMatrix4fv(mCursorMvpLoc, 1, GL_FALSE, mvp);
+        glUniform1f(mCursorDownLoc, sKeyboardPress[hand] ? 1.0f : 0.0f);
+        glUniform3fv(mCursorTintLoc, 1, sKeyboardPress[hand] ? POINTER_HELD : POINTER_IDLE);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        if (mKeyboardDepthAttached) {
+            glDepthMask(GL_TRUE);
+            glDisable(GL_DEPTH_TEST);
+        }
     }
 
     const float cursor = CursorSide();

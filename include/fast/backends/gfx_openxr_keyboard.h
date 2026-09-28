@@ -41,6 +41,7 @@ class XrVirtualKeyboard {
     void Place(const XrPosef& pose, float width);
     void Update(XrTime time);
     bool RayHit(const XrPosef& aim, XrVector3f* point) const;
+    bool SurfacePose(const XrPosef& aim, XrPosef* pose) const;
     void SendRay(int hand, bool handTracked, const XrPosef& aim, bool pressed);
     void Draw(const float viewProjection[16]);
     bool KeyboardPoint(float x, float y, XrVector3f* point, XrVector3f* normal) const;

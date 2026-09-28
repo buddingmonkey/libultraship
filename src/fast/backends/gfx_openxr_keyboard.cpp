@@ -1418,6 +1418,89 @@ bool XrVirtualKeyboard::RayHit(const XrPosef& aim, XrVector3f* point) const {
     return true;
 }
 
+static bool Normalize(float v[3]) {
+    const float length = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    if (length <= 1e-9f) {
+        return false;
+    }
+    v[0] /= length;
+    v[1] /= length;
+    v[2] /= length;
+    return true;
+}
+
+static XrQuaternionf QuaternionFromAxes(const float x[3], const float y[3], const float z[3]) {
+    const float trace = x[0] + y[1] + z[2];
+    XrQuaternionf q;
+    if (trace > 0.0f) {
+        const float s = 2.0f * sqrtf(trace + 1.0f);
+        q = { (y[2] - z[1]) / s, (z[0] - x[2]) / s, (x[1] - y[0]) / s, 0.25f * s };
+    } else if (x[0] > y[1] && x[0] > z[2]) {
+        const float s = 2.0f * sqrtf(1.0f + x[0] - y[1] - z[2]);
+        q = { 0.25f * s, (y[0] + x[1]) / s, (z[0] + x[2]) / s, (y[2] - z[1]) / s };
+    } else if (y[1] > z[2]) {
+        const float s = 2.0f * sqrtf(1.0f + y[1] - x[0] - z[2]);
+        q = { (y[0] + x[1]) / s, 0.25f * s, (z[1] + y[2]) / s, (z[0] - x[2]) / s };
+    } else {
+        const float s = 2.0f * sqrtf(1.0f + z[2] - x[0] - y[1]);
+        q = { (z[0] + x[2]) / s, (z[1] + y[2]) / s, 0.25f * s, (x[1] - y[0]) / s };
+    }
+    return q;
+}
+
+bool XrVirtualKeyboard::SurfacePose(const XrPosef& aim, XrPosef* pose) const {
+    if (!mShown || !mPoseValid || mCollisionNode < 0) {
+        return false;
+    }
+    float model[16];
+    float box[16];
+    float inverse[16];
+    ModelMatrix(model);
+    Multiply(model, mNodes[mCollisionNode].global, box);
+    if (!InvertAffine(box, inverse)) {
+        return false;
+    }
+    const float from[3] = { aim.position.x, aim.position.y, aim.position.z };
+    const float forward[3] = { 0.0f, 0.0f, -1.0f };
+    float along[3];
+    Rotate(aim.orientation, forward, along);
+    float o[3];
+    float d[3];
+    TransformPoint(inverse, from, o);
+    TransformVector(inverse, along, d);
+    if (d[2] >= -1e-6f) {
+        return false;
+    }
+    const float t = (mCollisionMax[2] - o[2]) / d[2];
+    if (t < 0.0f) {
+        return false;
+    }
+    const float local[3] = { std::clamp(o[0] + d[0] * t, mCollisionMin[0], mCollisionMax[0]),
+                             std::clamp(o[1] + d[1] * t, mCollisionMin[1], mCollisionMax[1]), mCollisionMax[2] };
+    const float unitX[3] = { 1.0f, 0.0f, 0.0f };
+    const float unitZ[3] = { 0.0f, 0.0f, 1.0f };
+    float world[3];
+    float x[3];
+    float z[3];
+    TransformPoint(box, local, world);
+    TransformVector(box, unitX, x);
+    TransformVector(box, unitZ, z);
+    if (!Normalize(z)) {
+        return false;
+    }
+    const float alongZ = x[0] * z[0] + x[1] * z[1] + x[2] * z[2];
+    x[0] -= alongZ * z[0];
+    x[1] -= alongZ * z[1];
+    x[2] -= alongZ * z[2];
+    if (!Normalize(x)) {
+        return false;
+    }
+    const float y[3] = { z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0] };
+    pose->position = { world[0], world[1], world[2] };
+    pose->orientation = QuaternionFromAxes(x, y, z);
+    return true;
+}
+
 bool XrVirtualKeyboard::KeyboardPoint(float x, float y, XrVector3f* point, XrVector3f* normal) const {
     if (!mShown || !mPoseValid || mCollisionNode < 0) {
         return false;
