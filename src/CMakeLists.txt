@@ -221,6 +221,13 @@ if (LUS_APPLE_MOBILE)
                 XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
             )
         endif()
+
+        if(TARGET libzstd_static)
+            set_target_properties(libzstd_static PROPERTIES
+                XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY ""
+                XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
+            )
+        endif()
     endif()
 else()
     target_compile_definitions(libultraship PRIVATE

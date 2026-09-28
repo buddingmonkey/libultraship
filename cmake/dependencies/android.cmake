@@ -50,6 +50,24 @@ if (NOT ${spdlog_FOUND})
     FetchContent_MakeAvailable(spdlog)
 endif()
 
+#=================== zstd ===================
+set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+set(ZSTD_BUILD_PROGRAMS OFF)
+set(ZSTD_BUILD_TESTS OFF)
+set(ZSTD_BUILD_SHARED OFF)
+set(ZSTD_BUILD_STATIC ON)
+FetchContent_Declare(
+    zstd
+    GIT_REPOSITORY https://github.com/facebook/zstd.git
+    GIT_TAG v1.5.7
+    SOURCE_SUBDIR build/cmake
+    OVERRIDE_FIND_PACKAGE
+)
+FetchContent_MakeAvailable(zstd)
+if (NOT TARGET zstd::libzstd_static)
+    add_library(zstd::libzstd_static ALIAS libzstd_static)
+endif()
+
 #=================== libzip ===================
 find_package(libzip QUIET)
 if (NOT ${libzip_FOUND})

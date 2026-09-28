@@ -65,13 +65,23 @@ if (NOT ${libzip_FOUND})
     set(BUILD_DOC OFF)
     set(BUILD_OSSFUZZ OFF)
     set(BUILD_SHARED_LIBS OFF)
-    # libzip enables these codecs by default and goes looking for them on the host. There is
-    # no iOS system zstd, so it finds the Homebrew x86_64 build under /usr/local and the app
-    # fails to link with undefined _ZSTD_* for arm64. LZMA is off for the same reason (it
-    # just happens not to be installed here). bzip2 is left alone -- it resolves to
-    # libbz2.tbd in the iOS SDK, which is the right architecture.
-    set(ENABLE_ZSTD OFF)
+    # libzip's codec search finds x86_64 Homebrew libraries on the host: build zstd here, keep LZMA off.
     set(ENABLE_LZMA OFF)
+    set(ZSTD_BUILD_PROGRAMS OFF)
+    set(ZSTD_BUILD_TESTS OFF)
+    set(ZSTD_BUILD_SHARED OFF)
+    set(ZSTD_BUILD_STATIC ON)
+    FetchContent_Declare(
+        zstd
+        GIT_REPOSITORY https://github.com/facebook/zstd.git
+        GIT_TAG v1.5.7
+        SOURCE_SUBDIR build/cmake
+        OVERRIDE_FIND_PACKAGE
+    )
+    FetchContent_MakeAvailable(zstd)
+    if (NOT TARGET zstd::libzstd_static)
+        add_library(zstd::libzstd_static ALIAS libzstd_static)
+    endif()
     FetchContent_Declare(
         libzip
         GIT_REPOSITORY https://github.com/nih-at/libzip.git
