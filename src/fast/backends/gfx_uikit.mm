@@ -8,6 +8,10 @@
 #include <SDL2/SDL_syswm.h>
 #include <spdlog/spdlog.h>
 
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 260000
+#define LUS_UIKIT_ORIENTATION_LOCK 1
+#endif
+
 namespace Fast {
 
 namespace {
@@ -45,12 +49,14 @@ bool IsLandscape(long orientation) {
 }
 
 void SetLock(BOOL wanted, const char* why) {
+#ifdef LUS_UIKIT_ORIENTATION_LOCK
     if (@available(iOS 26.0, *)) {
         sLockWanted = wanted;
         [sWindow.rootViewController setNeedsUpdateOfPrefersInterfaceOrientationLocked];
         SPDLOG_INFO("Orientation lock {} ({}): interface orientation {}, device orientation {}",
                     wanted ? "requested" : "released", why, InterfaceOrientation(), DeviceOrientation());
     }
+#endif
 }
 
 void SupportOnly(long orientation) {
@@ -95,6 +101,7 @@ void UIKitRequestOrientationLock(SDL_Window* window) {
     }
     sWindow.backgroundColor = UIColor.blackColor;
     controller.view.backgroundColor = UIColor.blackColor;
+#ifdef LUS_UIKIT_ORIENTATION_LOCK
     if (@available(iOS 26.0, *)) {
         Method transition = class_getInstanceMethod([controller class], @selector(viewWillTransitionToSize:
                                                                                          withTransitionCoordinator:));
@@ -113,6 +120,7 @@ void UIKitRequestOrientationLock(SDL_Window* window) {
                                                         OnDeviceOrientation();
                                                     }];
     }
+#endif
 }
 
 void UIKitLogOrientation(SDL_Window* window, int width, int height) {
@@ -122,9 +130,11 @@ void UIKitLogOrientation(SDL_Window* window, int width, int height) {
     }
     UIWindowSceneGeometry* geometry = scene.effectiveGeometry;
     const char* lock = "not available";
+#ifdef LUS_UIKIT_ORIENTATION_LOCK
     if (@available(iOS 26.0, *)) {
         lock = geometry.isInterfaceOrientationLocked ? "held" : "not held";
     }
+#endif
     SPDLOG_INFO("Window {}x{}: interface orientation {}, orientation lock {}", width, height,
                 (long)geometry.interfaceOrientation, lock);
 }
