@@ -31,6 +31,7 @@ MTL::Texture* gGameTextures[2][2] = {};
 int gWriteSlot = 0;
 uint32_t gSlotViews[2] = { 1, 1 };
 std::atomic<int> gReadySlot{ -1 };
+std::atomic<uint32_t> gPressCount{ 0 };
 VisionOSFrameHooks gFrameHooks = { nullptr, nullptr, nullptr, nullptr };
 std::deque<VisionOSPointer> gPointerQueue;
 std::mutex gPointerMutex;
@@ -320,6 +321,11 @@ void SetVisionOSFrameHooks(VisionOSFrameHooks hooks) {
 
 void PushVisionOSPointer(VisionOSPointer pointer) {
     std::lock_guard<std::mutex> lock(gPointerMutex);
+    static bool sLastPressed = false;
+    if (pointer.Valid && pointer.Pressed && !sLastPressed) {
+        gPressCount.fetch_add(1, std::memory_order_relaxed);
+    }
+    sLastPressed = pointer.Valid && pointer.Pressed;
     if (!gPointerQueue.empty() && gPointerQueue.back().Pressed == pointer.Pressed) {
         gPointerQueue.back() = pointer;
         return;
@@ -330,6 +336,10 @@ void PushVisionOSPointer(VisionOSPointer pointer) {
 void PushVisionOSKey(int scancode, bool pressed) {
     std::lock_guard<std::mutex> lock(gKeyMutex);
     gKeyQueue.push_back({ scancode, pressed });
+}
+
+uint32_t GetVisionOSPressCount() {
+    return gPressCount.load(std::memory_order_relaxed);
 }
 
 bool PeekVisionOSPointer(VisionOSPointer* pointer) {

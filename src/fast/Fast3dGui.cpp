@@ -408,8 +408,20 @@ void Fast3dGui::ImGuiWMNewFrame() {
                         sHavePos = true;
                     }
                     if (!(next.Valid && next.Pressed != sPressed && newPlace)) {
+#ifdef ENABLE_DEBUG_TOOLS
+                        const bool down = next.Valid && next.Pressed && !sPressed;
+#endif
                         sPressed = next.Valid && next.Pressed;
                         PopVisionOSPointer();
+#ifdef ENABLE_DEBUG_TOOLS
+                        if (down) {
+                            static uint32_t sDelivered = 0;
+                            ImGuiWindow* hovered = ImGui::GetCurrentContext()->HoveredWindow;
+                            SPDLOG_INFO("visionOS: press {} of {} reaches ImGui at {:.0f},{:.0f} over {}", ++sDelivered,
+                                        GetVisionOSPressCount(), sX, sY,
+                                        hovered != nullptr ? hovered->Name : "no window");
+                        }
+#endif
                     }
                 }
                 ImGui::GetIO().AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);

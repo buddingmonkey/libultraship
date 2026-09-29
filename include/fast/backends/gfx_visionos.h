@@ -42,6 +42,7 @@ struct VisionOSPointer {
 void PushVisionOSPointer(VisionOSPointer pointer);
 bool PeekVisionOSPointer(VisionOSPointer* pointer);
 void PopVisionOSPointer();
+uint32_t GetVisionOSPressCount();
 
 struct VisionOSWindow {
     float HalfWidth;
