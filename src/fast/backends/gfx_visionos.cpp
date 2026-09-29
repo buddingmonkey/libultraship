@@ -29,6 +29,7 @@ namespace {
 VisionOSRenderTarget gRenderTarget = { nullptr, nullptr, 0, 0 };
 MTL::Texture* gGameTextures[2][2] = {};
 int gWriteSlot = 0;
+uint32_t gSlotViews[2] = { 1, 1 };
 std::atomic<int> gReadySlot{ -1 };
 VisionOSFrameHooks gFrameHooks = { nullptr, nullptr, nullptr, nullptr };
 std::deque<VisionOSPointer> gPointerQueue;
@@ -391,6 +392,9 @@ void* GetVisionOSReadyGameTexture(int eye) {
     if (eye < 0 || eye >= 2 || slot < 0) {
         return nullptr;
     }
+    if (static_cast<uint32_t>(eye) >= gSlotViews[slot]) {
+        return gGameTextures[0][slot];
+    }
     return gGameTextures[eye][slot];
 }
 
@@ -638,10 +642,14 @@ void GfxWindowBackendVisionOS::SwapBuffersBegin() {
     if (gViewIndex + 1 < static_cast<int>(mViewsThisFrame)) {
         return;
     }
+    gSlotViews[gWriteSlot] = mViewsThisFrame;
     if (gFrameHooks.CloseFrame != nullptr) {
         gFrameHooks.CloseFrame();
     }
     mFrameOpen = false;
+    if (mRenderingApi != nullptr) {
+        mRenderingApi->MetalSetExternalTarget(static_cast<MTL::Texture*>(GetVisionOSGameTexture(0)));
+    }
 }
 
 void GfxWindowBackendVisionOS::SwapBuffersEnd() {
