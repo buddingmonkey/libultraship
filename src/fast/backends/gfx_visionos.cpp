@@ -5,13 +5,16 @@
 #include <Metal/Metal.hpp>
 #include <SDL_events.h>
 #include <spdlog/spdlog.h>
+#include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <deque>
 #include <limits>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include <imgui.h>
@@ -411,6 +414,71 @@ void* GetVisionOSReadyGameTexture(int eye) {
 void FlipVisionOSGameTextures() {
     gReadySlot.store(gWriteSlot, std::memory_order_release);
     gWriteSlot = 1 - gWriteSlot;
+}
+
+namespace {
+#ifdef ENABLE_DEBUG_TOOLS
+const char* const kCommitSiteNames[VISIONOS_COMMIT_SITES] = { "framebuffer", "screen", "depth read", "readback",
+                                                              "picture copy" };
+std::atomic<uint32_t> gCommits[VISIONOS_COMMIT_SITES] = {};
+std::atomic<uint32_t> gRefused[VISIONOS_COMMIT_SITES] = {};
+std::atomic<uint32_t> gBackground[VISIONOS_COMMIT_SITES] = {};
+std::atomic<int> gCommitPhase{ 2 };
+#endif
+} // namespace
+
+void NoteVisionOSCommit(void* commandBuffer, int site) {
+#ifdef ENABLE_DEBUG_TOOLS
+    if (commandBuffer == nullptr || site < 0 || site >= VISIONOS_COMMIT_SITES) {
+        return;
+    }
+    gCommits[site].fetch_add(1, std::memory_order_relaxed);
+    const int phase = gCommitPhase.load(std::memory_order_relaxed);
+    if (phase == 0) {
+        gBackground[site].fetch_add(1, std::memory_order_relaxed);
+    }
+    static_cast<MTL::CommandBuffer*>(commandBuffer)->addCompletedHandler([site, phase](MTL::CommandBuffer* buffer) {
+        if (buffer->status() != MTL::CommandBufferStatusError) {
+            return;
+        }
+        if (gRefused[site].fetch_add(1, std::memory_order_relaxed) == 0) {
+            const NS::Error* error = buffer->error();
+            SPDLOG_INFO("visionOS: the GPU refused a {} command buffer (code {}), committed in scene phase {}",
+                        kCommitSiteNames[site], error != nullptr ? (long)error->code() : 0L, phase);
+        }
+    });
+#endif
+}
+
+void ReportVisionOSCommits(int scenePhase) {
+#ifdef ENABLE_DEBUG_TOOLS
+    static uint32_t sBase[VISIONOS_COMMIT_SITES] = {};
+    static uint32_t sBackgroundBase[VISIONOS_COMMIT_SITES] = {};
+    static uint32_t sRefusedBase[VISIONOS_COMMIT_SITES] = {};
+    static auto sAwaySince = std::chrono::steady_clock::now();
+    const int before = gCommitPhase.exchange(scenePhase, std::memory_order_relaxed);
+    if (scenePhase != 2 && before == 2) {
+        for (int site = 0; site < VISIONOS_COMMIT_SITES; site++) {
+            sBase[site] = gCommits[site].load(std::memory_order_relaxed);
+            sBackgroundBase[site] = gBackground[site].load(std::memory_order_relaxed);
+            sRefusedBase[site] = gRefused[site].load(std::memory_order_relaxed);
+        }
+        sAwaySince = std::chrono::steady_clock::now();
+        return;
+    }
+    if (scenePhase != 2 || before == 2) {
+        return;
+    }
+    const double away = std::chrono::duration<double>(std::chrono::steady_clock::now() - sAwaySince).count();
+    std::string line;
+    for (int site = 0; site < VISIONOS_COMMIT_SITES; site++) {
+        line += fmt::format(" {} {}/{}/{}", kCommitSiteNames[site],
+                            gCommits[site].load(std::memory_order_relaxed) - sBase[site],
+                            gBackground[site].load(std::memory_order_relaxed) - sBackgroundBase[site],
+                            gRefused[site].load(std::memory_order_relaxed) - sRefusedBase[site]);
+    }
+    SPDLOG_INFO("visionOS: {:.1f} s away, command buffers committed/in background/refused:{}", away, line);
+#endif
 }
 
 void ReportVisionOS(const char* text) {

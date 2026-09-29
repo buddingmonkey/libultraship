@@ -19,6 +19,18 @@ void FlipVisionOSGameTextures();
 
 void ReportVisionOS(const char* text);
 
+enum VisionOSCommitSite {
+    VISIONOS_COMMIT_FRAMEBUFFER,
+    VISIONOS_COMMIT_SCREEN,
+    VISIONOS_COMMIT_DEPTH,
+    VISIONOS_COMMIT_READBACK,
+    VISIONOS_COMMIT_COPY,
+    VISIONOS_COMMIT_SITES
+};
+
+void NoteVisionOSCommit(void* commandBuffer, int site);
+void ReportVisionOSCommits(int scenePhase);
+
 void SetVisionOSRefreshRate(uint32_t hz);
 
 void SetVisionOSViewCount(uint32_t views);

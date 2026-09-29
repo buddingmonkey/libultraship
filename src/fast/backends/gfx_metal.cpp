@@ -41,6 +41,9 @@
 #include "ship/config/ConsoleVariable.h"
 
 #include "fast/Fast3dWindow.h"
+#ifdef __VISIONOS__
+#include "fast/backends/gfx_visionos.h"
+#endif
 
 #define ARRAY_COUNT(arr) (int32_t)(sizeof(arr) / sizeof(arr[0]))
 
@@ -689,6 +692,9 @@ void GfxRenderingAPIMetal::EndFrame() {
         if (!framebuffer.mHasEndedEncoding)
             framebuffer.mCommandEncoder->endEncoding();
 
+#if defined(__VISIONOS__) && defined(ENABLE_DEBUG_TOOLS)
+        NoteVisionOSCommit(framebuffer.mCommandBuffer, VISIONOS_COMMIT_FRAMEBUFFER);
+#endif
         framebuffer.mCommandBuffer->commit();
         it++;
     }
@@ -739,6 +745,9 @@ void GfxRenderingAPIMetal::EndFrame() {
             mFrameThrottleSignal.notify_one();
         });
     }
+#if defined(__VISIONOS__) && defined(ENABLE_DEBUG_TOOLS)
+    NoteVisionOSCommit(screen_framebuffer.mCommandBuffer, VISIONOS_COMMIT_SCREEN);
+#endif
     screen_framebuffer.mCommandBuffer->commit();
 
     // Now that commit has been called, retain the command buffer for GPU sync
@@ -1221,6 +1230,9 @@ GfxRenderingAPIMetal::GetPixelDepth(int fb_id, const std::set<std::pair<float, f
 
     compute_encoder->endEncoding();
 
+#if defined(__VISIONOS__) && defined(ENABLE_DEBUG_TOOLS)
+    NoteVisionOSCommit(command_buffer, VISIONOS_COMMIT_DEPTH);
+#endif
     command_buffer->commit();
     command_buffer->waitUntilCompleted();
 
@@ -1386,6 +1398,9 @@ void GfxRenderingAPIMetal::ReadFramebufferToCPU(int fb_id, uint32_t width, uint3
         }
         compute_encoder->endEncoding();
 
+#if defined(__VISIONOS__) && defined(ENABLE_DEBUG_TOOLS)
+        NoteVisionOSCommit(framebuffer.mCommandBuffer, VISIONOS_COMMIT_READBACK);
+#endif
         framebuffer.mCommandBuffer->commit();
 
         if (framebuffer.mUseReadbackQueue) {
