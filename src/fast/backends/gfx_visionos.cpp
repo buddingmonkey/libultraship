@@ -583,6 +583,18 @@ void GfxWindowBackendVisionOS::BeginRenderView(uint32_t view) {
     gViewGeometry.eyeOffset[2] = (eyeZ - window.Range) * alongNormal;
     gViewGeometry.windowDistance = gGlassDepth;
     gViewGeometryValid = true;
+#ifdef ENABLE_DEBUG_TOOLS
+    static auto sSaid = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    if (view == 0 && now - sSaid > std::chrono::seconds(2)) {
+        sSaid = now;
+        SPDLOG_INFO("visionOS: eyes {:.3f},{:.3f},{:.3f} / {:.3f},{:.3f},{:.3f}, reference {:.3f},{:.3f}, range {:.3f}, "
+                    "gain {:.3f}, glass {:.1f}, subject {:.1f}, offset {:.2f},{:.2f},{:.2f}",
+                    gEyes[0].X, gEyes[0].Y, gEyes[0].Z, gEyes[1].X, gEyes[1].Y, gEyes[1].Z, gParallaxAcross,
+                    gParallaxRise, window.Range, gain, gGlassDepth, gSubjectDistance, gViewGeometry.eyeOffset[0],
+                    gViewGeometry.eyeOffset[1], gViewGeometry.eyeOffset[2]);
+    }
+#endif
 }
 
 void GfxWindowBackendVisionOS::Close() {
