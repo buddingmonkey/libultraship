@@ -376,7 +376,8 @@ void* GetVisionOSGameTexture(int eye) {
 
     MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::texture2DDescriptor(
         MTL::PixelFormatBGRA8Unorm, gRenderTarget.Width, gRenderTarget.Height, false);
-    descriptor->setUsage(MTL::TextureUsageRenderTarget | MTL::TextureUsageShaderRead);
+    descriptor->setUsage(MTL::TextureUsageRenderTarget | MTL::TextureUsageShaderRead |
+                         MTL::TextureUsagePixelFormatView);
     descriptor->setStorageMode(MTL::StorageModePrivate);
     gGameTextures[eye][gWriteSlot] = static_cast<MTL::Device*>(gRenderTarget.Device)->newTexture(descriptor);
     if (gGameTextures[eye][gWriteSlot] == nullptr) {
