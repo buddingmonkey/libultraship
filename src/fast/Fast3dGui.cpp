@@ -412,6 +412,7 @@ void Fast3dGui::ImGuiWMNewFrame() {
                         PopVisionOSPointer();
                     }
                 }
+                ImGui::GetIO().AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
                 if (sHavePos) {
                     ImGui::GetIO().AddMousePosEvent(sX, sY);
                 }
