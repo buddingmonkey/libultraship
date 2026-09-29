@@ -1759,7 +1759,12 @@ void Interpreter::ApplyXrProjection() {
     float tangents[2] = { 0.0f, 0.0f };
     const bool projected = ProjectXrView(view, mRsp->P_matrix, &mXrEyeZ, &nearPlane, tangents);
     if (tangents[0] > 0.0f) {
-        SetXrViewTangents(tangents[0] * mCurDimensions.aspect_ratio * 0.75f, tangents[1]);
+        const float aspect = mCurDimensions.aspect_ratio;
+        if (aspect < 4.0f / 3.0f) {
+            SetXrViewTangents(tangents[0], tangents[1] * (4.0f / 3.0f) / aspect);
+        } else {
+            SetXrViewTangents(tangents[0] * aspect * 0.75f, tangents[1]);
+        }
     }
     if (!projected) {
         return;
@@ -1931,9 +1936,24 @@ float Interpreter::AdjXForAspectRatio(float x) const {
     if (mFbActive && mActiveFrameBuffer != mFrameBuffers.end() &&
         (!mActiveFrameBuffer->second.resize || mActiveFrameBuffer->second.forceFixedAspect)) {
         return x;
-    } else {
-        return x * (4.0f / 3.0f) / ((float)mCurDimensions.width / (float)mCurDimensions.height);
     }
+    const float aspect = (float)mCurDimensions.width / (float)mCurDimensions.height;
+    if (aspect < 4.0f / 3.0f) {
+        return x;
+    }
+    return x * (4.0f / 3.0f) / aspect;
+}
+
+float Interpreter::AdjYForAspectRatio(float y) const {
+    if (mFbActive && mActiveFrameBuffer != mFrameBuffers.end() &&
+        (!mActiveFrameBuffer->second.resize || mActiveFrameBuffer->second.forceFixedAspect)) {
+        return y;
+    }
+    const float aspect = (float)mCurDimensions.width / (float)mCurDimensions.height;
+    if (aspect >= 4.0f / 3.0f) {
+        return y;
+    }
+    return y * aspect / (4.0f / 3.0f);
 }
 
 // Scale the width and height value based on the ratio of the viewport to the native size
@@ -1978,6 +1998,7 @@ void Interpreter::GfxSpVertex(size_t n_vertices, size_t dest_index, const F3DVtx
         }
 
         x = AdjXForAspectRatio(x);
+        y = AdjYForAspectRatio(y);
 
         short U = v->tc[0] * mRsp->texture_scaling_factor.s >> 16;
         short V = v->tc[1] * mRsp->texture_scaling_factor.t >> 16;
@@ -2140,10 +2161,11 @@ void Interpreter::GfxSpVertex(size_t n_vertices, size_t dest_index, const F3DVtx
         if (mXrStereoPass) {
             const float(*m)[4] = mRsp->MP_matrix_r;
             float xr = v->ob[0] * m[0][0] + v->ob[1] * m[1][0] + v->ob[2] * m[2][0] + m[3][0];
-            const float yr = v->ob[0] * m[0][1] + v->ob[1] * m[1][1] + v->ob[2] * m[2][1] + m[3][1];
+            float yr = v->ob[0] * m[0][1] + v->ob[1] * m[1][1] + v->ob[2] * m[2][1] + m[3][1];
             const float zr = v->ob[0] * m[0][2] + v->ob[1] * m[1][2] + v->ob[2] * m[2][2] + m[3][2];
             float wr = v->ob[0] * m[0][3] + v->ob[1] * m[1][3] + v->ob[2] * m[2][3] + m[3][3];
             xr = AdjXForAspectRatio(xr);
+            yr = AdjYForAspectRatio(yr);
 
             d->clip_rej_r = 0;
             if (xr < -wr) {
@@ -3391,6 +3413,8 @@ void Interpreter::GfxDrawRectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_
 
     ulxf = AdjXForAspectRatio(ulxf);
     lrxf = AdjXForAspectRatio(lrxf);
+    ulyf = AdjYForAspectRatio(ulyf);
+    lryf = AdjYForAspectRatio(lryf);
 
     struct LoadedVertex* ul = &mRsp->loaded_vertices[MAX_VERTICES + 0];
     struct LoadedVertex* ll = &mRsp->loaded_vertices[MAX_VERTICES + 1];
@@ -3582,8 +3606,11 @@ void Interpreter::GfxDpFillRectangle(int32_t ulx, int32_t uly, int32_t lrx, int3
         float w = (expanded_lrx - ulx) / 4.0f;
         float h = (expanded_lry - uly) / 4.0f;
         float halfNativeWidth = (float)HALF_SCREEN_WIDTH(mActiveFrameBuffer);
+        float halfNativeHeight = (float)HALF_SCREEN_HEIGHT(mActiveFrameBuffer);
         x = halfNativeWidth + AdjXForAspectRatio(x - halfNativeWidth);
         w = AdjXForAspectRatio(w);
+        y = halfNativeHeight + AdjYForAspectRatio(y - halfNativeHeight);
+        h = AdjYForAspectRatio(h);
 
         struct XYWidthHeight area;
         area.x = (int16_t)x;
