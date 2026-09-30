@@ -6,6 +6,7 @@
 #include <list>
 #include <vector>
 #include <mutex>
+#include <atomic>
 #include <queue>
 #include <variant>
 #include "ship/resource/Resource.h"
@@ -93,6 +94,10 @@ class ResourceManager {
     typedef enum class ResourceLoadError { None, NotCached, NotFound } ResourceLoadError;
 
   public:
+#ifdef ENABLE_DEBUG_TOOLS
+    static inline std::atomic<uint32_t> BlockingLoadCount{ 0 };
+    static inline std::atomic<uint64_t> BlockingLoadNs{ 0 };
+#endif
     ResourceManager();
 
     /**

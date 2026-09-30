@@ -1,4 +1,5 @@
 #include "ship/resource/ResourceManager.h"
+#include <chrono>
 #include <spdlog/spdlog.h>
 #include "ship/resource/File.h"
 #include "ship/resource/archive/Archive.h"
@@ -229,6 +230,16 @@ ResourceManager::LoadResourceAsync(const std::string& filePath, bool loadExact, 
 
 std::shared_ptr<IResource> ResourceManager::LoadResource(const ResourceIdentifier& identifier, bool loadExact,
                                                          std::shared_ptr<ResourceInitData> initData) {
+#ifdef ENABLE_DEBUG_TOOLS
+    if (!OtrSignatureCheck(identifier.Path.c_str()) && GetCachedResource(identifier, loadExact) == nullptr) {
+        const auto start = std::chrono::steady_clock::now();
+        auto loaded = LoadResourceAsync(identifier, loadExact, BS::pr::highest, initData).get();
+        BlockingLoadCount++;
+        BlockingLoadNs +=
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
+        return loaded;
+    }
+#endif
     auto resource = LoadResourceAsync(identifier, loadExact, BS::pr::highest, initData).get();
     if (resource == nullptr) {
         SPDLOG_TRACE("Failed to load resource file at path {}", identifier.Path);

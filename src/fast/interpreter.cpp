@@ -1496,6 +1496,18 @@ void Interpreter::ImportTexture(int i, int tile, bool importReplacement) {
     if (TextureCacheLookup(i, binding.key)) {
         return;
     }
+#ifdef ENABLE_DEBUG_TOOLS
+    struct ImportTimer {
+        Interpreter* intp;
+        std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+        ~ImportTimer() {
+            intp->mTextureImportCount++;
+            intp->mTextureImportNs +=
+                std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start)
+                    .count();
+        }
+    } importTimer{ this };
+#endif
 
     // Guard against zero-sized textures that would cause divide-by-zero
     // or GPU API errors in UploadTexture.

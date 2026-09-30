@@ -582,6 +582,8 @@ class Interpreter {
 #endif
 #ifdef ENABLE_DEBUG_TOOLS
     uint32_t mDrawCallCount{};
+    uint32_t mTextureImportCount{};
+    uint64_t mTextureImportNs{};
     uint32_t mMarkedDrawCount{};
     uint32_t mMarkedFlushCauses[10]{};
 #endif
