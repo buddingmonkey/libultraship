@@ -18,7 +18,7 @@
 namespace Fast {
 namespace {
 constexpr CGFloat kWidePhoneDisplayPt = 600.0;
-constexpr NSUInteger kFreeMask = UIInterfaceOrientationMaskAll;
+constexpr NSUInteger kFreeMask = UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskLandscape;
 
 CGSize SceneSizeOf(UIWindowScene* scene) {
     if (scene == nil) {
@@ -58,34 +58,31 @@ NSUInteger MaskForScene(UIWindowScene* scene, const char* who) {
 - (UIInterfaceOrientationMask)supportedInterfaceOrientationsForWindowScene:(UIWindowScene*)windowScene {
     return Fast::MaskForScene(windowScene, "scene delegate");
 }
+
+- (UIInterfaceOrientationMask)application:(UIApplication*)application
+    supportedInterfaceOrientationsForWindow:(UIWindow*)window {
+    return Fast::MaskForScene(window.windowScene, "application delegate");
+}
 @end
 
 namespace Fast {
 
 namespace {
 constexpr int64_t kRelockDelayNs = 1000 * NSEC_PER_MSEC;
-constexpr const char* kFreeOrientationsHint = "Portrait PortraitUpsideDown LandscapeLeft LandscapeRight";
+constexpr int64_t kPanelRequestDelayNs = 500 * NSEC_PER_MSEC;
+constexpr const char* kFreeOrientationsHint = "Portrait LandscapeLeft LandscapeRight";
 
 BOOL sLockWanted = NO;
 BOOL sFree = NO;
 bool sModeApplied = false;
 UIWindow* sWindow = nil;
 IMP sOriginalTransition = nullptr;
-IMP sOriginalSupported = nullptr;
 IMP sOriginalGeometryUpdate = nullptr;
 uint64_t sTurn = 0;
 long sLastLandscape = (long)UIInterfaceOrientationLandscapeRight;
 
 BOOL PrefersInterfaceOrientationLocked(id, SEL) {
     return sLockWanted;
-}
-
-NSUInteger SupportedOrientationsHook(id self, SEL cmd) {
-    // SDL drops PortraitUpsideDown on the phone idiom; the wide inner display of a foldable is held both ways.
-    if (sFree) {
-        return kFreeMask;
-    }
-    return ((NSUInteger(*)(id, SEL))sOriginalSupported)(self, cmd);
 }
 
 UIWindow* WindowOf(SDL_Window* window) {
@@ -125,8 +122,15 @@ void LogMasks(const char* why) {
     const NSUInteger app = [UIApplication.sharedApplication supportedInterfaceOrientationsForWindow:sWindow];
 #pragma clang diagnostic pop
     const NSUInteger controller = [sWindow.rootViewController supportedInterfaceOrientations];
-    SPDLOG_INFO("Orientation masks ({}): application {:#x}, view controller {:#x}, hint {}", why, app, controller,
-                SDL_GetHint(SDL_HINT_ORIENTATIONS) != nullptr ? SDL_GetHint(SDL_HINT_ORIENTATIONS) : "none");
+    const char* held = "not available";
+#ifdef LUS_UIKIT_ORIENTATION_LOCK
+    if (@available(iOS 26.0, *)) {
+        held = sWindow.windowScene.effectiveGeometry.isInterfaceOrientationLocked ? "held" : "not held";
+    }
+#endif
+    SPDLOG_INFO("Orientation masks ({}): application {:#x}, view controller {:#x}, hint {}, lock wanted {}, lock {}",
+                why, app, controller, SDL_GetHint(SDL_HINT_ORIENTATIONS) != nullptr ? SDL_GetHint(SDL_HINT_ORIENTATIONS) : "none",
+                sLockWanted ? "yes" : "no", held);
 }
 
 void LogScene(const char* why, CGSize sceneSize) {
@@ -176,6 +180,19 @@ void RelockAfterTurn() {
     });
 }
 
+void RequestPanelOrientation(const char* why) {
+    if (@available(iOS 16.0, *)) {
+        UIWindowSceneGeometryPreferencesIOS* preferences =
+            [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:kFreeMask];
+        SPDLOG_INFO("Geometry request sent with mask {:#x} ({})", kFreeMask, why);
+        [sWindow.windowScene requestGeometryUpdateWithPreferences:preferences
+                                                     errorHandler:^(NSError* error) {
+                                                         SPDLOG_WARN("Geometry request refused ({}): {}", why,
+                                                                     error.localizedDescription.UTF8String);
+                                                     }];
+    }
+}
+
 void ApplyDisplayMode(CGSize sceneSize, const char* why, bool atLaunch) {
     const BOOL free = WidePhoneDisplay(sceneSize) ? YES : NO;
     LogScene(why, sceneSize);
@@ -190,15 +207,7 @@ void ApplyDisplayMode(CGSize sceneSize, const char* why, bool atLaunch) {
         SetLock(NO, why);
         SupportHint(kFreeOrientationsHint, why);
         LogMasks(why);
-        if (@available(iOS 16.0, *)) {
-            UIWindowSceneGeometryPreferencesIOS* preferences =
-                [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:kFreeMask];
-            [sWindow.windowScene requestGeometryUpdateWithPreferences:preferences
-                                                         errorHandler:^(NSError* error) {
-                                                             SPDLOG_WARN("Geometry request refused: {}",
-                                                                         error.localizedDescription.UTF8String);
-                                                         }];
-        }
+        RequestPanelOrientation(why);
         return;
     }
     SupportOnly(IsLandscape(interface) ? interface : sLastLandscape, why);
@@ -217,6 +226,7 @@ void TransitionHook(id self, SEL cmd, CGSize size, id<UIViewControllerTransition
     ((void (*)(id, SEL, CGSize, id))sOriginalTransition)(self, cmd, size, coordinator);
     dispatch_async(dispatch_get_main_queue(), ^{
         ApplyDisplayMode(size, "transition", false);
+        LogMasks("transition");
     });
 }
 
@@ -239,12 +249,21 @@ void GeometryUpdateHook(id self, SEL cmd, UIWindowScene* scene, UIWindowSceneGeo
 
 void OnDeviceOrientation() {
     const long device = DeviceOrientation();
-    if (sFree) {
+    if (sFree || WidePhoneDisplay(SceneSize())) {
         if (IsLandscape(device)) {
             sLastLandscape = device;
         }
         SPDLOG_INFO("Device orientation {} with portrait allowed: interface orientation {}", device,
                     InterfaceOrientation());
+        LogMasks("device orientation");
+        // UIKit autorotates by UIDevice.orientation, 90 degrees off this panel, after this notification; the request
+        // follows the panel and must come after that turn or UIKit turns the scene back.
+        const uint64_t turn = ++sTurn;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, kPanelRequestDelayNs), dispatch_get_main_queue(), ^{
+            if (turn == sTurn && sFree) {
+                RequestPanelOrientation("device orientation");
+            }
+        });
         return;
     }
     if (!IsLandscape(device)) {
@@ -266,8 +285,11 @@ void OnDeviceOrientation() {
 void LogDelegates() {
     id appDelegate = UIApplication.sharedApplication.delegate;
     id sceneDelegate = sWindow.windowScene.delegate;
-    SPDLOG_INFO("Orientation delegates: app {}, scene {} responds {}",
+    SPDLOG_INFO("Orientation delegates: app {} responds {}, scene {} responds {}",
                 appDelegate != nil ? class_getName([appDelegate class]) : "none",
+                [appDelegate respondsToSelector:@selector(application:supportedInterfaceOrientationsForWindow:)]
+                    ? "yes"
+                    : "no",
                 sceneDelegate != nil ? class_getName([sceneDelegate class]) : "none",
                 [sceneDelegate respondsToSelector:@selector(supportedInterfaceOrientationsForWindowScene:)] ? "yes"
                                                                                                              : "no");
@@ -310,10 +332,6 @@ void UIKitRequestOrientationLock(SDL_Window* window) {
         }
         class_addMethod([controller class], @selector(prefersInterfaceOrientationLocked),
                         (IMP)PrefersInterfaceOrientationLocked, "B@:");
-        Method supported = class_getInstanceMethod([controller class], @selector(supportedInterfaceOrientations));
-        if (supported != nullptr) {
-            sOriginalSupported = method_setImplementation(supported, (IMP)SupportedOrientationsHook);
-        }
         LogDelegates();
         InstallGeometryUpdateHook();
         ApplyDisplayMode(SceneSize(), "launch", true);
