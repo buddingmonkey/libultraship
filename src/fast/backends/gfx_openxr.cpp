@@ -1703,10 +1703,14 @@ void GfxWindowBackendOpenXR::GetDimensions(uint32_t* width, uint32_t* height, in
 }
 
 void GfxWindowBackendOpenXR::SizeWindow() {
-    mWindowSized = sViewTanHalfWidth > 0.0f && sViewTanHalfHeight > 0.0f;
+    if (mSizeTanHalfWidth <= 0.0f && sViewTanHalfWidth > 0.0f && sViewTanHalfHeight > 0.0f) {
+        mSizeTanHalfWidth = sViewTanHalfWidth;
+        mSizeTanHalfHeight = sViewTanHalfHeight;
+    }
+    mWindowSized = mSizeTanHalfWidth > 0.0f;
 
-    float tanHalfWidth = sViewTanHalfWidth;
-    float tanHalfHeight = sViewTanHalfHeight;
+    float tanHalfWidth = mSizeTanHalfWidth;
+    float tanHalfHeight = mSizeTanHalfHeight;
     if (!mWindowSized) {
         tanHalfWidth = WINDOW_TAN_HALF_WIDTH_DEFAULT;
         tanHalfHeight = mGameWidth > 0 ? tanHalfWidth * (float)mGameHeight / (float)mGameWidth : tanHalfWidth;

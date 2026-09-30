@@ -173,6 +173,8 @@ class GfxWindowBackendOpenXR final : public GfxWindowBackendSDL2 {
     XrVector3f mViewpoint = {};
     bool mAnchorValid = false;
     bool mWindowSized = false;
+    float mSizeTanHalfWidth = 0.0f;
+    float mSizeTanHalfHeight = 0.0f;
 
     Grab mGrab = Grab::None;
     int mGrabHand = 0;
