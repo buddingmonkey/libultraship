@@ -11,15 +11,59 @@
 #if __IPHONE_OS_VERSION_MAX_ALLOWED >= 260000
 #define LUS_UIKIT_ORIENTATION_LOCK 1
 #endif
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 270000
-#define LUS_UIKIT_SCENE_ORIENTATIONS 1
+
+@interface SDLUIKitSceneDelegate : NSObject
+@end
+
+namespace Fast {
+namespace {
+constexpr CGFloat kWidePhoneDisplayPt = 600.0;
+constexpr NSUInteger kFreeMask = UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskLandscape;
+
+CGSize SceneSizeOf(UIWindowScene* scene) {
+    if (scene == nil) {
+        return CGSizeZero;
+    }
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 260000
+    if (@available(iOS 26.0, *)) {
+        return scene.effectiveGeometry.coordinateSpace.bounds.size;
+    }
 #endif
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    return scene.coordinateSpace.bounds.size;
+#pragma clang diagnostic pop
+}
+
+bool WidePhoneDisplay(CGSize sceneSize) {
+    return UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone &&
+           MIN(sceneSize.width, sceneSize.height) >= kWidePhoneDisplayPt;
+}
+
+NSUInteger MaskForScene(UIWindowScene* scene, const char* who) {
+    static NSUInteger sLastMask = 0;
+    const CGSize size = SceneSizeOf(scene);
+    const NSUInteger mask = WidePhoneDisplay(size) ? kFreeMask : UIInterfaceOrientationMaskLandscape;
+    if (mask != sLastMask) {
+        sLastMask = mask;
+        SPDLOG_INFO("Supported orientations mask {:#x} from the {} for a {}x{} pt scene", mask, who, (int)size.width,
+                    (int)size.height);
+    }
+    return mask;
+}
+} // namespace
+} // namespace Fast
+
+@implementation SDLUIKitSceneDelegate (LusOrientations)
+- (UIInterfaceOrientationMask)supportedInterfaceOrientationsForWindowScene:(UIWindowScene*)windowScene {
+    return Fast::MaskForScene(windowScene, "scene delegate");
+}
+@end
 
 namespace Fast {
 
 namespace {
 constexpr int64_t kRelockDelayNs = 1000 * NSEC_PER_MSEC;
-constexpr CGFloat kWidePhoneDisplayPt = 600.0;
 constexpr const char* kFreeOrientationsHint = "Portrait LandscapeLeft LandscapeRight";
 
 BOOL sLockWanted = NO;
@@ -33,19 +77,6 @@ long sLastLandscape = (long)UIInterfaceOrientationLandscapeRight;
 
 BOOL PrefersInterfaceOrientationLocked(id, SEL) {
     return sLockWanted;
-}
-
-NSUInteger SupportedOrientationsMask() {
-    return sFree ? (UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskLandscape)
-                 : UIInterfaceOrientationMaskLandscape;
-}
-
-NSUInteger SupportedOrientationsForWindow(id, SEL, UIApplication*, UIWindow*) {
-    return SupportedOrientationsMask();
-}
-
-NSUInteger SupportedOrientationsForScene(id, SEL, UIWindowScene*) {
-    return SupportedOrientationsMask();
 }
 
 UIWindow* WindowOf(SDL_Window* window) {
@@ -71,15 +102,7 @@ bool IsLandscape(long orientation) {
 }
 
 CGSize SceneSize() {
-#ifdef LUS_UIKIT_ORIENTATION_LOCK
-    if (@available(iOS 26.0, *)) {
-        UIWindowScene* scene = sWindow.windowScene;
-        if (scene != nil) {
-            return scene.effectiveGeometry.coordinateSpace.bounds.size;
-        }
-    }
-#endif
-    return sWindow.bounds.size;
+    return sWindow.windowScene != nil ? SceneSizeOf(sWindow.windowScene) : sWindow.bounds.size;
 }
 
 CGSize ScreenSize() {
@@ -87,9 +110,14 @@ CGSize ScreenSize() {
     return screen != nil ? screen.bounds.size : CGSizeZero;
 }
 
-bool WidePhoneDisplay(CGSize sceneSize) {
-    return UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone &&
-           MIN(sceneSize.width, sceneSize.height) >= kWidePhoneDisplayPt;
+void LogMasks(const char* why) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    const NSUInteger app = [UIApplication.sharedApplication supportedInterfaceOrientationsForWindow:sWindow];
+#pragma clang diagnostic pop
+    const NSUInteger controller = [sWindow.rootViewController supportedInterfaceOrientations];
+    SPDLOG_INFO("Orientation masks ({}): application {:#x}, view controller {:#x}, hint {}", why, app, controller,
+                SDL_GetHint(SDL_HINT_ORIENTATIONS) != nullptr ? SDL_GetHint(SDL_HINT_ORIENTATIONS) : "none");
 }
 
 void LogScene(const char* why, CGSize sceneSize) {
@@ -151,22 +179,21 @@ void ApplyDisplayMode(CGSize sceneSize, const char* why, bool atLaunch) {
     const long interface = InterfaceOrientation();
     if (free) {
         SetLock(NO, why);
-        const CGSize screen = ScreenSize();
-        const bool displayPortrait = screen.height > screen.width;
-        if (IsLandscape(interface) && (!IsLandscape(DeviceOrientation()) || displayPortrait)) {
-            SupportHint("Portrait", why);
-            const uint64_t turn = sTurn;
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, kRelockDelayNs), dispatch_get_main_queue(), ^{
-                if (turn == sTurn && sFree) {
-                    SupportHint(kFreeOrientationsHint, "portrait turn complete");
-                }
-            });
-        } else {
-            SupportHint(kFreeOrientationsHint, why);
+        SupportHint(kFreeOrientationsHint, why);
+        LogMasks(why);
+        if (@available(iOS 16.0, *)) {
+            UIWindowSceneGeometryPreferencesIOS* preferences =
+                [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:kFreeMask];
+            [sWindow.windowScene requestGeometryUpdateWithPreferences:preferences
+                                                         errorHandler:^(NSError* error) {
+                                                             SPDLOG_WARN("Geometry request refused: {}",
+                                                                         error.localizedDescription.UTF8String);
+                                                         }];
         }
         return;
     }
     SupportOnly(IsLandscape(interface) ? interface : sLastLandscape, why);
+    LogMasks(why);
     if (atLaunch || IsLandscape(interface)) {
         SetLock(YES, why);
     } else {
@@ -227,21 +254,14 @@ void OnDeviceOrientation() {
     RelockAfterTurn();
 }
 
-void InstallSupportedOrientations() {
-    Class appDelegate = [UIApplication.sharedApplication.delegate class];
-    if (appDelegate != Nil) {
-        class_addMethod(appDelegate, @selector(application:supportedInterfaceOrientationsForWindow:),
-                        (IMP)SupportedOrientationsForWindow, "Q@:@@");
-    }
-#ifdef LUS_UIKIT_SCENE_ORIENTATIONS
-    if (@available(iOS 27.0, *)) {
-        Class sceneDelegate = [sWindow.windowScene.delegate class];
-        if (sceneDelegate != Nil) {
-            class_addMethod(sceneDelegate, @selector(supportedInterfaceOrientationsForWindowScene:),
-                            (IMP)SupportedOrientationsForScene, "Q@:@");
-        }
-    }
-#endif
+void LogDelegates() {
+    id appDelegate = UIApplication.sharedApplication.delegate;
+    id sceneDelegate = sWindow.windowScene.delegate;
+    SPDLOG_INFO("Orientation delegates: app {}, scene {} responds {}",
+                appDelegate != nil ? class_getName([appDelegate class]) : "none",
+                sceneDelegate != nil ? class_getName([sceneDelegate class]) : "none",
+                [sceneDelegate respondsToSelector:@selector(supportedInterfaceOrientationsForWindowScene:)] ? "yes"
+                                                                                                             : "no");
 }
 
 void InstallGeometryUpdateHook() {
@@ -281,7 +301,7 @@ void UIKitRequestOrientationLock(SDL_Window* window) {
         }
         class_addMethod([controller class], @selector(prefersInterfaceOrientationLocked),
                         (IMP)PrefersInterfaceOrientationLocked, "B@:");
-        InstallSupportedOrientations();
+        LogDelegates();
         InstallGeometryUpdateHook();
         ApplyDisplayMode(SceneSize(), "launch", true);
         [UIDevice.currentDevice beginGeneratingDeviceOrientationNotifications];
