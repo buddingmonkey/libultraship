@@ -77,6 +77,7 @@ BOOL sFree = NO;
 bool sModeApplied = false;
 UIWindow* sWindow = nil;
 IMP sOriginalTransition = nullptr;
+IMP sOriginalKeyboardWillShow = nullptr;
 IMP sOriginalGeometryUpdate = nullptr;
 uint64_t sTurn = 0;
 long sLastLandscape = (long)UIInterfaceOrientationLandscapeRight;
@@ -145,6 +146,36 @@ void LogScene(const char* why, CGSize sceneSize) {
                 (long)traits.verticalSizeClass, (long)UIDevice.currentDevice.userInterfaceIdiom,
                 InterfaceOrientation(), DeviceOrientation(), sLockWanted ? "wanted" : "released",
                 sFree ? "allowed" : "blocked");
+}
+
+UITextField* SdlTextField() {
+    UIViewController* controller = sWindow.rootViewController;
+    Ivar ivar = class_getInstanceVariable([controller class], "textField");
+    return ivar != nullptr ? (UITextField*)object_getIvar(controller, ivar) : nil;
+}
+
+void DropStrayFirstResponder(const char* why) {
+    UITextField* field = SdlTextField();
+    const bool first = field != nil && field.isFirstResponder;
+    const bool active = SDL_IsTextInputActive() == SDL_TRUE;
+    SPDLOG_INFO("SDL text field ({}): {}, first responder {}, text input {}", why, field != nil ? "present" : "missing",
+                first ? "yes" : "no", active ? "active" : "inactive");
+    if (first && !active) {
+        [field resignFirstResponder];
+        SPDLOG_INFO("SDL text field resigned ({}): first responder now {}", why,
+                    field.isFirstResponder ? "yes" : "no");
+    }
+}
+
+void KeyboardWillShowHook(id self, SEL cmd, NSNotification* notification) {
+    if (SDL_IsTextInputActive() != SDL_TRUE) {
+        UITextField* field = SdlTextField();
+        SPDLOG_WARN("Keyboard will show without a text input request; SDL text field first responder {}",
+                    field.isFirstResponder ? "yes" : "no");
+        [field resignFirstResponder];
+        return;
+    }
+    ((void (*)(id, SEL, NSNotification*))sOriginalKeyboardWillShow)(self, cmd, notification);
 }
 
 void SetLock(BOOL wanted, const char* why) {
@@ -227,6 +258,7 @@ void TransitionHook(id self, SEL cmd, CGSize size, id<UIViewControllerTransition
     dispatch_async(dispatch_get_main_queue(), ^{
         ApplyDisplayMode(size, "transition", false);
         LogMasks("transition");
+        DropStrayFirstResponder("transition");
     });
 }
 
@@ -243,12 +275,14 @@ void GeometryUpdateHook(id self, SEL cmd, UIWindowScene* scene, UIWindowSceneGeo
     }
     dispatch_async(dispatch_get_main_queue(), ^{
         ApplyDisplayMode(SceneSize(), "geometry update", false);
+        DropStrayFirstResponder("geometry update");
     });
 }
 #endif
 
 void OnDeviceOrientation() {
     const long device = DeviceOrientation();
+    DropStrayFirstResponder("device orientation");
     if (sFree || WidePhoneDisplay(SceneSize())) {
         if (IsLandscape(device)) {
             sLastLandscape = device;
@@ -332,9 +366,14 @@ void UIKitRequestOrientationLock(SDL_Window* window) {
         }
         class_addMethod([controller class], @selector(prefersInterfaceOrientationLocked),
                         (IMP)PrefersInterfaceOrientationLocked, "B@:");
+        Method willShow = class_getInstanceMethod([controller class], @selector(keyboardWillShow:));
+        if (willShow != nullptr) {
+            sOriginalKeyboardWillShow = method_setImplementation(willShow, (IMP)KeyboardWillShowHook);
+        }
         LogDelegates();
         InstallGeometryUpdateHook();
         ApplyDisplayMode(SceneSize(), "launch", true);
+        DropStrayFirstResponder("launch");
         [UIDevice.currentDevice beginGeneratingDeviceOrientationNotifications];
         [NSNotificationCenter.defaultCenter addObserverForName:UIDeviceOrientationDidChangeNotification
                                                         object:nil
