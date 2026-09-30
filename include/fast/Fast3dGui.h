@@ -1,5 +1,6 @@
 #pragma once
 #include <SDL2/SDL.h>
+#include <atomic>
 
 #include "Fast3dWindow.h"
 #include "ship/window/gui/Gui.h"
@@ -144,6 +145,13 @@ class Fast3dGui : public Ship::Gui {
 
     void RefreshImGuiGamepads() override;
 
+    /**
+     * @brief Limits the game view to the top part of the game window.
+     * @param fraction Part of the window height the game view uses, from the top edge. 0 or 1 uses the full window.
+     */
+    void SetGameViewTopFraction(float fraction);
+    float GetGameViewTopFraction() const;
+
   protected:
     void ImGuiWMInit() override;
     void ImGuiWMShutdown() override;
@@ -168,7 +176,12 @@ class Fast3dGui : public Ship::Gui {
 
   private:
     /** @brief Applies any pending resolution or MSAA changes to the render target. */
-    void ApplyResolutionChanges();
+    void ApplyResolutionChanges(ImVec2 size);
+
+    /** @brief Returns the part of the game window the game view uses (full window when no top fraction is set). */
+    ImVec2 GameViewSize(ImVec2 windowSize);
+
+    std::atomic<float> mGameViewTopFraction{ 0.0f };
 
     /**
      * @brief Returns the integer scaling factor applied to the game viewport.

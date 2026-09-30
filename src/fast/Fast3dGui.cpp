@@ -1,6 +1,8 @@
 #include "fast/Fast3dGui.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 
 #include <spdlog/spdlog.h>
 #include <imgui_internal.h>
@@ -531,7 +533,7 @@ void Fast3dGui::CalculateGameViewport() {
     ImVec2 mainPos = ImGui::GetWindowPos();
     mainPos.x -= mTemporaryWindowPos.x;
     mainPos.y -= mTemporaryWindowPos.y;
-    ImVec2 size = ImGui::GetContentRegionAvail();
+    ImVec2 size = GameViewSize(ImGui::GetContentRegionAvail());
     const auto interpreter = mInterpreter.lock().get();
     interpreter->mCurDimensions.width = (uint32_t)(size.x * mInterpreter.lock()->mCurDimensions.internal_mul);
     interpreter->mCurDimensions.height = (uint32_t)(size.y * mInterpreter.lock()->mCurDimensions.internal_mul);
@@ -542,7 +544,7 @@ void Fast3dGui::CalculateGameViewport() {
 
     if (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(CVAR_PREFIX_ADVANCED_RESOLUTION ".Enabled",
                                                                            0)) {
-        ApplyResolutionChanges();
+        ApplyResolutionChanges(size);
     }
 
     switch (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(CVAR_LOW_RES_MODE, 0)) {
@@ -587,7 +589,7 @@ void Fast3dGui::DrawGame() {
     GetGameOverlay()->Draw();
 
     ImVec2 mainPos = ImGui::GetWindowPos();
-    ImVec2 size = ImGui::GetContentRegionAvail();
+    ImVec2 size = GameViewSize(ImGui::GetContentRegionAvail());
     ImVec2 pos = ImVec2(0, 0);
     const auto interpreter = mInterpreter.lock().get();
 
@@ -636,9 +638,30 @@ void Fast3dGui::DrawGame() {
     ImGui::End();
 }
 
-void Fast3dGui::ApplyResolutionChanges() {
-    ImVec2 size = ImGui::GetContentRegionAvail();
+void Fast3dGui::SetGameViewTopFraction(float fraction) {
+    mGameViewTopFraction.store(fraction > 0.0f && fraction < 1.0f ? fraction : 0.0f, std::memory_order_relaxed);
+}
 
+float Fast3dGui::GetGameViewTopFraction() const {
+    return mGameViewTopFraction.load(std::memory_order_relaxed);
+}
+
+ImVec2 Fast3dGui::GameViewSize(ImVec2 windowSize) {
+    float fraction = GetGameViewTopFraction();
+#ifdef ENABLE_DEBUG_TOOLS
+    const float forced =
+        Ship::Context::GetRawInstance()->GetConsoleVariables()->GetFloat("gDebugGameViewTopFraction", 0.0f);
+    if (forced > 0.0f && forced < 1.0f) {
+        fraction = forced;
+    }
+#endif
+    if (fraction > 0.0f && fraction < 1.0f) {
+        windowSize.y = std::max(floorf(windowSize.y * fraction), 1.0f);
+    }
+    return windowSize;
+}
+
+void Fast3dGui::ApplyResolutionChanges(ImVec2 size) {
     const float aspectRatioX = Ship::Context::GetRawInstance()->GetConsoleVariables()->GetFloat(
         CVAR_PREFIX_ADVANCED_RESOLUTION ".AspectRatioX", 16.0f);
     const float aspectRatioY = Ship::Context::GetRawInstance()->GetConsoleVariables()->GetFloat(
