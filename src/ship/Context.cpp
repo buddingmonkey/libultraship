@@ -1,6 +1,7 @@
 #include "ship/Context.h"
 #include "ship/controller/controldevice/controller/mapping/keyboard/KeyboardScancodes.h"
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <SDL2/SDL.h>
 #include <spdlog/spdlog.h>
@@ -32,7 +33,6 @@
 
 #ifdef __ANDROID__
 #include <jni.h>
-#include <filesystem>
 #endif
 
 namespace Ship {
@@ -243,8 +243,14 @@ bool Context::InitLogging(spdlog::level::level_enum debugBuildLogLevel,
 #endif
 
         auto logPath = GetPathRelativeToAppDirectory(("logs/" + GetName() + ".log"));
-        auto fileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(logPath, 1024 * 1024 * 10, 10);
-        sinks.push_back(fileSink);
+        // spdlog creates directories top-down; Android hides /storage/emulated from stat, so that fails.
+        std::error_code dirError;
+        std::filesystem::create_directories(std::filesystem::path(logPath).parent_path(), dirError);
+        try {
+            sinks.push_back(std::make_shared<spdlog::sinks::rotating_file_sink_mt>(logPath, 1024 * 1024 * 10, 10));
+        } catch (const spdlog::spdlog_ex& ex) {
+            SDL_Log("Log file failed, logging to the console only: %s", ex.what());
+        }
 #ifdef _DEBUG
         mLogger = std::make_shared<spdlog::logger>("multi_sink", sinks.begin(), sinks.end());
         GetLogger()->set_level(debugBuildLogLevel);
@@ -262,7 +268,7 @@ bool Context::InitLogging(spdlog::level::level_enum debugBuildLogLevel,
         spdlog::set_default_logger(GetLogger());
         return true;
     } catch (const spdlog::spdlog_ex& ex) {
-        std::cout << "Log initialization failed: " << ex.what() << std::endl;
+        SDL_Log("Log initialization failed: %s", ex.what());
         return false;
     }
 }
