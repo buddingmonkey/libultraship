@@ -16,6 +16,7 @@
 #include "ship/window/FileDropMgr.h"
 #include "fast/backends/gfx_sdl.h"
 #include "fast/backends/gfx_uikit.h"
+#include "ship/port/mobile/MobileImpl.h"
 #ifdef ENABLE_DEBUG_TOOLS
 #include "fast/backends/gfx_debug_pointer.h"
 #ifdef ENABLE_OPENXR
@@ -459,6 +460,7 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
         SDL_GetRendererOutputSize(mRenderer, &mWindowWidth, &mWindowHeight);
 #if defined(__IOS__) && !defined(__VISIONOS__)
         UIKitRequestOrientationLock(mWnd);
+        Ship::Mobile::CloseTextInputAtLaunch();
 #endif
         window_impl.Metal = { mWnd, mRenderer };
         window_impl.Backend = WindowBackend::FAST3D_SDL_METAL;

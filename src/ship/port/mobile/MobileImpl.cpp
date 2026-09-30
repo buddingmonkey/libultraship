@@ -263,6 +263,13 @@ const char* KeyLabel(const ScreenKey& key, char* buffer) {
 
 } // namespace
 
+void Ship::Mobile::CloseTextInputAtLaunch() {
+    // SDL_VideoInit starts text input; iOS then shows the keyboard whenever it decides no hardware keyboard exists.
+    SDL_StopTextInput();
+    sSystemKeyboardShown = false;
+    SPDLOG_INFO("Text input closed at launch; SDL_IsTextInputActive {}", SDL_IsTextInputActive() ? "yes" : "no");
+}
+
 void Ship::Mobile::SyncTextInput() {
     if (UseVirtualKeyboard() || sVirtualKeyboardShown) {
         if (sSystemKeyboardShown) {
