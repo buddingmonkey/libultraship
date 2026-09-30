@@ -18,7 +18,7 @@
 namespace Fast {
 namespace {
 constexpr CGFloat kWidePhoneDisplayPt = 600.0;
-constexpr NSUInteger kFreeMask = UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskLandscape;
+constexpr NSUInteger kFreeMask = UIInterfaceOrientationMaskAll;
 
 CGSize SceneSizeOf(UIWindowScene* scene) {
     if (scene == nil) {
@@ -64,19 +64,28 @@ namespace Fast {
 
 namespace {
 constexpr int64_t kRelockDelayNs = 1000 * NSEC_PER_MSEC;
-constexpr const char* kFreeOrientationsHint = "Portrait LandscapeLeft LandscapeRight";
+constexpr const char* kFreeOrientationsHint = "Portrait PortraitUpsideDown LandscapeLeft LandscapeRight";
 
 BOOL sLockWanted = NO;
 BOOL sFree = NO;
 bool sModeApplied = false;
 UIWindow* sWindow = nil;
 IMP sOriginalTransition = nullptr;
+IMP sOriginalSupported = nullptr;
 IMP sOriginalGeometryUpdate = nullptr;
 uint64_t sTurn = 0;
 long sLastLandscape = (long)UIInterfaceOrientationLandscapeRight;
 
 BOOL PrefersInterfaceOrientationLocked(id, SEL) {
     return sLockWanted;
+}
+
+NSUInteger SupportedOrientationsHook(id self, SEL cmd) {
+    // SDL drops PortraitUpsideDown on the phone idiom; the wide inner display of a foldable is held both ways.
+    if (sFree) {
+        return kFreeMask;
+    }
+    return ((NSUInteger(*)(id, SEL))sOriginalSupported)(self, cmd);
 }
 
 UIWindow* WindowOf(SDL_Window* window) {
@@ -301,6 +310,10 @@ void UIKitRequestOrientationLock(SDL_Window* window) {
         }
         class_addMethod([controller class], @selector(prefersInterfaceOrientationLocked),
                         (IMP)PrefersInterfaceOrientationLocked, "B@:");
+        Method supported = class_getInstanceMethod([controller class], @selector(supportedInterfaceOrientations));
+        if (supported != nullptr) {
+            sOriginalSupported = method_setImplementation(supported, (IMP)SupportedOrientationsHook);
+        }
         LogDelegates();
         InstallGeometryUpdateHook();
         ApplyDisplayMode(SceneSize(), "launch", true);
