@@ -234,12 +234,6 @@ bool Fast3dWindow::DrawAndRunGraphicsCommands(Gfx* commands, const std::unordere
     // Setup mouse state manager
     wnd->GetMouseStateManager()->StartFrame();
     const uint32_t views = BeginRenderFrame();
-    bool replay = false;
-#ifdef ENABLE_XR_WINDOW
-    replay = views > 1 && mStereoReplay != nullptr && mWindowManagerApi->CanReplayStereo() &&
-             !mGfxDebugger->IsDebugging() &&
-             Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(CVAR_XR_STEREO_REPLAY, 1) != 0;
-#endif
     for (uint32_t view = 0; view < views; view++) {
         BeginRenderView(view);
         // Setup of the backend frames and draw initial Window and GUI menus
@@ -247,20 +241,7 @@ bool Fast3dWindow::DrawAndRunGraphicsCommands(Gfx* commands, const std::unordere
         // Setup game framebuffers to match available window space
         mInterpreter->StartFrame();
         // Execute the games gfx commands
-#ifdef ENABLE_XR_WINDOW
-        if (replay && view > 0 && mStereoReplay->IsReplayable()) {
-            mInterpreter->RunStereoReplay();
-        } else {
-            mInterpreter->mXrStereoPass = replay && view == 0;
-            mInterpreter->Run(commands, mtxReplacements);
-            mInterpreter->mXrStereoPass = false;
-            if (replay && view == 0) {
-                mStereoReplay->EndRecord();
-            }
-        }
-#else
-        mInterpreter->Run(commands, mtxReplacements);
-#endif
+        RunViewCommands(view, commands, mtxReplacements);
         // Renders the game frame buffer to the final window and finishes the GUI
         gui->EndDraw();
         // Finalize swap buffers
@@ -270,8 +251,33 @@ bool Fast3dWindow::DrawAndRunGraphicsCommands(Gfx* commands, const std::unordere
     return true;
 }
 
+void Fast3dWindow::RunViewCommands(uint32_t view, Gfx* commands,
+                                   const std::unordered_map<Mtx*, MtxF>& mtxReplacements) {
+#ifdef ENABLE_XR_WINDOW
+    if (mReplayThisFrame && view > 0 && mStereoReplay->IsReplayable()) {
+        mInterpreter->RunStereoReplay();
+        return;
+    }
+    mInterpreter->mXrStereoPass = mReplayThisFrame && view == 0;
+    mInterpreter->Run(commands, mtxReplacements);
+    mInterpreter->mXrStereoPass = false;
+    if (mReplayThisFrame && view == 0) {
+        mStereoReplay->EndRecord();
+    }
+#else
+    (void)view;
+    mInterpreter->Run(commands, mtxReplacements);
+#endif
+}
+
 uint32_t Fast3dWindow::BeginRenderFrame() {
-    return mWindowManagerApi->BeginRenderFrame();
+    const uint32_t views = mWindowManagerApi->BeginRenderFrame();
+#ifdef ENABLE_XR_WINDOW
+    mReplayThisFrame =
+        views > 1 && mStereoReplay != nullptr && mWindowManagerApi->CanReplayStereo() && !mGfxDebugger->IsDebugging() &&
+        Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(CVAR_XR_STEREO_REPLAY, 1) != 0;
+#endif
+    return views;
 }
 
 void Fast3dWindow::BeginRenderView(uint32_t view) {

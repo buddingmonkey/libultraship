@@ -87,6 +87,7 @@ class Fast3dWindow : public Ship::Window {
 
     uint32_t BeginRenderFrame();
     void BeginRenderView(uint32_t view);
+    void RunViewCommands(uint32_t view, Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtxReplacements);
 
     std::vector<float> GetSupportedRefreshRates();
     bool SetRefreshRate(float rate);
@@ -108,6 +109,7 @@ class Fast3dWindow : public Ship::Window {
     GfxRenderingAPI* mRenderingApi;
 #ifdef ENABLE_XR_WINDOW
     class GfxStereoReplay* mStereoReplay = nullptr;
+    bool mReplayThisFrame = false;
 #endif
     GfxWindowBackend* mWindowManagerApi;
     std::shared_ptr<Interpreter> mInterpreter = nullptr;
