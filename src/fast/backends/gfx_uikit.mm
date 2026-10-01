@@ -81,6 +81,7 @@ IMP sOriginalKeyboardWillShow = nullptr;
 IMP sOriginalGeometryUpdate = nullptr;
 uint64_t sTurn = 0;
 long sLastLandscape = (long)UIInterfaceOrientationLandscapeRight;
+long sLockedTo = (long)UIDeviceOrientationUnknown;
 
 BOOL PrefersInterfaceOrientationLocked(id, SEL) {
     return sLockWanted;
@@ -182,6 +183,7 @@ void SetLock(BOOL wanted, const char* why) {
 #ifdef LUS_UIKIT_ORIENTATION_LOCK
     if (@available(iOS 26.0, *)) {
         sLockWanted = wanted;
+        sLockedTo = wanted && IsLandscape(DeviceOrientation()) ? DeviceOrientation() : (long)UIDeviceOrientationUnknown;
         [sWindow.rootViewController setNeedsUpdateOfPrefersInterfaceOrientationLocked];
         SPDLOG_INFO("Orientation lock {} ({}): interface orientation {}, device orientation {}",
                     wanted ? "requested" : "released", why, InterfaceOrientation(), DeviceOrientation());
@@ -205,7 +207,7 @@ void SupportOnly(long orientation, const char* why) {
 void RelockAfterTurn() {
     const uint64_t turn = sTurn;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, kRelockDelayNs), dispatch_get_main_queue(), ^{
-        if (turn == sTurn && !sFree) {
+        if (turn == sTurn && !sFree && !sLockWanted) {
             SetLock(YES, "turn complete");
         }
     });
@@ -255,6 +257,10 @@ void TransitionHook(id self, SEL cmd, CGSize size, id<UIViewControllerTransition
                 (int)size.width, (int)size.height, coordinator.animated ? "yes" : "no", coordinator.transitionDuration,
                 InterfaceOrientation(), DeviceOrientation());
     ((void (*)(id, SEL, CGSize, id))sOriginalTransition)(self, cmd, size, coordinator);
+    if (!sFree && !sLockWanted && DeviceOrientation() == sLastLandscape && !WidePhoneDisplay(size)) {
+        sTurn++;
+        SetLock(YES, "turn started");
+    }
     dispatch_async(dispatch_get_main_queue(), ^{
         ApplyDisplayMode(size, "transition", false);
         LogMasks("transition");
@@ -308,6 +314,10 @@ void OnDeviceOrientation() {
             SPDLOG_INFO("Device orientation {} while locked: interface orientation {} stays", device,
                         InterfaceOrientation());
         }
+        return;
+    }
+    if (sLockWanted && device == sLockedTo) {
+        SPDLOG_INFO("Device orientation {} is the locked landscape: the lock stays", device);
         return;
     }
     sTurn++;
@@ -380,6 +390,12 @@ void UIKitRequestOrientationLock(SDL_Window* window) {
                                                          queue:NSOperationQueue.mainQueue
                                                     usingBlock:^(NSNotification*) {
                                                         OnDeviceOrientation();
+                                                    }];
+        [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidEnterBackgroundNotification
+                                                        object:nil
+                                                         queue:NSOperationQueue.mainQueue
+                                                    usingBlock:^(NSNotification*) {
+                                                        sLockedTo = (long)UIDeviceOrientationUnknown;
                                                     }];
     }
 #endif
