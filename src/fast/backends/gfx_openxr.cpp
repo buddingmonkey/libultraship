@@ -1006,7 +1006,7 @@ void SetXrDioramaDepth(float meters) {
 }
 
 void SetXrDepthLimit(float degrees) {
-    sDepthLimit = Clamp(degrees, DEPTH_LIMIT_MIN, DEPTH_LIMIT_MAX);
+    sDepthLimit = degrees > 0.0f ? Clamp(degrees, DEPTH_LIMIT_MIN, DEPTH_LIMIT_MAX) : 0.0f;
 }
 
 void SetXrSteadyDepth(bool enabled) {
@@ -1938,7 +1938,7 @@ bool GfxWindowBackendOpenXR::CanReplayStereo() {
 float GfxWindowBackendOpenXR::DepthGain() const {
     float gain = sDioramaDepth / (mWindowRadius + sDioramaDepth);
     const float separation = Length(Subtract(mViews[1].pose.position, mViews[0].pose.position));
-    if (separation > 0.0f) {
+    if (separation > 0.0f && sDepthLimit > 0.0f) {
         gain = fminf(gain, tanf(sDepthLimit * (float)M_PI / 180.0f) * mWindowRadius / separation);
     }
     const float reference = STEADY_SUBJECT_SHARE * sSubjectDistance;

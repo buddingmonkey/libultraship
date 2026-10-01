@@ -139,7 +139,7 @@ float DepthGain(float range) {
         const float dy = gEyes[1].Y - gEyes[0].Y;
         const float dz = gEyes[1].Z - gEyes[0].Z;
         const float separation = sqrtf(dx * dx + dy * dy + dz * dz);
-        if (separation > 0.0f) {
+        if (separation > 0.0f && gDepthLimit > 0.0f) {
             gain = fminf(gain, tanf(gDepthLimit * static_cast<float>(M_PI) / 180.0f) * range / separation);
         }
     }
@@ -204,7 +204,7 @@ void SetXrDioramaDepth(float meters) {
 }
 
 void SetXrDepthLimit(float degrees) {
-    gDepthLimit = Clamp(degrees, kDepthLimitMin, kDepthLimitMax);
+    gDepthLimit = degrees > 0.0f ? Clamp(degrees, kDepthLimitMin, kDepthLimitMax) : 0.0f;
 }
 
 void SetXrSteadyDepth(bool enabled) {
