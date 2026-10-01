@@ -822,6 +822,11 @@ void GfxWindowBackendOpenXR::PumpPad() {
         if (held(mStickClickAction)) {
             pad.buttons |= hand == 0 ? Fast::XR_PAD_LEFT_STICK : Fast::XR_PAD_RIGHT_STICK;
         }
+        info.action = mStickClickAction;
+        XrActionStateBoolean click{ XR_TYPE_ACTION_STATE_BOOLEAN };
+        if (XR_SUCCEEDED(xrGetActionStateBoolean(mSession, &info, &click)) && click.isActive) {
+            pad.thumbsticks = true;
+        }
     }
 
     sPad = pad;
@@ -864,6 +869,7 @@ static float sPointerU = 0.0f;
 static float sPointerV = 0.0f;
 static bool sMenuHover = false;
 static bool sMenuHeld = false;
+static bool sMenuButtonShown = true;
 static bool sCursorValid = false;
 static float sCursorX = 0.0f;
 static float sCursorY = 0.0f;
@@ -937,6 +943,10 @@ void SetXrSceneNear(float units) {
 
 void RecenterXrWindow() {
     sRecenterWanted = true;
+}
+
+void SetXrMenuButtonShown(bool shown) {
+    sMenuButtonShown = shown;
 }
 
 void SetXrStereo(bool enabled) {
@@ -1430,7 +1440,7 @@ void GfxWindowBackendOpenXR::PumpPointer(XrTime displayTime) {
         const float planeY = aims[hand].planeY;
         const bool pinching = aims[hand].pinching;
 
-        const bool onMenu = fabsf(planeX) <= menuHalf && fabsf(planeY - menuRise) <= menuHalf;
+        const bool onMenu = sMenuButtonShown && fabsf(planeX) <= menuHalf && fabsf(planeY - menuRise) <= menuHalf;
         const bool onWindow = fabsf(planeX) <= 0.5f * mWindowWidth && fabsf(planeY) <= 0.5f * mWindowHeight;
         const bool inZone = fabsf(planeX) <= zoneHalf && fabsf(planeY - menuRise) <= zoneHalf;
         const bool onBar = OnBar(planeX, planeY);
@@ -2440,12 +2450,14 @@ void GfxWindowBackendOpenXR::DrawOverlays(uint32_t eye) {
     glBindVertexArray(mVao);
 
     float mvp[16];
-    const float side = MenuSide();
-    PlacementMatrix(mViews[eye], PlanePose(0.0f, MenuRise()), side, side, mvp);
-    glUseProgram(mMenuProgram);
-    glUniformMatrix4fv(mMenuMvpLoc, 1, GL_FALSE, mvp);
-    glUniform1f(mMenuGlowLoc, sMenuHeld ? 1.8f : (sMenuHover ? 1.3f : 1.0f));
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    if (sMenuButtonShown) {
+        const float side = MenuSide();
+        PlacementMatrix(mViews[eye], PlanePose(0.0f, MenuRise()), side, side, mvp);
+        glUseProgram(mMenuProgram);
+        glUniformMatrix4fv(mMenuMvpLoc, 1, GL_FALSE, mvp);
+        glUniform1f(mMenuGlowLoc, sMenuHeld ? 1.8f : (sMenuHover ? 1.3f : 1.0f));
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
 
     const bool moving = mGrab == Grab::Move;
     PlacementMatrix(mViews[eye], PlanePose(0.0f, BarDrop()), BarWidth(), BarHeight(), mvp);

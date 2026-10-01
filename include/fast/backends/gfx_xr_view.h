@@ -67,6 +67,7 @@ struct XrPadState {
     float trigger[2];
     float squeeze[2];
     uint32_t buttons;
+    bool thumbsticks;
 };
 
 bool GetXrPad(XrPadState* pad);
@@ -82,6 +83,8 @@ struct XrKeyboardInput {
 bool IsXrVirtualKeyboardAvailable();
 void ShowXrVirtualKeyboard(bool shown, const char* textContext);
 bool TakeXrVirtualKeyboardInput(XrKeyboardInput* input);
+
+void SetXrMenuButtonShown(bool shown);
 #endif
 
 } // namespace Fast
