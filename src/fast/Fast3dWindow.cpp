@@ -43,8 +43,7 @@ Fast3dWindow::Fast3dWindow(std::shared_ptr<Ship::Gui> gui, std::shared_ptr<FastM
 #endif
 #ifdef ENABLE_OPENXR
     AddAvailableWindowBackend(WindowBackend::FAST3D_OPENXR_OPENGL);
-#endif
-#ifdef ENABLE_OPENGL
+#elif defined(ENABLE_OPENGL)
     AddAvailableWindowBackend(WindowBackend::FAST3D_SDL_OPENGL);
 #endif
 }
