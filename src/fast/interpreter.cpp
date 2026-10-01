@@ -1968,6 +1968,23 @@ float Interpreter::AdjYForAspectRatio(float y) const {
     return y * aspect / (4.0f / 3.0f);
 }
 
+float Interpreter::HudEdgeShift(float top, float bottom) const {
+    if ((mRsp->extra_geometry_mode & G_EX_PIN_HUD_TO_EDGES) == 0) {
+        return 0.0f;
+    }
+    const float extension = 1.0f - AdjYForAspectRatio(1.0f);
+    if (extension <= 0.0f) {
+        return 0.0f;
+    }
+    if (top > 0.0f && bottom > 0.0f) {
+        return extension;
+    }
+    if (top < 0.0f && bottom < 0.0f) {
+        return -extension;
+    }
+    return 0.0f;
+}
+
 // Scale the width and height value based on the ratio of the viewport to the native size
 void Interpreter::AdjustWidthHeightForScale(uint32_t& width, uint32_t& height, uint32_t nativeWidth,
                                             uint32_t nativeHeight) const {
@@ -2011,6 +2028,9 @@ void Interpreter::GfxSpVertex(size_t n_vertices, size_t dest_index, const F3DVtx
 
         x = AdjXForAspectRatio(x);
         y = AdjYForAspectRatio(y);
+        if (w > 0.0f) {
+            y += HudEdgeShift(y, y) * w;
+        }
 
         short U = v->tc[0] * mRsp->texture_scaling_factor.s >> 16;
         short V = v->tc[1] * mRsp->texture_scaling_factor.t >> 16;
@@ -2178,6 +2198,9 @@ void Interpreter::GfxSpVertex(size_t n_vertices, size_t dest_index, const F3DVtx
             float wr = v->ob[0] * m[0][3] + v->ob[1] * m[1][3] + v->ob[2] * m[2][3] + m[3][3];
             xr = AdjXForAspectRatio(xr);
             yr = AdjYForAspectRatio(yr);
+            if (wr > 0.0f) {
+                yr += HudEdgeShift(yr, yr) * wr;
+            }
 
             d->clip_rej_r = 0;
             if (xr < -wr) {
@@ -3424,8 +3447,9 @@ void Interpreter::GfxDrawRectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_
 
     ulxf = AdjXForAspectRatio(ulxf);
     lrxf = AdjXForAspectRatio(lrxf);
-    ulyf = AdjYForAspectRatio(ulyf);
-    lryf = AdjYForAspectRatio(lryf);
+    const float hudShift = HudEdgeShift(ulyf, lryf);
+    ulyf = AdjYForAspectRatio(ulyf) + hudShift;
+    lryf = AdjYForAspectRatio(lryf) + hudShift;
 
     struct LoadedVertex* ul = &mRsp->loaded_vertices[MAX_VERTICES + 0];
     struct LoadedVertex* ll = &mRsp->loaded_vertices[MAX_VERTICES + 1];

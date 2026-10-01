@@ -214,6 +214,7 @@ constexpr int8_t RDP_G_TEXBATCH = OPCODE(0x4d);
  */
 #define G_EX_INVERT_CULLING 0x00000001
 #define G_EX_ALWAYS_EXECUTE_BRANCH 0x00000002
+#define G_EX_PIN_HUD_TO_EDGES 0x00000004
 
 /*
  * G_SETIMG fmt: set image formats

@@ -535,6 +535,7 @@ class Interpreter {
                                    uint32_t nativeHeight) const;
     float AdjXForAspectRatio(float x) const;
     float AdjYForAspectRatio(float y) const;
+    float HudEdgeShift(float top, float bottom) const;
     void AdjustVIewportOrScissor(XYWidthHeight* area);
     void CalcAndSetViewport(const F3DVp_t* viewport);
 
